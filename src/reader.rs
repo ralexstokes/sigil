@@ -1,12 +1,9 @@
-use combine::eof;
-use combine::from_str;
 use combine::parser::{
-    char::alpha_num, char::char, char::digit, char::space, choice::choice, choice::or,
-    range::range, range::recognize, repeat::many, repeat::skip_many, repeat::skip_many1, repeat::skip_until, repeat::skip_count,
+    char::alpha_num, char::newline, char::char, char::digit, char::space, choice::choice, choice::or, choice::optional, combinator::from_str,
+    range::range, range::recognize, repeat::many, repeat::skip_many, repeat::skip_many1, repeat::skip_until, repeat::skip_count, token::eof,
 };
 use combine::stream::position::Stream;
-use combine::EasyParser;
-use combine::Parser;
+use combine::{Parser, EasyParser};
 use thiserror::Error;
 
 #[derive(Debug, PartialEq)]
@@ -20,7 +17,7 @@ pub enum Form<'a> {
     // identifier, optional namespace
     Symbol(&'a str, Option<&'a str>),
     Comment(&'a str),
-    Whitespace,
+    Whitespace(&'a str),
 }
 
 #[derive(Debug, Error)]
@@ -38,7 +35,7 @@ pub fn read(input: &str) -> Result<Vec<Form>, ReaderError> {
     let nil = recognize(range("nil")).map(|_| Form::Nil);
     let true_parser = recognize(range("true")).map(|_| Form::Bool(true));
     let false_parser = recognize(range("false")).map(|_| Form::Bool(false));
-    let whitespace = recognize(skip_many1(or(space(), char(',')))).map(|_| Form::Whitespace);
+    let whitespace = recognize(skip_many1(or(space(), char(',')))).map(Form::Whitespace);
 
     let string =
         (char('"'), recognize(skip_until(char('"'))), char('"')).map(|(_, s, _)| Form::String(s));
@@ -51,6 +48,7 @@ pub fn read(input: &str) -> Result<Vec<Form>, ReaderError> {
     });
     let symbol = identifier_with_namespace().map(|(id, ns_opt)| Form::Symbol(id, ns_opt));
     let keyword = (char(':'), identifier_with_namespace()).map(|(_, (id, ns_opt))| Form::Keyword(id, ns_opt));
+    let comment = (char(';'), recognize(skip_until(or(eof(), newline().map(|_| ())))), optional(newline())).map(|(_, s, _)| Form::Comment(s));
 
     let forms = choice((
         whitespace,
@@ -61,6 +59,7 @@ pub fn read(input: &str) -> Result<Vec<Form>, ReaderError> {
         string,
         keyword,
         symbol,
+        comment
     ));
 
     let eof = recognize(eof()).map(|_| Vec::<Form<'_>>::new());
@@ -83,29 +82,35 @@ mod tests {
             ("nil", vec![Nil]),
             ("true", vec![Bool(true)]),
             ("false", vec![Bool(false)]),
-            (",,,", vec![Whitespace]),
-            ("  ", vec![Whitespace]),
-            (" , ", vec![Whitespace]),
-            ("true, , , false", vec![Bool(true), Whitespace, Bool(false)]),
+            (",,,", vec![Whitespace(",,,")]),
+            ("  ", vec![Whitespace("  ")]),
+            (" , ", vec![Whitespace(" , ")]),
+            ("true, , , false", vec![Bool(true), Whitespace(", , , "), Bool(false)]),
             ("", vec![]),
             ("baz", vec![Symbol("baz", None)]),
             ("foo/baz", vec![Symbol("baz", Some("foo"))]),
-            ("foo/baz bar true", vec![Symbol("baz", Some("foo")), Whitespace, Symbol("bar", None), Whitespace, Bool(true)]),
+            ("foo/baz bar true", vec![Symbol("baz", Some("foo")), Whitespace(" "), Symbol("bar", None), Whitespace(" "), Bool(true)]),
             ("\"\"", vec![String("")]),
             ("\"hi\"", vec![String("hi")]),
             (
                 "\"123foo\" true",
-                vec![String("123foo"), Whitespace, Bool(true)],
+                vec![String("123foo"), Whitespace(" "), Bool(true)],
             ),
             (r#""abc""#, vec![String("abc")]),
             (":foobar", vec![Keyword("foobar", None)]),
             (":net/hi", vec![Keyword("hi", Some("net") )]),
             (":a0987234", vec![Keyword("a0987234", None)]),
-        ];
+            ("; sdlkfjsldfjsldjflsdjf", vec![Comment(" sdlkfjsldfjsldjflsdjf")]),
+            ("foo/bar true ;; some comment", vec![Symbol("bar", Some("foo")), Whitespace(" "), Bool(true), Whitespace(" "), Comment("; some comment")]),
+            ("baz ;; comment \nfoo12", vec![Symbol("baz", None), Whitespace(" "), Comment("; comment "), Symbol("foo12", None)]),
+        ]; 
         for (input, expected) in cases {
             match read(input) {
                 Ok(result) => assert_eq!(result, expected),
-                Err(e) => panic!(e),
+                Err(e) =>  {
+                    dbg!(e);
+                    panic!();
+                }
             }
         }
     }

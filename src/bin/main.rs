@@ -20,6 +20,8 @@ fn main() {
         ":foobar",
         ":net/hi",
         ":a0987234",
+        "foo/bar true ;; some comment",
+        "foo/bar true ;; some comment\nhi/baz",
     ] {
         match read(input) {
             Ok(result) => println!("{:?}", result),
