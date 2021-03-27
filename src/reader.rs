@@ -1,6 +1,6 @@
 use combine::parser::{
     char::alpha_num, char::newline, char::char, char::digit, char::space, choice::choice, choice::or, choice::optional, combinator::from_str,
-    range::range, range::recognize, repeat::many, repeat::skip_many, repeat::skip_many1, repeat::skip_until, repeat::skip_count, token::eof,
+    range::range, range::recognize, repeat::many, repeat::skip_many1, repeat::skip_until, token::eof,
 };
 use combine::stream::position::Stream;
 use combine::{Parser, EasyParser};
@@ -39,15 +39,15 @@ pub fn read(input: &str) -> Result<Vec<Form>, ReaderError> {
 
     let string =
         (char('"'), recognize(skip_until(char('"'))), char('"')).map(|(_, s, _)| Form::String(s));
-    let identifier_with_namespace = || (recognize(skip_many1(alpha_num())), recognize(skip_count(1, char('/'))), recognize(skip_many(alpha_num()))).map(|(first, _, rest): (&str, _, &str)| {
-        if rest.len() != 0 {
+    let identifier_with_namespace = || (recognize(skip_many1(alpha_num())), optional((char('/'), recognize(skip_many1(alpha_num()))))).map(|(first, rest)| {
+        if let Some((_, rest)) = rest {
             (rest, Some(first))
         } else {
             (first, None)
         }
     });
-    let symbol = identifier_with_namespace().map(|(id, ns_opt)| Form::Symbol(id, ns_opt));
-    let keyword = (char(':'), identifier_with_namespace()).map(|(_, (id, ns_opt))| Form::Keyword(id, ns_opt));
+    let symbol = identifier_with_namespace().map(|(id, ns)| Form::Symbol(id, ns));
+    let keyword = (char(':'), identifier_with_namespace()).map(|(_, (id, ns))| Form::Keyword(id, ns));
     let comment = (char(';'), recognize(skip_until(or(eof(), newline().map(|_| ())))), optional(newline())).map(|(_, s, _)| Form::Comment(s));
 
     let forms = choice((
