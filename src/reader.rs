@@ -2,7 +2,7 @@ use combine::eof;
 use combine::from_str;
 use combine::parser::{
     char::alpha_num, char::char, char::digit, char::space, choice::choice, choice::or,
-    range::range, range::recognize, repeat::many1, repeat::skip_many1, repeat::skip_until,
+    range::range, range::recognize, repeat::many, repeat::skip_many, repeat::skip_many1, repeat::skip_until, repeat::skip_count,
 };
 use combine::stream::position::Stream;
 use combine::EasyParser;
@@ -15,8 +15,10 @@ pub enum Form<'a> {
     Bool(bool),
     Number(u64),
     String(&'a str),
-    Keyword(&'a str),
-    Symbol(&'a str),
+    // identifier, optional namespace
+    Keyword(&'a str, Option<&'a str> ),
+    // identifier, optional namespace
+    Symbol(&'a str, Option<&'a str>),
     Comment(&'a str),
     Whitespace,
 }
@@ -37,10 +39,18 @@ pub fn read(input: &str) -> Result<Vec<Form>, ReaderError> {
     let true_parser = recognize(range("true")).map(|_| Form::Bool(true));
     let false_parser = recognize(range("false")).map(|_| Form::Bool(false));
     let whitespace = recognize(skip_many1(or(space(), char(',')))).map(|_| Form::Whitespace);
-    let keyword = (char(':'), recognize(skip_many1(alpha_num()))).map(|(_, s)| Form::Keyword(s));
+
     let string =
         (char('"'), recognize(skip_until(char('"'))), char('"')).map(|(_, s, _)| Form::String(s));
-    let symbol = recognize(skip_many1(alpha_num())).map(Form::Symbol);
+    let identifier_with_namespace = || (recognize(skip_many1(alpha_num())), recognize(skip_count(1, char('/'))), recognize(skip_many(alpha_num()))).map(|(first, _, rest): (&str, _, &str)| {
+        if rest.len() != 0 {
+            (rest, Some(first))
+        } else {
+            (first, None)
+        }
+    });
+    let symbol = identifier_with_namespace().map(|(id, ns_opt)| Form::Symbol(id, ns_opt));
+    let keyword = (char(':'), identifier_with_namespace()).map(|(_, (id, ns_opt))| Form::Keyword(id, ns_opt));
 
     let forms = choice((
         whitespace,
@@ -52,12 +62,51 @@ pub fn read(input: &str) -> Result<Vec<Form>, ReaderError> {
         keyword,
         symbol,
     ));
-    let eof = recognize(eof()).map(|_| vec![Form::Whitespace]);
 
-    let mut parser = or(eof, many1::<Vec<_>, _, _>(forms));
+    let eof = recognize(eof()).map(|_| Vec::<Form<'_>>::new());
+    let mut parser = (many::<Vec<_>, _, _>(forms), eof);
     let parse_result = parser.easy_parse(Stream::new(input));
     match parse_result {
-        Ok((result, _)) => Ok(result),
+        Ok(((forms, _), _)) => Ok(forms),
         Err(error) => Err(ReaderError::ParserError(error.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read, Form::*};
+
+    #[test]
+    fn test_read_basic() {
+        let cases = vec![
+            ("1337", vec![Number(1337)]),
+            ("nil", vec![Nil]),
+            ("true", vec![Bool(true)]),
+            ("false", vec![Bool(false)]),
+            (",,,", vec![Whitespace]),
+            ("  ", vec![Whitespace]),
+            (" , ", vec![Whitespace]),
+            ("true, , , false", vec![Bool(true), Whitespace, Bool(false)]),
+            ("", vec![]),
+            ("baz", vec![Symbol("baz", None)]),
+            ("foo/baz", vec![Symbol("baz", Some("foo"))]),
+            ("foo/baz bar true", vec![Symbol("baz", Some("foo")), Whitespace, Symbol("bar", None), Whitespace, Bool(true)]),
+            ("\"\"", vec![String("")]),
+            ("\"hi\"", vec![String("hi")]),
+            (
+                "\"123foo\" true",
+                vec![String("123foo"), Whitespace, Bool(true)],
+            ),
+            (r#""abc""#, vec![String("abc")]),
+            (":foobar", vec![Keyword("foobar", None)]),
+            (":net/hi", vec![Keyword("hi", Some("net") )]),
+            (":a0987234", vec![Keyword("a0987234", None)]),
+        ];
+        for (input, expected) in cases {
+            match read(input) {
+                Ok(result) => assert_eq!(result, expected),
+                Err(e) => panic!(e),
+            }
+        }
     }
 }

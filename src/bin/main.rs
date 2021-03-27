@@ -12,6 +12,7 @@ fn main() {
         "true, , , false",
         "",
         "foobar true",
+        "foo/bar",
         "\"\"",
         "\"hi\"",
         "\"123foo\" true",
