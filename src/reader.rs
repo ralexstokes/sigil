@@ -1,12 +1,13 @@
 use combine::error::ParseError;
 use combine::parser::{
     char::alpha_num, char::newline, char::char, char::digit, char::space, choice::choice, choice::or, choice::optional, combinator::from_str,
-    range::range, range::recognize, repeat::many, repeat::skip_many1, repeat::skip_until, sequence::between, token::eof,
+    range::range, range::recognize, repeat::many, repeat::skip_many1, repeat::skip_until, sequence::between, token::eof, token::one_of
 };
 use combine::stream::position;
 use combine::{Parser, EasyParser, RangeStream};
 use combine::parser;
 use thiserror::Error;
+use std::fmt;
 
 #[derive(Debug, PartialEq)]
 pub enum Form<'a> {
@@ -24,6 +25,63 @@ pub enum Form<'a> {
     Vector(Vec<Form<'a>>),
     Map(Vec<Form<'a>>),
     Set(Vec<Form<'a>>),
+}
+
+
+impl fmt::Display for Form<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Form::*;
+
+        match self {
+            Nil => write!(f, "nil"),
+            Bool(b) => write!(f, "{}", b),
+            Number(n) => write!(f, "{}", n),
+            String(s) => write!(f, "\"{}\"", s),
+            Keyword(id, ns_opt) => {
+                write!(f, ":")?;
+                if let Some(ns) = ns_opt {
+                    write!(f, "{}/", ns)?;
+                }
+                write!(f, "{}", id)
+            },
+            Symbol(id, ns_opt) => {
+                if let Some(ns) = ns_opt {
+                    write!(f, "{}/", ns)?;
+                }
+                write!(f, "{}", id)
+            },
+            Comment(s) => write!(f, ";{}", s),
+            Whitespace(s) => write!(f, "{}", s),
+            List(elems) => {
+                write!(f, "(")?;
+                for elem in elems {
+                    write!(f, "{}", elem)?;
+                }
+                write!(f, ")")
+            },
+            Vector(elems) => {
+                write!(f, "[")?;
+                for elem in elems {
+                    write!(f, "{}", elem)?;
+                }
+                write!(f, "]")
+            },
+            Map(elems) => {
+                write!(f, "{{")?;
+                for elem in elems {
+                    write!(f, "{}", elem)?;
+                }
+                write!(f, "}}")
+            },
+            Set(elems) => {
+                write!(f, "#{{")?;
+                for elem in elems {
+                    write!(f, "{}", elem)?;
+                }
+                write!(f, "}}")
+            },
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -58,7 +116,8 @@ parser! {
 
         let string =
             (char('"'), recognize(skip_until(char('"'))), char('"')).map(|(_, s, _)| Form::String(s));
-        let identifier_with_namespace = || (recognize(skip_many1(alpha_num())), optional((char('/'), recognize(skip_many1(alpha_num()))))).map(|(first, rest)| {
+        let identifier_tokens = || alpha_num().or(one_of("*+!-_'?<>=".chars()));
+        let identifier_with_namespace = || (recognize(skip_many1(identifier_tokens())), optional((char('/'), recognize(skip_many1(identifier_tokens()))))).map(|(first, rest)| {
             if let Some((_, rest)) = rest {
                 (rest, Some(first))
             } else {
@@ -70,7 +129,11 @@ parser! {
         let comment = (char(';'), recognize(skip_until(or(eof(), newline().map(|_| ())))), optional(newline())).map(|(_, s, _)| Form::Comment(s));
         let list = between(char('('), char(')'), read_forms()).map(Form::List);
         let vector = between(char('['), char(']'), read_forms()).map(Form::Vector);
-        let map = between(char('{'), char('}'), read_forms()).map(Form::Map);
+        let map_elems = || between(char('{'), char('}'), read_forms());
+        let map = map_elems().map(Form::Map);
+        let set = (char('#'), map_elems()).map(|(_, elems)| {
+            Form::Set(elems)
+        });
 
         let forms = choice((
             whitespace,
@@ -85,6 +148,7 @@ parser! {
             list,
             vector,
             map,
+            set,
         ));
 
         many::<Vec<_>, _, _>(forms)
@@ -162,6 +226,19 @@ mod tests {
                 List(vec!()), 
                 Whitespace(", "), 
                 List(vec!(Number(7))))),
+            ("#{}", vec!(Set(vec!()))),
+            ("#{1 2 3}", vec!(Set(vec!(Number(1), Whitespace(" "), Number(2), Whitespace(" "), Number(3))))),
+            ("#{(1 3) :foo}", vec!(Set(vec!(List(vec!(Number(1), Whitespace(" "), Number(3))), Whitespace(" "), Keyword("foo", None))))),
+            ("+ ! =", vec!(Symbol("+", None), Whitespace(" "), Symbol("!", None), Whitespace(" "), Symbol("=", None))),
+            ("(defn foo [a] (+ a 1))", vec!(List(vec!(
+                Symbol("defn", None),
+                Whitespace(" "),
+                Symbol("foo", None),
+                Whitespace(" "),
+                Vector(vec!(Symbol("a", None))),
+                Whitespace(" "),
+                List(vec!(Symbol("+", None), Whitespace(" "), Symbol("a", None), Whitespace(" "), Number(1)))
+            )))),
         ]; 
         for (input, expected) in cases {
             match read(input) {
