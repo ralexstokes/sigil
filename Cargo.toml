@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 thiserror = "1.0.24"
 combine = "4.5.2"
+itertools = "0.10.0"
