@@ -1,7 +1,10 @@
 use crate::interpreter::Interpreter;
 use crate::reader::read;
 use rustyline::error::ReadlineError;
+use rustyline::highlight::{Highlighter, MatchingBracketHighlighter};
 use rustyline::Editor;
+use rustyline_derive::{Completer, Helper, Hinter, Validator};
+use std::borrow::Cow;
 use std::default::Default;
 use std::error::Error;
 use std::fmt::Write;
@@ -11,9 +14,29 @@ pub struct StdRepl {
     interpreter: Interpreter,
 }
 
+#[derive(Completer, Helper, Hinter, Validator)]
+struct EditorHelper {
+    highlighter: MatchingBracketHighlighter,
+}
+
+impl Highlighter for EditorHelper {
+    fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
+        self.highlighter.highlight(line, pos)
+    }
+
+    fn highlight_char(&self, line: &str, pos: usize) -> bool {
+        self.highlighter.highlight_char(line, pos)
+    }
+}
+
 impl StdRepl {
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
-        let mut editor = Editor::<()>::new();
+        let helper = EditorHelper {
+            highlighter: MatchingBracketHighlighter::new(),
+        };
+        let mut editor = Editor::<EditorHelper>::new();
+        editor.set_helper(Some(helper));
+
         let mut prompt_buffer = String::new();
 
         let mut current_namespace = self.interpreter.current_namespace();
