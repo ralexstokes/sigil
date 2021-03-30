@@ -76,7 +76,8 @@ where
     Input: RangeStream<Token = char, Range = &'a str> + 'a,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    read_forms_inner()
+    let whitespace = recognize(skip_many(or(space(), char(','))));
+    whitespace.with(read_forms_inner())
 }
 
 parser! {
@@ -132,8 +133,7 @@ parser! {
 
 pub fn read(input: &str) -> Result<Vec<Form>, ReaderError> {
     let mut parser = (read_forms(), eof()).map(|(result, _)| result);
-    let whitespace = |c| char::is_whitespace(c) || c == ',';
-    let parse_result = parser.easy_parse(Stream::new(input.trim_matches(whitespace)));
+    let parse_result = parser.easy_parse(Stream::new(input));
     match parse_result {
         Ok((forms, _)) => Ok(forms),
         Err(error) => Err(ReaderError::ParserError(error.to_string())),
@@ -290,6 +290,9 @@ mod tests {
                 "(12 (true [34 false])) () (7)",
             ),
             ("#{}", vec![Set(vec![])], "#{}"),
+            ("#{1}", vec![Set(vec![Number(1)])], "#{1}"),
+            ("#{   1}", vec![Set(vec![Number(1)])], "#{1}"),
+            ("#{   1  }", vec![Set(vec![Number(1)])], "#{1}"),
             (
                 "#{1 2 3}",
                 vec![Set(vec![Number(1), Number(2), Number(3)])],
