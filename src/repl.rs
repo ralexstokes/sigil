@@ -48,7 +48,7 @@ impl StdRepl {
                     let forms = match read(&line) {
                         Ok(forms) => forms,
                         Err(e) => {
-                            println!("{}", e);
+                            print!("{}", e);
                             continue;
                         }
                     };
