@@ -9,9 +9,18 @@ use std::default::Default;
 use std::error::Error;
 use std::fmt::Write;
 
-#[derive(Default)]
 pub struct StdRepl {
     interpreter: Interpreter,
+    history_path: String,
+}
+
+impl Default for StdRepl {
+    fn default() -> Self {
+        Self {
+            interpreter: Interpreter::default(),
+            history_path: "sigil.history".to_string(),
+        }
+    }
 }
 
 #[derive(Completer, Helper, Hinter, Validator)]
@@ -37,6 +46,8 @@ impl StdRepl {
         let mut editor = Editor::<EditorHelper>::new();
         editor.set_helper(Some(helper));
 
+        let _ = editor.load_history(&self.history_path);
+
         let mut prompt_buffer = String::new();
 
         let mut current_namespace = self.interpreter.current_namespace();
@@ -45,6 +56,7 @@ impl StdRepl {
             let next_line = editor.readline(&prompt_buffer);
             match next_line {
                 Ok(line) => {
+                    editor.add_history_entry(line.as_str());
                     let forms = match read(&line) {
                         Ok(forms) => forms,
                         Err(e) => {
@@ -80,6 +92,7 @@ impl StdRepl {
                 }
             }
         }
+        editor.save_history(&self.history_path)?;
         Ok(())
     }
 }
