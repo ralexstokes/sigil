@@ -165,17 +165,13 @@ impl Hash for Value {
             Bool(b) => b.hash(state),
             Number(n) => n.hash(state),
             String(s) => s.hash(state),
-            Keyword(s, ns_opt) => {
-                if let Some(ns) = ns_opt {
-                    ns.hash(state);
-                }
+            Keyword(s, ns) => {
                 s.hash(state);
+                ns.hash(state);
             }
-            Symbol(s, ns_opt) => {
-                if let Some(ns) = ns_opt {
-                    ns.hash(state);
-                }
+            Symbol(s, ns) => {
                 s.hash(state);
+                ns.hash(state);
             }
             List(l) => l.hash(state),
             Vector(v) => v.hash(state),
