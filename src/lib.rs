@@ -1,3 +1,5 @@
-pub mod interpreter;
-pub mod reader;
+mod interpreter;
+mod namespace;
+mod reader;
 pub mod repl;
+mod value;

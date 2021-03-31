@@ -62,12 +62,8 @@ impl fmt::Display for Form<'_> {
 
 #[derive(Debug, Error)]
 pub enum ReaderError {
-    #[error("reader could not parse the full input")]
-    ExtraneousInput,
     #[error("{0}")]
     ParserError(String),
-    #[error("unknown error occurred")]
-    Unknown,
 }
 
 #[inline]
