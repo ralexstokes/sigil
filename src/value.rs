@@ -1,9 +1,10 @@
+use crate::interpreter::EvaluationError;
 use itertools::{join, sorted};
 use rpds::{
     HashTrieMap as PersistentMap, HashTrieSet as PersistentSet, List as PersistentList,
     Vector as PersistentVector,
 };
-use std::cmp::{Ord, Ordering, PartialEq};
+use std::cmp::{Eq, Ord, Ordering, PartialEq};
 use std::fmt;
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
@@ -26,7 +27,9 @@ pub fn set_with_values(values: impl IntoIterator<Item = Value>) -> Value {
     Value::Set(PersistentSet::from_iter(values))
 }
 
-#[derive(Debug, PartialEq, Eq)]
+pub type NativeFn = fn(&[Value]) -> Result<Value, EvaluationError>;
+
+#[derive(Clone)]
 pub enum Value {
     Nil,
     Bool(bool),
@@ -40,7 +43,60 @@ pub enum Value {
     Vector(PersistentVector<Value>),
     Map(PersistentMap<Value, Value>),
     Set(PersistentSet<Value>),
+    Primitive(NativeFn),
 }
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        use Value::*;
+
+        match self {
+            Nil => match other {
+                Nil => true,
+                _ => false,
+            },
+            Bool(ref x) => match other {
+                Bool(ref y) => x == y,
+                _ => false,
+            },
+            Number(ref x) => match other {
+                Number(ref y) => x == y,
+                _ => false,
+            },
+            String(ref x) => match other {
+                String(ref y) => x == y,
+                _ => false,
+            },
+            Keyword(ref x, ref x_ns_opt) => match other {
+                Keyword(ref y, ref y_ns_opt) => (x, x_ns_opt) == (y, y_ns_opt),
+                _ => false,
+            },
+            Symbol(ref x, ref x_ns_opt) => match other {
+                Symbol(ref y, ref y_ns_opt) => (x, x_ns_opt) == (y, y_ns_opt),
+                _ => false,
+            },
+            List(ref x) => match other {
+                List(ref y) => x == y,
+                _ => false,
+            },
+            Vector(ref x) => match other {
+                Vector(ref y) => x == y,
+                _ => false,
+            },
+            Map(ref x) => match other {
+                Map(ref y) => x == y,
+                _ => false,
+            },
+            Set(ref x) => match other {
+                Set(ref y) => x == y,
+                _ => false,
+            },
+            Primitive(_) => false,
+        }
+    }
+}
+
+impl Eq for Value {}
 
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -111,7 +167,20 @@ impl Ord for Value {
                 _ => Ordering::Less,
             },
             Set(ref x) => match other {
+                Nil
+                | Bool(_)
+                | Number(_)
+                | String(_)
+                | Keyword(_, _)
+                | Symbol(_, _)
+                | List(_)
+                | Vector(_)
+                | Map(_) => Ordering::Greater,
                 Set(ref y) => sorted(x).cmp(sorted(y)),
+                _ => Ordering::Less,
+            },
+            Primitive(_) => match other {
+                Primitive(_) => Ordering::Equal,
                 _ => Ordering::Greater,
             },
         }
@@ -148,11 +217,16 @@ impl Hash for Value {
                 s.size().hash(state);
                 sorted(s).for_each(|elem| elem.hash(state));
             }
+            Primitive(f) => {
+                let ptr = f as *const NativeFn;
+                let identifier = unsafe { std::mem::transmute::<*const NativeFn, usize>(ptr) };
+                identifier.hash(state);
+            }
         }
     }
 }
 
-impl fmt::Display for Value {
+impl fmt::Debug for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use Value::*;
 
@@ -186,7 +260,14 @@ impl fmt::Display for Value {
                 write!(f, "{{{}}}", join(inner, ", "))
             }
             Set(elems) => write!(f, "#{{{}}}", join(elems, " ")),
+            Primitive(_) => write!(f, "<native function>"),
         }
+    }
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
     }
 }
 

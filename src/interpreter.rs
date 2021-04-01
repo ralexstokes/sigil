@@ -1,4 +1,5 @@
 use crate::namespace::{namespace_with_name, Namespace};
+use crate::prelude::plus;
 use crate::value::Value;
 use rpds::{
     HashTrieMap as PersistentMap, HashTrieSet as PersistentSet, List as PersistentList,
@@ -18,9 +19,17 @@ pub enum SymbolEvaluationError {
 }
 
 #[derive(Debug, Error)]
+pub enum PrimitiveEvaluationError {
+    #[error("something failed {0}")]
+    Failure(String),
+}
+
+#[derive(Debug, Error)]
 pub enum EvaluationError {
     #[error("symbol error: {0}")]
     Symbol(SymbolEvaluationError),
+    #[error("primitive error: {0}")]
+    Primitve(PrimitiveEvaluationError),
 }
 
 #[derive(Debug)]
@@ -32,9 +41,12 @@ pub struct Interpreter {
 
 impl Default for Interpreter {
     fn default() -> Self {
+        let mut default_namespace = namespace_with_name("sigil");
+        default_namespace.intern_value("+", Value::Primitive(plus));
+
         Interpreter {
             current_namespace: 0,
-            namespaces: vec![namespace_with_name("sigil")],
+            namespaces: vec![default_namespace],
         }
     }
 }
@@ -69,7 +81,7 @@ impl Interpreter {
                 Value::Keyword(id.to_string(), ns_opt.as_ref().map(String::from))
             }
             Value::Symbol(id, ns_opt) => {
-                if let Some(ns) = self.resolve_ns(ns_opt.as_ref()) {
+                if let Some(mut ns) = self.resolve_ns(ns_opt.as_ref()) {
                     if let Some(value) = ns.resolve_identifier(&id) {
                         value
                     } else {
@@ -92,6 +104,12 @@ impl Interpreter {
                 for form in forms.into_iter() {
                     let value = self.evaluate(form)?;
                     result.push(value);
+                }
+                if let Some((operator, operands)) = result.split_first() {
+                    match operator {
+                        Value::Primitive(native_fn) => return native_fn(operands),
+                        _ => {}
+                    }
                 }
                 Value::List(PersistentList::from_iter(result.into_iter()))
             }
@@ -120,6 +138,7 @@ impl Interpreter {
                 }
                 Value::Set(PersistentSet::from_iter(result.into_iter()))
             }
+            Value::Primitive(_) => unreachable!(),
         };
         Ok(result)
     }
