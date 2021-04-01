@@ -3,7 +3,7 @@ use combine::error::ParseError;
 use combine::parser;
 use combine::parser::{
     char::alpha_num, char::char, char::digit, char::space, choice::choice, choice::optional,
-    combinator::from_str, range::range, range::recognize, repeat::many, repeat::skip_many,
+    combinator::attempt, range::range, range::recognize, repeat::many, repeat::skip_many,
     repeat::skip_many1, repeat::skip_until, sequence::between, token::eof, token::one_of,
 };
 use combine::stream::position::Stream;
@@ -34,20 +34,27 @@ parser! {
         let nil = recognize(range("nil")).map(|_| Value::Nil);
         let true_parser = recognize(range("true")).map(|_| Value::Bool(true));
         let false_parser = recognize(range("false")).map(|_| Value::Bool(false));
-        let number = from_str(recognize(skip_many1(digit()))).map(Value::Number);
+        let number = optional(char('-')).and(recognize(skip_many1(digit()))).map(|(sign, digits): (Option<char>, &str)| {
+            let value = digits.parse::<i64>().unwrap();
+            let result = if sign.is_some() {
+                -value
+            } else {
+                value
+            };
+            Value::Number(result)
+        });
 
         let string =
             (char('"'), recognize(skip_until(char('"'))), char('"')).map(|(_, s, _): (_, &str, _)| Value::String(s.to_string()));
         let identifier_tokens = || alpha_num().or(one_of("*+!-_'?<>=".chars()));
-        let identifier_with_namespace = || (recognize(skip_many1(identifier_tokens())), optional((char('/'), recognize(skip_many1(identifier_tokens()))))).map(|(first, rest): (&str, Option<(char, &str)>)| {
-            if let Some((_, rest)) = rest {
-                (rest, Some(first))
-            } else {
-                (first, None)
-            }
-        });
-        let symbol = identifier_with_namespace().map(|(id, ns)| Value::Symbol(id.to_string(), ns.map(String::from)));
-        let keyword = (char(':'), identifier_with_namespace()).map(|(_, (id, ns))| Value::Keyword(id.to_string(), ns.map(String::from)));
+        let identifier = || recognize(skip_many1(identifier_tokens()));
+        let identifier_with_optional_namespace = || (attempt((identifier(), char('/'), identifier()).map(|(ns, _ ,id): (&str, char, &str)| {
+            (id, Some(ns))
+        }))).or(recognize(skip_many1(identifier_tokens().or(char('/')))).map(|s: &str| {
+            (s, None)
+        }));
+        let symbol = identifier_with_optional_namespace().map(|(id, ns)| Value::Symbol(id.to_string(), ns.map(String::from)));
+        let keyword = (char(':'), identifier_with_optional_namespace()).map(|(_, (id, ns))| Value::Keyword(id.to_string(), ns.map(String::from)));
 
         let list = between(char('('), char(')'), many::<Vec<_>, _,_>(read_form())).map(list_with_values);
         let vector = between(char('['), char(']'), many::<Vec<_>, _,_>(read_form())).map(vector_with_values);
@@ -55,10 +62,10 @@ parser! {
         let set = (char('#'), between(char('{'), char('}'), many::<Vec<_>, _, _>(read_form()))).map(|(_, elems)| set_with_values(elems));
 
         choice((
-            number,
             nil,
             true_parser,
             false_parser,
+            attempt(number),
             string,
             keyword,
             symbol,
@@ -92,12 +99,16 @@ mod tests {
     #[test]
     fn test_read_basic() {
         let cases = vec![
-            ("1337", vec![Number(1337)], "1337"),
             ("nil", vec![Nil], "nil"),
             ("true", vec![Bool(true)], "true"),
             ("false", vec![Bool(false)], "false"),
             (" false", vec![Bool(false)], "false"),
             ("false ", vec![Bool(false)], "false"),
+            ("1337", vec![Number(1337)], "1337"),
+            ("-1337", vec![Number(-1337)], "-1337"),
+            ("-1337  ", vec![Number(-1337)], "-1337"),
+            ("  -1337", vec![Number(-1337)], "-1337"),
+            ("  -1337  ", vec![Number(-1337)], "-1337"),
             ("1337  ", vec![Number(1337)], "1337"),
             ("    1337  ", vec![Number(1337)], "1337"),
             (" ,  1337, ", vec![Number(1337)], "1337"),
@@ -114,6 +125,23 @@ mod tests {
             ),
             ("", vec![], ""),
             ("baz", vec![Symbol("baz".into(), None)], "baz"),
+            ("-", vec![Symbol("-".into(), None)], "-"),
+            ("/", vec![Symbol("/".into(), None)], "/"),
+            (
+                "bar/-",
+                vec![Symbol("-".into(), Some("bar".into()))],
+                "bar/-",
+            ),
+            (
+                "bar/- 1",
+                vec![Symbol("-".into(), Some("bar".into())), Number(1)],
+                "bar/- 1",
+            ),
+            (
+                "bar/- -1",
+                vec![Symbol("-".into(), Some("bar".into())), Number(-1)],
+                "bar/- -1",
+            ),
             (
                 "foo/baz",
                 vec![Symbol("baz".into(), Some("foo".into()))],

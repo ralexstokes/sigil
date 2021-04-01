@@ -146,3 +146,45 @@ impl Interpreter {
         Ok(result)
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::reader::read;
+
+    #[test]
+    fn test_basic_eval() {
+        use Value::*;
+
+        let mut interpreter = Interpreter::default();
+        let test_cases = vec![
+            ("nil", Nil),
+            ("1337", Number(1337)),
+            ("-1337", Number(-1337)),
+            ("(+)", Number(0)),
+            ("(+ 1)", Number(1)),
+            ("(+ 1 10)", Number(11)),
+            ("(+ 1 10 2)", Number(13)),
+            ("(- 1)", Number(-1)),
+            ("(- 10 9)", Number(1)),
+            ("(- 10 20)", Number(-10)),
+            ("(- 10 20 10)", Number(-20)),
+            ("(*)", Number(1)),
+            ("(* 2)", Number(2)),
+            ("(* 2 3)", Number(6)),
+            ("(* 2 3 1 1 1)", Number(6)),
+            ("(/ 2)", Number(0)),
+            ("(/ 1)", Number(1)),
+            ("(/ 22 2)", Number(11)),
+            ("(/ 22 2 1 1 1)", Number(11)),
+            ("(/ 22 2 1 1 1)", Number(11)),
+        ];
+
+        for (input, expected) in test_cases {
+            let read_result = read(input).unwrap();
+            let form = &read_result[0];
+            let result = interpreter.evaluate(form).unwrap();
+            assert_eq!(result, expected)
+        }
+    }
+}

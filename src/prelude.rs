@@ -57,7 +57,7 @@ pub fn subtract(args: &[Value]) -> Result<Value, EvaluationError> {
                     .map(Value::Number),
                 _ => Err(EvaluationError::Primitve(
                     PrimitiveEvaluationError::Failure(
-                        "subtract with 1 argument is currently unsupported".to_string(),
+                        "subtract only takes number arguments".to_string(),
                     ),
                 )),
             }
@@ -87,20 +87,44 @@ pub fn divide(args: &[Value]) -> Result<Value, EvaluationError> {
         0 => Err(EvaluationError::Primitve(
             PrimitiveEvaluationError::Failure("divide needs more than 0 args".to_string()),
         )),
-        _ => args
-            .iter()
-            .try_fold(1 as i64, |acc, x| match x {
-                &Value::Number(n) => acc.checked_div(n).ok_or_else(|| {
+        1 => match &args[0] {
+            &Value::Number(first) => (1 as i64)
+                .checked_div_euclid(first)
+                .ok_or_else(|| {
                     EvaluationError::Primitve(PrimitiveEvaluationError::Failure(
                         "overflow detected".to_string(),
                     ))
-                }),
+                })
+                .map(Value::Number),
+            _ => Err(EvaluationError::Primitve(
+                PrimitiveEvaluationError::Failure("divide requires number arguments".to_string()),
+            )),
+        },
+        _ => {
+            let first_value = &args[0];
+            let rest_values = &args[1..];
+            match first_value {
+                &Value::Number(first) => rest_values
+                    .iter()
+                    .try_fold(first, |acc, x| match x {
+                        &Value::Number(next) => acc.checked_div_euclid(next).ok_or_else(|| {
+                            EvaluationError::Primitve(PrimitiveEvaluationError::Failure(
+                                "overflow detected".to_string(),
+                            ))
+                        }),
+                        _ => Err(EvaluationError::Primitve(
+                            PrimitiveEvaluationError::Failure(
+                                "divide only takes number arguments".to_string(),
+                            ),
+                        )),
+                    })
+                    .map(Value::Number),
                 _ => Err(EvaluationError::Primitve(
                     PrimitiveEvaluationError::Failure(
                         "divide only takes number arguments".to_string(),
                     ),
                 )),
-            })
-            .map(Value::Number),
+            }
+        }
     }
 }
