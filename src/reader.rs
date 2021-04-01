@@ -1,64 +1,14 @@
+use crate::value::{list_with_values, map_with_values, set_with_values, vector_with_values, Value};
 use combine::error::ParseError;
 use combine::parser;
 use combine::parser::{
-    char::alpha_num, char::char, char::digit, char::newline, char::space, choice::choice,
-    choice::optional, choice::or, combinator::from_str, range::range, range::recognize,
-    repeat::many, repeat::skip_many, repeat::skip_many1, repeat::skip_until, sequence::between,
-    token::eof, token::one_of,
+    char::alpha_num, char::char, char::digit, char::space, choice::choice, choice::optional,
+    combinator::from_str, range::range, range::recognize, repeat::many, repeat::skip_many,
+    repeat::skip_many1, repeat::skip_until, sequence::between, token::eof, token::one_of,
 };
 use combine::stream::position::Stream;
 use combine::{EasyParser, Parser, RangeStream};
-use itertools::join;
-use std::fmt;
 use thiserror::Error;
-
-#[derive(Debug, PartialEq)]
-pub enum Form<'a> {
-    Nil,
-    Bool(bool),
-    Number(u64),
-    String(&'a str),
-    // identifier, optional namespace
-    Keyword(&'a str, Option<&'a str>),
-    // identifier, optional namespace
-    Symbol(&'a str, Option<&'a str>),
-    Comment(&'a str),
-    List(Vec<Form<'a>>),
-    Vector(Vec<Form<'a>>),
-    Map(Vec<Form<'a>>),
-    Set(Vec<Form<'a>>),
-}
-
-impl fmt::Display for Form<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use Form::*;
-
-        match self {
-            Nil => write!(f, "nil"),
-            Bool(b) => write!(f, "{}", b),
-            Number(n) => write!(f, "{}", n),
-            String(s) => write!(f, "\"{}\"", s),
-            Keyword(id, ns_opt) => {
-                write!(f, ":")?;
-                if let Some(ns) = ns_opt {
-                    write!(f, "{}/", ns)?;
-                }
-                write!(f, "{}", id)
-            }
-            Symbol(id, ns_opt) => {
-                if let Some(ns) = ns_opt {
-                    write!(f, "{}/", ns)?;
-                }
-                write!(f, "{}", id)
-            }
-            Comment(s) => write!(f, ";{}\n", s),
-            List(elems) => write!(f, "({})", join(elems, " ")),
-            Vector(elems) => write!(f, "[{}]", join(elems, " ")),
-            Map(elems) => write!(f, "{{{}}}", join(elems, " ")),
-            Set(elems) => write!(f, "#{{{}}}", join(elems, " ")),
-        }
-    }
-}
 
 #[derive(Debug, Error)]
 pub enum ReaderError {
@@ -67,48 +17,44 @@ pub enum ReaderError {
 }
 
 #[inline]
-fn read_forms<'a, Input>() -> impl Parser<Input, Output = Vec<Form<'a>>>
+fn read_form<'a, Input>() -> impl Parser<Input, Output = Value> + 'a
 where
     Input: RangeStream<Token = char, Range = &'a str> + 'a,
     Input::Error: ParseError<Input::Token, Input::Range, Input::Position>,
 {
-    let whitespace = recognize(skip_many(or(space(), char(','))));
-    whitespace.with(read_forms_inner())
+    let whitespace = || skip_many(space().or(char(',')));
+    whitespace().with(read_form_inner()).skip(whitespace())
 }
 
 parser! {
     #[inline]
-    fn read_forms_inner['a, Input]()(Input) -> Vec<Form<'a>>
+    fn read_form_inner['a, Input]()(Input) -> Value
     where [ Input: RangeStream<Token = char, Range = &'a str> + 'a]
     {
-        let number = from_str(recognize(skip_many1(digit()))).map(Form::Number);
-        let nil = recognize(range("nil")).map(|_| Form::Nil);
-        let true_parser = recognize(range("true")).map(|_| Form::Bool(true));
-        let false_parser = recognize(range("false")).map(|_| Form::Bool(false));
+        let nil = recognize(range("nil")).map(|_| Value::Nil);
+        let true_parser = recognize(range("true")).map(|_| Value::Bool(true));
+        let false_parser = recognize(range("false")).map(|_| Value::Bool(false));
+        let number = from_str(recognize(skip_many1(digit()))).map(Value::Number);
 
         let string =
-            (char('"'), recognize(skip_until(char('"'))), char('"')).map(|(_, s, _)| Form::String(s));
+            (char('"'), recognize(skip_until(char('"'))), char('"')).map(|(_, s, _): (_, &str, _)| Value::String(s.to_string()));
         let identifier_tokens = || alpha_num().or(one_of("*+!-_'?<>=".chars()));
-        let identifier_with_namespace = || (recognize(skip_many1(identifier_tokens())), optional((char('/'), recognize(skip_many1(identifier_tokens()))))).map(|(first, rest)| {
+        let identifier_with_namespace = || (recognize(skip_many1(identifier_tokens())), optional((char('/'), recognize(skip_many1(identifier_tokens()))))).map(|(first, rest): (&str, Option<(char, &str)>)| {
             if let Some((_, rest)) = rest {
                 (rest, Some(first))
             } else {
                 (first, None)
             }
         });
-        let symbol = identifier_with_namespace().map(|(id, ns)| Form::Symbol(id, ns));
-        let keyword = (char(':'), identifier_with_namespace()).map(|(_, (id, ns))| Form::Keyword(id, ns));
-        let comment = (char(';'), recognize(skip_until(or(eof(), newline().map(|_| ())))), optional(newline())).map(|(_, s, _)| Form::Comment(s));
-        let list = between(char('('), char(')'), read_forms()).map(Form::List);
-        let vector = between(char('['), char(']'), read_forms()).map(Form::Vector);
-        let map_elems = || between(char('{'), char('}'), read_forms());
-        let map = map_elems().map(Form::Map);
-        let set = (char('#'), map_elems()).map(|(_, elems)| {
-            Form::Set(elems)
-        });
+        let symbol = identifier_with_namespace().map(|(id, ns)| Value::Symbol(id.to_string(), ns.map(String::from)));
+        let keyword = (char(':'), identifier_with_namespace()).map(|(_, (id, ns))| Value::Keyword(id.to_string(), ns.map(String::from)));
 
-        let whitespace = recognize(skip_many(or(space(), char(','))));
-        let forms = choice((
+        let list = between(char('('), char(')'), many::<Vec<_>, _,_>(read_form())).map(list_with_values);
+        let vector = between(char('['), char(']'), many::<Vec<_>, _,_>(read_form())).map(vector_with_values);
+        let map = between(char('{'), char('}'), many::<Vec<_>, _, _>((read_form(), read_form()))).map(map_with_values);
+        let set = (char('#'), between(char('{'), char('}'), many::<Vec<_>, _, _>(read_form()))).map(|(_, elems)| set_with_values(elems));
+
+        choice((
             number,
             nil,
             true_parser,
@@ -116,19 +62,19 @@ parser! {
             string,
             keyword,
             symbol,
-            comment,
             list,
             vector,
             map,
             set,
-        )).skip(whitespace);
-
-        many::<Vec<_>, _, _>(forms)
+        ))
     }
 }
 
-pub fn read(input: &str) -> Result<Vec<Form>, ReaderError> {
-    let mut parser = (read_forms(), eof()).map(|(result, _)| result);
+pub fn read(input: &str) -> Result<Vec<Value>, ReaderError> {
+    let comment = (char(';'), skip_until(eof()));
+    let whitespace = || skip_many(space().or(char(',')));
+    let mut parser =
+        (whitespace(), many(read_form()), optional(comment), eof()).map(|(_, result, _, _)| result);
     let parse_result = parser.easy_parse(Stream::new(input));
     match parse_result {
         Ok((forms, _)) => Ok(forms),
@@ -138,8 +84,10 @@ pub fn read(input: &str) -> Result<Vec<Form>, ReaderError> {
 
 #[cfg(test)]
 mod tests {
-    use super::join;
-    use super::{read, Form::*};
+    use super::{
+        list_with_values, map_with_values, read, set_with_values, vector_with_values, Value::*,
+    };
+    use itertools::join;
 
     #[test]
     fn test_read_basic() {
@@ -148,6 +96,8 @@ mod tests {
             ("nil", vec![Nil], "nil"),
             ("true", vec![Bool(true)], "true"),
             ("false", vec![Bool(false)], "false"),
+            (" false", vec![Bool(false)], "false"),
+            ("false ", vec![Bool(false)], "false"),
             ("1337  ", vec![Number(1337)], "1337"),
             ("    1337  ", vec![Number(1337)], "1337"),
             (" ,  1337, ", vec![Number(1337)], "1337"),
@@ -163,157 +113,182 @@ mod tests {
                 "true false",
             ),
             ("", vec![], ""),
-            ("baz", vec![Symbol("baz", None)], "baz"),
-            ("foo/baz", vec![Symbol("baz", Some("foo"))], "foo/baz"),
+            ("baz", vec![Symbol("baz".into(), None)], "baz"),
+            (
+                "foo/baz",
+                vec![Symbol("baz".into(), Some("foo".into()))],
+                "foo/baz",
+            ),
             (
                 "foo/baz bar true",
-                vec![Symbol("baz", Some("foo")), Symbol("bar", None), Bool(true)],
+                vec![
+                    Symbol("baz".into(), Some("foo".into())),
+                    Symbol("bar".into(), None),
+                    Bool(true),
+                ],
                 "foo/baz bar true",
             ),
-            ("\"\"", vec![String("")], "\"\""),
-            ("\"hi\"", vec![String("hi")], "\"hi\""),
+            ("\"\"", vec![String("".into())], "\"\""),
+            ("\"hi\"", vec![String("hi".into())], "\"hi\""),
             (
                 "\"123foo\" true",
-                vec![String("123foo"), Bool(true)],
+                vec![String("123foo".into()), Bool(true)],
                 "\"123foo\" true",
             ),
-            (r#""abc""#, vec![String("abc")], "\"abc\""),
-            (":foobar", vec![Keyword("foobar", None)], ":foobar"),
-            (":net/hi", vec![Keyword("hi", Some("net"))], ":net/hi"),
-            (":a0987234", vec![Keyword("a0987234", None)], ":a0987234"),
+            (r#""abc""#, vec![String("abc".into())], "\"abc\""),
+            (":foobar", vec![Keyword("foobar".into(), None)], ":foobar"),
             (
-                "; sdlkfjsldfjsldjflsdjf",
-                vec![Comment(" sdlkfjsldfjsldjflsdjf")],
-                "; sdlkfjsldfjsldjflsdjf\n",
+                ":net/hi",
+                vec![Keyword("hi".into(), Some("net".into()))],
+                ":net/hi",
             ),
+            (
+                ":a0987234",
+                vec![Keyword("a0987234".into(), None)],
+                ":a0987234",
+            ),
+            ("; sdlkfjsldfjsldjflsdjf", vec![], ""),
             (
                 "foo/bar true ;; some comment",
-                vec![
-                    Symbol("bar", Some("foo")),
-                    Bool(true),
-                    Comment("; some comment"),
-                ],
-                "foo/bar true ;; some comment\n",
+                vec![Symbol("bar".into(), Some("foo".into())), Bool(true)],
+                "foo/bar true",
             ),
-            (
-                "baz ;; comment \nfoo12",
-                vec![
-                    Symbol("baz", None),
-                    Comment("; comment "),
-                    Symbol("foo12", None),
-                ],
-                "baz ;; comment \n foo12",
-            ),
-            ("()", vec![List(vec![])], "()"),
+            ("baz ;; comment \n", vec![Symbol("baz".into(), None)], "baz"),
+            ("()", vec![list_with_values(vec![])], "()"),
             (
                 "(a b c)",
-                vec![List(vec![
-                    Symbol("a", None),
-                    Symbol("b", None),
-                    Symbol("c", None),
+                vec![list_with_values(vec![
+                    Symbol("a".into(), None),
+                    Symbol("b".into(), None),
+                    Symbol("c".into(), None),
                 ])],
                 "(a b c)",
             ),
             (
                 "(12 :foo/bar \"extra\")",
-                vec![List(vec![
+                vec![list_with_values(vec![
                     Number(12),
-                    Keyword("bar", Some("foo")),
-                    String("extra"),
+                    Keyword("bar".into(), Some("foo".into())),
+                    String("extra".into()),
                 ])],
                 "(12 :foo/bar \"extra\")",
             ),
-            ("[]", vec![Vector(vec![])], "[]"),
+            ("[]", vec![vector_with_values(vec![])], "[]"),
             (
                 "[a b c]",
-                vec![Vector(vec![
-                    Symbol("a", None),
-                    Symbol("b", None),
-                    Symbol("c", None),
+                vec![vector_with_values(vec![
+                    Symbol("a".into(), None),
+                    Symbol("b".into(), None),
+                    Symbol("c".into(), None),
                 ])],
                 "[a b c]",
             ),
             (
                 "[12 :foo/bar \"extra\"]",
-                vec![Vector(vec![
+                vec![vector_with_values(vec![
                     Number(12),
-                    Keyword("bar", Some("foo")),
-                    String("extra"),
+                    Keyword("bar".into(), Some("foo".into())),
+                    String("extra".into()),
                 ])],
                 "[12 :foo/bar \"extra\"]",
             ),
-            ("{}", vec![Map(vec![])], "{}"),
+            ("{}", vec![map_with_values(vec![])], "{}"),
             (
-                "{a b c}",
-                vec![Map(vec![
-                    Symbol("a", None),
-                    Symbol("b", None),
-                    Symbol("c", None),
+                "{a b c d}",
+                vec![map_with_values(vec![
+                    (Symbol("a".into(), None), Symbol("b".into(), None)),
+                    (Symbol("c".into(), None), Symbol("d".into(), None)),
                 ])],
-                "{a b c}",
+                "",
             ),
             (
-                "{12 :foo/bar \"extra\"}",
-                vec![Map(vec![
-                    Number(12),
-                    Keyword("bar", Some("foo")),
-                    String("extra"),
+                "{12 13 :foo/bar \"extra\"}",
+                vec![map_with_values(vec![
+                    (Number(12), Number(13)),
+                    (
+                        Keyword("bar".into(), Some("foo".into())),
+                        String("extra".into()),
+                    ),
                 ])],
-                "{12 :foo/bar \"extra\"}",
+                "",
             ),
-            ("() []", vec![List(vec![]), Vector(vec![])], "() []"),
-            ("(())", vec![List(vec![List(vec![])])], "(())"),
+            (
+                "() []",
+                vec![list_with_values(vec![]), vector_with_values(vec![])],
+                "() []",
+            ),
+            (
+                "(())",
+                vec![list_with_values(vec![list_with_values(vec![])])],
+                "(())",
+            ),
             (
                 "(([]))",
-                vec![List(vec![List(vec![Vector(vec![])])])],
+                vec![list_with_values(vec![list_with_values(vec![
+                    vector_with_values(vec![]),
+                ])])],
                 "(([]))",
             ),
             (
                 "(([]))()",
-                vec![List(vec![List(vec![Vector(vec![])])]), List(vec![])],
+                vec![
+                    list_with_values(vec![list_with_values(vec![vector_with_values(vec![])])]),
+                    list_with_values(vec![]),
+                ],
                 "(([])) ()",
             ),
             (
                 "(12 (true [34 false]))(), (7)",
                 vec![
-                    List(vec![
+                    list_with_values(vec![
                         Number(12),
-                        List(vec![Bool(true), Vector(vec![Number(34), Bool(false)])]),
+                        list_with_values(vec![
+                            Bool(true),
+                            vector_with_values(vec![Number(34), Bool(false)]),
+                        ]),
                     ]),
-                    List(vec![]),
-                    List(vec![Number(7)]),
+                    list_with_values(vec![]),
+                    list_with_values(vec![Number(7)]),
                 ],
                 "(12 (true [34 false])) () (7)",
             ),
-            ("#{}", vec![Set(vec![])], "#{}"),
-            ("#{1}", vec![Set(vec![Number(1)])], "#{1}"),
-            ("#{   1}", vec![Set(vec![Number(1)])], "#{1}"),
-            ("#{   1  }", vec![Set(vec![Number(1)])], "#{1}"),
+            ("#{}", vec![set_with_values(vec![])], "#{}"),
+            ("#{1}", vec![set_with_values(vec![Number(1)])], "#{1}"),
+            ("#{   1}", vec![set_with_values(vec![Number(1)])], "#{1}"),
+            ("#{   1  }", vec![set_with_values(vec![Number(1)])], "#{1}"),
             (
                 "#{1 2 3}",
-                vec![Set(vec![Number(1), Number(2), Number(3)])],
-                "#{1 2 3}",
+                vec![set_with_values(vec![Number(1), Number(2), Number(3)])],
+                "",
             ),
             (
                 "#{(1 3) :foo}",
-                vec![Set(vec![
-                    List(vec![Number(1), Number(3)]),
-                    Keyword("foo", None),
+                vec![set_with_values(vec![
+                    list_with_values(vec![Number(1), Number(3)]),
+                    Keyword("foo".into(), None),
                 ])],
-                "#{(1 3) :foo}",
+                "",
             ),
             (
                 "+ ! =",
-                vec![Symbol("+", None), Symbol("!", None), Symbol("=", None)],
+                vec![
+                    Symbol("+".into(), None),
+                    Symbol("!".into(), None),
+                    Symbol("=".into(), None),
+                ],
                 "+ ! =",
             ),
             (
                 "(defn foo [a] (+ a 1))",
-                vec![List(vec![
-                    Symbol("defn", None),
-                    Symbol("foo", None),
-                    Vector(vec![Symbol("a", None)]),
-                    List(vec![Symbol("+", None), Symbol("a", None), Number(1)]),
+                vec![list_with_values(vec![
+                    Symbol("defn".into(), None),
+                    Symbol("foo".into(), None),
+                    vector_with_values(vec![Symbol("a".into(), None)]),
+                    list_with_values(vec![
+                        Symbol("+".into(), None),
+                        Symbol("a".into(), None),
+                        Number(1),
+                    ]),
                 ])],
                 "(defn foo [a] (+ a 1))",
             ),
@@ -322,8 +297,10 @@ mod tests {
             match read(input) {
                 Ok(result) => {
                     assert_eq!(result, expected_read);
-                    let print = join(result, " ");
-                    assert_eq!(print, expected_print);
+                    if expected_print != "" {
+                        let print = join(result, " ");
+                        assert_eq!(print, expected_print);
+                    }
                 }
                 Err(e) => {
                     dbg!(input);

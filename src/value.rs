@@ -1,23 +1,41 @@
-use crate::namespace::Namespace;
 use itertools::{join, sorted};
 use rpds::{
     HashTrieMap as PersistentMap, HashTrieSet as PersistentSet, List as PersistentList,
     Vector as PersistentVector,
 };
+use std::cmp::{Ord, Ordering, PartialEq};
 use std::fmt;
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
+use std::iter::{FromIterator, IntoIterator};
 use std::mem::discriminant;
 
-use std::cmp::{Ord, Ordering, PartialEq};
+pub fn list_with_values(values: impl IntoIterator<Item = Value>) -> Value {
+    Value::List(PersistentList::from_iter(values))
+}
+
+pub fn vector_with_values(values: impl IntoIterator<Item = Value>) -> Value {
+    Value::Vector(PersistentVector::from_iter(values))
+}
+
+pub fn map_with_values(values: impl IntoIterator<Item = (Value, Value)>) -> Value {
+    Value::Map(PersistentMap::from_iter(values))
+}
+
+pub fn set_with_values(values: impl IntoIterator<Item = Value>) -> Value {
+    Value::Set(PersistentSet::from_iter(values))
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Value {
     Nil,
     Bool(bool),
     Number(u64),
     String(String),
-    Keyword(String, Option<Namespace>),
-    Symbol(String, Option<Namespace>),
+    // identifier with optional namespace
+    Keyword(String, Option<String>),
+    // identifier with optional namespace
+    Symbol(String, Option<String>),
     List(PersistentList<Value>),
     Vector(PersistentVector<Value>),
     Map(PersistentMap<Value, Value>),
@@ -169,5 +187,71 @@ impl fmt::Display for Value {
             }
             Set(elems) => write!(f, "#{{{}}}", join(elems, " ")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use Value::*;
+
+    #[test]
+    fn test_ord_provided() {
+        let ref x = List(PersistentList::from_iter(vec![
+            Number(1),
+            Number(2),
+            Number(3),
+        ]));
+        let ref y = List(PersistentList::from_iter(vec![
+            Number(2),
+            Number(3),
+            Number(1),
+        ]));
+        let ref z = List(PersistentList::from_iter(vec![Number(44)]));
+        let ref a = List(PersistentList::from_iter(vec![Number(0)]));
+        let ref b = List(PersistentList::from_iter(vec![Number(1)]));
+        let ref c = List(PersistentList::new());
+
+        assert_eq!(x.cmp(x), Ordering::Equal);
+        assert_eq!(x.cmp(y), Ordering::Less);
+        assert_eq!(x.cmp(z), Ordering::Less);
+        assert_eq!(x.cmp(a), Ordering::Greater);
+        assert_eq!(x.cmp(b), Ordering::Greater);
+        assert_eq!(x.cmp(c), Ordering::Greater);
+        assert_eq!(c.cmp(x), Ordering::Less);
+        assert_eq!(c.cmp(y), Ordering::Less);
+    }
+
+    #[test]
+    fn test_ord_custom() {
+        let ref x = Map(PersistentMap::from_iter(vec![
+            (Number(1), Number(2)),
+            (Number(3), Number(4)),
+        ]));
+        let ref y = Map(PersistentMap::from_iter(vec![(Number(1), Number(2))]));
+        let ref z = Map(PersistentMap::from_iter(vec![
+            (Number(4), Number(3)),
+            (Number(1), Number(2)),
+        ]));
+        let ref a = Map(PersistentMap::from_iter(vec![
+            (Number(1), Number(444)),
+            (Number(3), Number(4)),
+        ]));
+        let ref b = Map(PersistentMap::new());
+        let ref c = Map(PersistentMap::from_iter(vec![
+            (Number(1), Number(2)),
+            (Number(3), Number(4)),
+            (Number(4), Number(8)),
+        ]));
+
+        assert_eq!(x.cmp(x), Ordering::Equal);
+        assert_eq!(x.cmp(y), Ordering::Greater);
+        assert_eq!(x.cmp(z), Ordering::Less);
+        assert_eq!(x.cmp(a), Ordering::Less);
+        assert_eq!(x.cmp(b), Ordering::Greater);
+        assert_eq!(x.cmp(c), Ordering::Less);
+        assert_eq!(b.cmp(b), Ordering::Equal);
+        assert_eq!(b.cmp(c), Ordering::Less);
+        assert_eq!(b.cmp(y), Ordering::Less);
     }
 }

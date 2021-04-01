@@ -64,7 +64,7 @@ impl StdRepl {
                             continue;
                         }
                     };
-                    for form in forms {
+                    for form in forms.iter() {
                         match self.interpreter.evaluate(form) {
                             Ok(result) => println!("{}", result),
                             Err(e) => {
