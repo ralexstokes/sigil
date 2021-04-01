@@ -33,7 +33,7 @@ pub type NativeFn = fn(&[Value]) -> Result<Value, EvaluationError>;
 pub enum Value {
     Nil,
     Bool(bool),
-    Number(u64),
+    Number(i64),
     String(String),
     // identifier with optional namespace
     Keyword(String, Option<String>),
@@ -91,7 +91,18 @@ impl PartialEq for Value {
                 Set(ref y) => x == y,
                 _ => false,
             },
-            Primitive(_) => false,
+            Primitive(x) => match other {
+                Primitive(y) => {
+                    let x_ptr = x as *const NativeFn;
+                    let x_identifier =
+                        unsafe { std::mem::transmute::<*const NativeFn, usize>(x_ptr) };
+                    let y_ptr = y as *const NativeFn;
+                    let y_identifier =
+                        unsafe { std::mem::transmute::<*const NativeFn, usize>(y_ptr) };
+                    x_identifier == y_identifier
+                }
+                _ => false,
+            },
         }
     }
 }
@@ -179,8 +190,16 @@ impl Ord for Value {
                 Set(ref y) => sorted(x).cmp(sorted(y)),
                 _ => Ordering::Less,
             },
-            Primitive(_) => match other {
-                Primitive(_) => Ordering::Equal,
+            Primitive(x) => match other {
+                Primitive(y) => {
+                    let x_ptr = x as *const NativeFn;
+                    let x_identifier =
+                        unsafe { std::mem::transmute::<*const NativeFn, usize>(x_ptr) };
+                    let y_ptr = y as *const NativeFn;
+                    let y_identifier =
+                        unsafe { std::mem::transmute::<*const NativeFn, usize>(y_ptr) };
+                    x_identifier.cmp(&y_identifier)
+                }
                 _ => Ordering::Greater,
             },
         }

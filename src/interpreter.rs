@@ -1,5 +1,5 @@
 use crate::namespace::{namespace_with_name, Namespace};
-use crate::prelude::plus;
+use crate::prelude::{divide, multiply, plus, subtract};
 use crate::value::Value;
 use rpds::{
     HashTrieMap as PersistentMap, HashTrieSet as PersistentSet, List as PersistentList,
@@ -43,6 +43,9 @@ impl Default for Interpreter {
     fn default() -> Self {
         let mut default_namespace = namespace_with_name("sigil");
         default_namespace.intern_value("+", Value::Primitive(plus));
+        default_namespace.intern_value("-", Value::Primitive(subtract));
+        default_namespace.intern_value("*", Value::Primitive(multiply));
+        default_namespace.intern_value("/", Value::Primitive(divide));
 
         Interpreter {
             current_namespace: 0,
