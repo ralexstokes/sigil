@@ -1,4 +1,4 @@
-use crate::namespace::{namespace_with_name, Namespace};
+use crate::namespace::Namespace;
 use crate::prelude::{divide, multiply, plus, subtract};
 use crate::value::Value;
 use rpds::{
@@ -8,6 +8,7 @@ use rpds::{
 use std::default::Default;
 use std::fmt::Write;
 use std::iter::FromIterator;
+use std::rc::Rc;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -16,6 +17,14 @@ pub enum SymbolEvaluationError {
     UndefinedNamespace(String, String),
     #[error("var `{0}` not found in namespace `{1}`")]
     MissingVar(String, String),
+}
+
+#[derive(Debug, Error)]
+pub enum ListEvaluationError {
+    #[error("cannot invoke the supplied value {0}")]
+    CannotInvoke(Value),
+    #[error("some failure...")]
+    Failure,
 }
 
 #[derive(Debug, Error)]
@@ -28,6 +37,8 @@ pub enum PrimitiveEvaluationError {
 pub enum EvaluationError {
     #[error("symbol error: {0}")]
     Symbol(SymbolEvaluationError),
+    #[error("list error: {0}")]
+    List(ListEvaluationError),
     #[error("primitive error: {0}")]
     Primitve(PrimitiveEvaluationError),
 }
@@ -41,11 +52,13 @@ pub struct Interpreter {
 
 impl Default for Interpreter {
     fn default() -> Self {
-        let mut default_namespace = namespace_with_name("sigil");
-        default_namespace.intern_value("+", Value::Primitive(plus));
-        default_namespace.intern_value("-", Value::Primitive(subtract));
-        default_namespace.intern_value("*", Value::Primitive(multiply));
-        default_namespace.intern_value("/", Value::Primitive(divide));
+        let bindings = [
+            ("+", Value::Primitive(plus)),
+            ("-", Value::Primitive(subtract)),
+            ("*", Value::Primitive(multiply)),
+            ("/", Value::Primitive(divide)),
+        ];
+        let default_namespace = Namespace::new("sigil", bindings.iter());
 
         Interpreter {
             current_namespace: 0,
@@ -62,7 +75,7 @@ impl Interpreter {
     fn find_namespace(&self, ns_description: &str) -> Option<Namespace> {
         self.namespaces
             .iter()
-            .find(|ns| ns.name == ns_description)
+            .find(|ns| ns.name() == ns_description)
             .map(|ns| ns.clone())
     }
 
@@ -72,6 +85,11 @@ impl Interpreter {
         } else {
             Some(self.current_namespace())
         }
+    }
+
+    fn intern_var(&mut self, identifier: &str, value: Value) {
+        let ns = self.current_namespace();
+        ns.intern_value(identifier, value)
     }
 
     pub fn evaluate(&mut self, form: &Value) -> Result<Value, EvaluationError> {
@@ -84,13 +102,14 @@ impl Interpreter {
                 Value::Keyword(id.to_string(), ns_opt.as_ref().map(String::from))
             }
             Value::Symbol(id, ns_opt) => {
-                if let Some(mut ns) = self.resolve_ns(ns_opt.as_ref()) {
-                    if let Some(value) = ns.resolve_identifier(&id) {
-                        value
+                if let Some(ns) = self.resolve_ns(ns_opt.as_ref()) {
+                    if let Some(mut var) = ns.resolve_identifier(&id) {
+                        // temporary
+                        Rc::make_mut(&mut var).clone()
                     } else {
                         return Err(EvaluationError::Symbol(SymbolEvaluationError::MissingVar(
                             id.to_string(),
-                            ns.name.clone(),
+                            ns.name().to_string(),
                         )));
                     }
                 } else {
@@ -103,18 +122,49 @@ impl Interpreter {
                 }
             }
             Value::List(forms) => {
-                let mut result = vec![];
-                for form in forms.into_iter() {
-                    let value = self.evaluate(form)?;
-                    result.push(value);
-                }
-                if let Some((operator, operands)) = result.split_first() {
-                    match operator {
-                        Value::Primitive(native_fn) => return native_fn(operands),
-                        _ => {}
+                if let Some(operator_form) = forms.first() {
+                    match operator_form {
+                        Value::Symbol(s, None) if s == "def!" => {
+                            if let Some(rest) = forms.drop_first() {
+                                if let Some(identifier) = rest.first() {
+                                    match identifier {
+                                        Value::Symbol(id, ns) => {
+                                            if ns.is_none() {
+                                                if let Some(rest) = rest.drop_first() {
+                                                    if let Some(value_form) = rest.first() {
+                                                        let value = self.evaluate(value_form)?;
+                                                        self.intern_var(id, value.clone());
+                                                        return Ok(value);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            return Err(EvaluationError::List(ListEvaluationError::Failure));
+                        }
+                        _ => match self.evaluate(operator_form)? {
+                            Value::Primitive(native_fn) => {
+                                let mut operands = vec![];
+                                if let Some(rest) = forms.drop_first() {
+                                    for operand_form in rest.iter() {
+                                        let operand = self.evaluate(operand_form)?;
+                                        operands.push(operand);
+                                    }
+                                }
+                                return native_fn(&operands);
+                            }
+                            v @ _ => {
+                                return Err(EvaluationError::List(
+                                    ListEvaluationError::CannotInvoke(v),
+                                ));
+                            }
+                        },
                     }
                 }
-                Value::List(PersistentList::from_iter(result.into_iter()))
+                Value::List(PersistentList::new())
             }
             Value::Vector(forms) => {
                 let mut result = vec![];
@@ -178,6 +228,7 @@ mod test {
             ("(/ 22 2)", Number(11)),
             ("(/ 22 2 1 1 1)", Number(11)),
             ("(/ 22 2 1 1 1)", Number(11)),
+            ("(+ 2 (* 3 4))", Number(14)),
         ];
 
         for (input, expected) in test_cases {
