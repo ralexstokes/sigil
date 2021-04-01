@@ -1,13 +1,17 @@
 use crate::value::{list_with_values, map_with_values, set_with_values, vector_with_values, Value};
 use combine::error::ParseError;
+use combine::error::StreamError;
 use combine::parser;
 use combine::parser::{
     char::alpha_num, char::char, char::digit, char::space, choice::choice, choice::optional,
-    combinator::attempt, range::range, range::recognize, repeat::many, repeat::skip_many,
-    repeat::skip_many1, repeat::skip_until, sequence::between, token::eof, token::one_of,
+    combinator::attempt, range::range, range::recognize, repeat::many, repeat::many1,
+    repeat::skip_many, repeat::skip_many1, repeat::skip_until, sequence::between, token::eof,
+    token::one_of,
 };
 use combine::stream::position::Stream;
+use combine::stream::StreamErrorFor;
 use combine::{EasyParser, Parser, RangeStream};
+use std::string::String as StdString;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -46,15 +50,48 @@ parser! {
 
         let string =
             (char('"'), recognize(skip_until(char('"'))), char('"')).map(|(_, s, _): (_, &str, _)| Value::String(s.to_string()));
-        let identifier_tokens = || alpha_num().or(one_of("*+!-_'?<>=".chars()));
-        let identifier = || recognize(skip_many1(identifier_tokens()));
-        let identifier_with_optional_namespace = || (attempt((identifier(), char('/'), identifier()).map(|(ns, _ ,id): (&str, char, &str)| {
-            (id, Some(ns))
-        }))).or(recognize(skip_many1(identifier_tokens().or(char('/')))).map(|s: &str| {
-            (s, None)
-        }));
-        let symbol = identifier_with_optional_namespace().map(|(id, ns)| Value::Symbol(id.to_string(), ns.map(String::from)));
-        let keyword = (char(':'), identifier_with_optional_namespace()).map(|(_, (id, ns))| Value::Keyword(id.to_string(), ns.map(String::from)));
+        let identifier_tokens = || alpha_num().or(one_of("*+!-_'?<>=/".chars()));
+        let identifier = || many1(identifier_tokens());
+        let identifier_with_optional_namespace = || identifier().and_then(|id_with_maybe_ns: StdString| {
+            let partitions = id_with_maybe_ns.split(|c| c == '/').collect::<Vec<&str>>();
+            match partitions.len() {
+                1 => Ok((partitions[0].to_string(), None)), // identifier without namespace
+                2 => {
+                    let ns = &partitions[0];
+                    let id = &partitions[1];
+                    if ns.is_empty() {
+                        if id.is_empty() {
+                            // identifier "/" without namespace
+                            Ok(("/".to_string(), None))
+                        } else {
+                            Err(StreamErrorFor::<Input>::expected_static_message("unexpected / in symbol"))
+                        }
+                    } else {
+                        if id.is_empty() {
+                            Err(StreamErrorFor::<Input>::expected_static_message("unexpected / in symbol"))
+                        } else {
+                            // identifier with namespace
+                            Ok((id.to_string(), Some(ns.to_string())))
+                        }
+                    }
+                }
+                3 => {
+                    let ns = &partitions[0];
+                    let sep = &partitions[1];
+                    let id = &partitions[1];
+                    if sep.is_empty() && id.is_empty() {
+                        // identifier "/" with namespace
+                        Ok(("/".to_string(), Some(ns.to_string())))
+                    } else {
+                            Err(StreamErrorFor::<Input>::expected_static_message("unexpected / in symbol"))
+                    }
+                }
+                _ => Err(StreamErrorFor::<Input>::expected_static_message("unexpected / in symbol")),
+            }
+        });
+
+        let symbol = identifier_with_optional_namespace().map(|(id, ns)| Value::Symbol(id,ns));
+        let keyword = (char(':'), identifier_with_optional_namespace()).map(|(_, (id, ns))| Value::Keyword(id, ns));
 
         let list = between(char('('), char(')'), many::<Vec<_>, _,_>(read_form())).map(list_with_values);
         let vector = between(char('['), char(']'), many::<Vec<_>, _,_>(read_form())).map(vector_with_values);
@@ -127,6 +164,11 @@ mod tests {
             ("baz", vec![Symbol("baz".into(), None)], "baz"),
             ("-", vec![Symbol("-".into(), None)], "-"),
             ("/", vec![Symbol("/".into(), None)], "/"),
+            (
+                "foo//",
+                vec![Symbol("/".into(), Some("foo".into()))],
+                "foo//",
+            ),
             (
                 "bar/-",
                 vec![Symbol("-".into(), Some("bar".into()))],
