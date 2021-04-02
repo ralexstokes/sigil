@@ -29,6 +29,13 @@ pub fn set_with_values(values: impl IntoIterator<Item = Value>) -> Value {
 
 pub type NativeFn = fn(&[Value]) -> Result<Value, EvaluationError>;
 
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Lambda {
+    pub parameters: PersistentVector<Value>,
+    pub body: PersistentList<Value>,
+    pub captures: Vec<(String, Value)>,
+}
+
 #[derive(Clone)]
 pub enum Value {
     Nil,
@@ -43,6 +50,7 @@ pub enum Value {
     Vector(PersistentVector<Value>),
     Map(PersistentMap<Value, Value>),
     Set(PersistentSet<Value>),
+    Fn(Lambda),
     Primitive(NativeFn),
 }
 
@@ -89,6 +97,10 @@ impl PartialEq for Value {
             },
             Set(ref x) => match other {
                 Set(ref y) => x == y,
+                _ => false,
+            },
+            Fn(ref x) => match other {
+                Fn(ref y) => x == y,
                 _ => false,
             },
             Primitive(x) => match other {
@@ -190,6 +202,20 @@ impl Ord for Value {
                 Set(ref y) => sorted(x).cmp(sorted(y)),
                 _ => Ordering::Less,
             },
+            Fn(ref x) => match other {
+                Nil
+                | Bool(_)
+                | Number(_)
+                | String(_)
+                | Keyword(_, _)
+                | Symbol(_, _)
+                | List(_)
+                | Vector(_)
+                | Map(_)
+                | Set(_) => Ordering::Greater,
+                Fn(ref y) => x.cmp(y),
+                _ => Ordering::Less,
+            },
             Primitive(x) => match other {
                 Primitive(y) => {
                     let x_ptr = x as *const NativeFn;
@@ -236,6 +262,7 @@ impl Hash for Value {
                 s.size().hash(state);
                 sorted(s).for_each(|elem| elem.hash(state));
             }
+            Fn(lambda) => lambda.hash(state),
             Primitive(f) => {
                 let ptr = f as *const NativeFn;
                 let identifier = unsafe { std::mem::transmute::<*const NativeFn, usize>(ptr) };
@@ -279,6 +306,11 @@ impl fmt::Debug for Value {
                 write!(f, "{{{}}}", join(inner, ", "))
             }
             Set(elems) => write!(f, "#{{{}}}", join(elems, " ")),
+            Fn(Lambda {
+                parameters, body, ..
+            }) => {
+                write!(f, "(fn* [{}] {})", join(parameters, " "), join(body, " "),)
+            }
             Primitive(_) => write!(f, "<native function>"),
         }
     }

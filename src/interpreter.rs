@@ -1,6 +1,6 @@
 use crate::namespace::Namespace;
-use crate::prelude::{divide, multiply, plus, subtract};
-use crate::value::Value;
+use crate::prelude::{count, divide, is_empty, is_list, list, multiply, plus, pr, prn, subtract};
+use crate::value::{Lambda, Value};
 use itertools::Itertools;
 use rpds::{
     HashTrieMap as PersistentMap, HashTrieSet as PersistentSet, List as PersistentList,
@@ -57,6 +57,12 @@ impl Default for Interpreter {
             ("-", Value::Primitive(subtract)),
             ("*", Value::Primitive(multiply)),
             ("/", Value::Primitive(divide)),
+            ("pr", Value::Primitive(pr)),
+            ("prn", Value::Primitive(prn)),
+            ("list", Value::Primitive(list)),
+            ("list?", Value::Primitive(is_list)),
+            ("empty?", Value::Primitive(is_empty)),
+            ("count", Value::Primitive(count)),
         ];
         let default_namespace = Namespace::new("sigil", bindings.iter());
 
@@ -277,7 +283,72 @@ impl Interpreter {
                                 "could not evaluate `do`".to_string(),
                             )));
                         }
+                        // (fn* [parameters*] body) ; with captures
+                        Value::Symbol(s, None) if s == "fn*" => {
+                            if let Some(rest) = forms.drop_first() {
+                                if let Some(params) = rest.first() {
+                                    match params {
+                                        Value::Vector(params) => {
+                                            if let Some(body) = rest.drop_first() {
+                                                // if symbol in body does not resolve, capture the var from the outer environment
+                                                return Ok(Value::Fn(Lambda {
+                                                    parameters: params.clone(),
+                                                    body: body,
+                                                    captures: vec![],
+                                                }));
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                "could not evaluate `fn*`".to_string(),
+                            )));
+                        }
                         _ => match self.evaluate(operator_form)? {
+                            Value::Fn(Lambda {
+                                parameters,
+                                body,
+                                _captures,
+                            }) => {
+                                let mut operands = vec![];
+                                if let Some(rest) = forms.drop_first() {
+                                    for operand_form in rest.iter() {
+                                        let operand = self.evaluate(operand_form)?;
+                                        operands.push(operand);
+                                    }
+                                }
+                                if operands.len() == parameters.len() {
+                                    self.enter_scope();
+                                    for (argument, parameter_value) in
+                                        operands.iter().zip(parameters.iter())
+                                    {
+                                        // NOTE: move symbol check to eval of fn*
+                                        match parameter_value {
+                                            Value::Symbol(s, None) => {
+                                                self.intern_var(s, argument.clone());
+                                            }
+                                            _ => {
+                                                self.leave_scope();
+                                                return Err(EvaluationError::List(
+                                                    ListEvaluationError::Failure(
+                                                        "could not apply `fn*`".to_string(),
+                                                    ),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    let form =
+                                        body.push_front(Value::Symbol("do".to_string(), None));
+                                    let result = self.evaluate(&Value::List(form));
+                                    self.leave_scope();
+                                    return result;
+                                }
+                                return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                    "could not apply `fn*`".to_string(),
+                                )));
+                            }
                             Value::Primitive(native_fn) => {
                                 let mut operands = vec![];
                                 if let Some(rest) = forms.drop_first() {
@@ -323,6 +394,7 @@ impl Interpreter {
                 }
                 Value::Set(PersistentSet::from_iter(result.into_iter()))
             }
+            Value::Fn(_) => unreachable!(),
             Value::Primitive(_) => unreachable!(),
         };
         Ok(result)
