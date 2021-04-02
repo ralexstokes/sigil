@@ -176,7 +176,11 @@ pub fn count(args: &[Value]) -> Result<Value, EvaluationError> {
     }
     match &args[0] {
         Value::List(elems) => Ok(Value::Number(elems.len() as i64)),
-        _ => Ok(Value::Bool(false)),
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
     }
 }
 

@@ -310,7 +310,7 @@ impl Interpreter {
                             Value::Fn(Lambda {
                                 parameters,
                                 body,
-                                _captures,
+                                captures: _,
                             }) => {
                                 let mut operands = vec![];
                                 if let Some(rest) = forms.drop_first() {
@@ -405,6 +405,7 @@ impl Interpreter {
 mod test {
     use super::*;
     use crate::reader::read;
+    use crate::value::list_with_values;
 
     #[test]
     fn test_basic_eval() {
@@ -453,6 +454,16 @@ mod test {
             ("(if nil 1 2)", Number(2)),
             ("(if nil 2)", Nil),
             ("(let* [b nil] (if b 2 3))", Number(3)),
+            (
+                "(list 1 2)",
+                list_with_values([Number(1), Number(2)].iter().map(|arg| arg.clone())),
+            ),
+            ("(list? (list 1))", Bool(true)),
+            ("(list? [1 2])", Bool(false)),
+            ("(empty? (list))", Bool(true)),
+            ("(empty? (list 1))", Bool(false)),
+            ("(count (list 44 42 41))", Number(3)),
+            ("((fn* [a] (+ a 1)) 23)", Number(24)),
         ];
 
         for (input, expected) in test_cases {
