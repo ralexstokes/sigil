@@ -1,5 +1,6 @@
-use crate::interpreter::{EvaluationError, PrimitiveEvaluationError};
-use crate::value::Value;
+use crate::interpreter::{EvaluationError, ListEvaluationError, PrimitiveEvaluationError};
+use crate::value::{list_with_values, Value};
+use itertools::join;
 
 pub fn plus(args: &[Value]) -> Result<Value, EvaluationError> {
     args.iter()
@@ -128,3 +129,54 @@ pub fn divide(args: &[Value]) -> Result<Value, EvaluationError> {
         }
     }
 }
+
+pub fn pr(args: &[Value]) -> Result<Value, EvaluationError> {
+    print!("{}", join(args, " "));
+    Ok(Value::Nil)
+}
+
+pub fn prn(args: &[Value]) -> Result<Value, EvaluationError> {
+    println!("{}", join(args, " "));
+    Ok(Value::Nil)
+}
+
+pub fn list(args: &[Value]) -> Result<Value, EvaluationError> {
+    Ok(list_with_values(args.iter().map(|arg| arg.clone())))
+}
+
+pub fn is_list(args: &[Value]) -> Result<Value, EvaluationError> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        &Value::List(_) => Ok(Value::Bool(true)),
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
+pub fn is_empty(args: &[Value]) -> Result<Value, EvaluationError> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::List(elems) => Ok(Value::Bool(elems.is_empty())),
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
+pub fn count(args: &[Value]) -> Result<Value, EvaluationError> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::List(elems) => Ok(Value::Number(elems.len() as i64)),
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
