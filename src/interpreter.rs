@@ -224,6 +224,48 @@ impl Interpreter {
                                 "could not evaluate `let*`".to_string(),
                             )));
                         }
+                        // (if predicate consequent alternate?)
+                        Value::Symbol(s, None) if s == "if" => {
+                            if let Some(rest) = forms.drop_first() {
+                                let mut forms = vec![];
+                                for form in rest.iter() {
+                                    let value = self.evaluate(form)?;
+                                    forms.push(value);
+                                }
+                                match forms.len() {
+                                    n @ 2 | n @ 3 => match &forms[0] {
+                                        &Value::Bool(predicate) => {
+                                            if predicate {
+                                                // consequent
+                                                return Ok(forms[1].clone());
+                                            } else {
+                                                if n == 2 {
+                                                    // false predicate with no alternate
+                                                    return Ok(Value::Nil);
+                                                } else {
+                                                    // alternate
+                                                    return Ok(forms[2].clone());
+                                                }
+                                            }
+                                        }
+                                        &Value::Nil => {
+                                            if n == 2 {
+                                                // false predicate with no alternate
+                                                return Ok(Value::Nil);
+                                            } else {
+                                                // alternate
+                                                return Ok(forms[2].clone());
+                                            }
+                                        }
+                                        _ => {}
+                                    },
+                                    _ => {}
+                                }
+                            }
+                            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                "could not evaluate `if`".to_string(),
+                            )));
+                        }
                         // (do forms*)
                         Value::Symbol(s, None) if s == "do" => {
                             if let Some(rest) = forms.drop_first() {
@@ -332,6 +374,13 @@ mod test {
             ),
             ("(do (def! a 1) (let* [a 3] a))", Number(3)),
             ("(do (def! a 1) (let* [a 3] a) a)", Number(1)),
+            ("(if true 1 2)", Number(1)),
+            ("(if true 1)", Number(1)),
+            ("(if false 1 2)", Number(2)),
+            ("(if false 2)", Nil),
+            ("(if nil 1 2)", Number(2)),
+            ("(if nil 2)", Nil),
+            ("(let* [b nil] (if b 2 3))", Number(3)),
         ];
 
         for (input, expected) in test_cases {
