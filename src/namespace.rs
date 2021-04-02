@@ -1,13 +1,14 @@
 use crate::value::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::default::Default;
 use std::fmt;
 use std::iter::FromIterator;
 use std::rc::Rc;
 
 pub type Var = Rc<Value>;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct Namespace(Rc<RefCell<NamespaceInner>>);
 
 impl fmt::Display for Namespace {
@@ -49,7 +50,7 @@ impl Namespace {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct NamespaceInner {
     pub name: String,
     pub bindings: HashMap<String, Var>,
