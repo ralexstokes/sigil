@@ -291,9 +291,28 @@ impl Interpreter {
                                         Value::Vector(params) => {
                                             if let Some(body) = rest.drop_first() {
                                                 // if symbol in body does not resolve, capture the var from the outer environment
+                                                let mut parameters = PersistentVector::new();
+                                                for param in params {
+                                                    match param {
+                                                        Value::Symbol(s, None) => {
+                                                            parameters.push_back_mut(s.clone());
+                                                        }
+                                                        _ => {
+                                                            return Err(EvaluationError::List(
+                                                                ListEvaluationError::Failure(
+                                                                    "could not evaluate `fn*`"
+                                                                        .to_string(),
+                                                                ),
+                                                            ));
+                                                        }
+                                                    }
+                                                }
                                                 return Ok(Value::Fn(Lambda {
-                                                    parameters: params.clone(),
-                                                    body: body,
+                                                    parameters: parameters,
+                                                    body: body.push_front(Value::Symbol(
+                                                        "do".to_string(),
+                                                        None,
+                                                    )),
                                                     captures: vec![],
                                                 }));
                                             }
@@ -312,38 +331,34 @@ impl Interpreter {
                                 body,
                                 captures: _,
                             }) => {
-                                let mut operands = vec![];
                                 if let Some(rest) = forms.drop_first() {
-                                    for operand_form in rest.iter() {
-                                        let operand = self.evaluate(operand_form)?;
-                                        operands.push(operand);
-                                    }
-                                }
-                                if operands.len() == parameters.len() {
-                                    self.enter_scope();
-                                    for (argument, parameter_value) in
-                                        operands.iter().zip(parameters.iter())
-                                    {
-                                        // NOTE: move symbol check to eval of fn*
-                                        match parameter_value {
-                                            Value::Symbol(s, None) => {
-                                                self.intern_var(s, argument.clone());
-                                            }
-                                            _ => {
-                                                self.leave_scope();
-                                                return Err(EvaluationError::List(
-                                                    ListEvaluationError::Failure(
-                                                        "could not apply `fn*`".to_string(),
-                                                    ),
-                                                ));
+                                    if rest.len() == parameters.len() {
+                                        self.enter_scope();
+                                        for (operand_form, parameter) in
+                                            rest.iter().zip(parameters.iter())
+                                        {
+                                            match self.evaluate(operand_form) {
+                                                Ok(operand) => {
+                                                    self.intern_var(parameter, operand);
+                                                }
+                                                Err(e) => {
+                                                    self.leave_scope();
+                                                    let mut buffer = String::new();
+                                                    let _ = write!(
+                                                        &mut buffer,
+                                                        "could not apply `fn*`: {}",
+                                                        e
+                                                    );
+                                                    return Err(EvaluationError::List(
+                                                        ListEvaluationError::Failure(buffer),
+                                                    ));
+                                                }
                                             }
                                         }
+                                        let result = self.evaluate(&Value::List(body));
+                                        self.leave_scope();
+                                        return result;
                                     }
-                                    let form =
-                                        body.push_front(Value::Symbol("do".to_string(), None));
-                                    let result = self.evaluate(&Value::List(form));
-                                    self.leave_scope();
-                                    return result;
                                 }
                                 return Err(EvaluationError::List(ListEvaluationError::Failure(
                                     "could not apply `fn*`".to_string(),

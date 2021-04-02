@@ -31,7 +31,7 @@ pub type NativeFn = fn(&[Value]) -> Result<Value, EvaluationError>;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Lambda {
-    pub parameters: PersistentVector<Value>,
+    pub parameters: PersistentVector<String>,
     pub body: PersistentList<Value>,
     pub captures: Vec<(String, Value)>,
 }
@@ -306,11 +306,7 @@ impl fmt::Debug for Value {
                 write!(f, "{{{}}}", join(inner, ", "))
             }
             Set(elems) => write!(f, "#{{{}}}", join(elems, " ")),
-            Fn(Lambda {
-                parameters, body, ..
-            }) => {
-                write!(f, "(fn* [{}] {})", join(parameters, " "), join(body, " "),)
-            }
+            Fn(_) => write!(f, "<fn*>"),
             Primitive(_) => write!(f, "<native function>"),
         }
     }
