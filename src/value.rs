@@ -4,12 +4,14 @@ use rpds::{
     HashTrieMap as PersistentMap, HashTrieSet as PersistentSet, List as PersistentList,
     Vector as PersistentVector,
 };
+use std::cell::RefCell;
 use std::cmp::{Eq, Ord, Ordering, PartialEq};
 use std::fmt;
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 use std::iter::{FromIterator, IntoIterator};
 use std::mem::discriminant;
+use std::rc::Rc;
 
 pub fn list_with_values(values: impl IntoIterator<Item = Value>) -> Value {
     Value::List(PersistentList::from_iter(values))
@@ -27,14 +29,32 @@ pub fn set_with_values(values: impl IntoIterator<Item = Value>) -> Value {
     Value::Set(PersistentSet::from_iter(values))
 }
 
+pub fn var_with_value(value: Value) -> Value {
+    Value::Var(Rc::new(RefCell::new(value)))
+}
+
+pub fn var_impl_into_inner(var: &VarImpl) -> Value {
+    var.borrow().clone()
+}
+
+pub fn var_into_inner(value: Value) -> Value {
+    match value {
+        Value::Var(v) => var_impl_into_inner(&v),
+        _ => panic!("called with non Var value"),
+    }
+}
+
 pub type NativeFn = fn(&[Value]) -> Result<Value, EvaluationError>;
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Lambda {
-    pub parameters: PersistentVector<String>,
     pub body: PersistentList<Value>,
-    pub captures: Vec<(String, Value)>,
+    pub arity: usize,
+    // allow for nested fns
+    pub level: usize,
 }
+
+type VarImpl = Rc<RefCell<Value>>;
 
 #[derive(Clone)]
 pub enum Value {
@@ -52,6 +72,7 @@ pub enum Value {
     Set(PersistentSet<Value>),
     Fn(Lambda),
     Primitive(NativeFn),
+    Var(VarImpl),
 }
 
 impl PartialEq for Value {
@@ -113,6 +134,10 @@ impl PartialEq for Value {
                         unsafe { std::mem::transmute::<*const NativeFn, usize>(y_ptr) };
                     x_identifier == y_identifier
                 }
+                _ => false,
+            },
+            Var(ref x) => match other {
+                Var(ref y) => x == y,
                 _ => false,
             },
         }
@@ -217,6 +242,17 @@ impl Ord for Value {
                 _ => Ordering::Less,
             },
             Primitive(x) => match other {
+                Nil
+                | Bool(_)
+                | Number(_)
+                | String(_)
+                | Keyword(_, _)
+                | Symbol(_, _)
+                | List(_)
+                | Vector(_)
+                | Map(_)
+                | Set(_)
+                | Fn(_) => Ordering::Greater,
                 Primitive(y) => {
                     let x_ptr = x as *const NativeFn;
                     let x_identifier =
@@ -226,7 +262,22 @@ impl Ord for Value {
                         unsafe { std::mem::transmute::<*const NativeFn, usize>(y_ptr) };
                     x_identifier.cmp(&y_identifier)
                 }
-                _ => Ordering::Greater,
+                _ => Ordering::Less,
+            },
+            Var(x) => match other {
+                Nil
+                | Bool(_)
+                | Number(_)
+                | String(_)
+                | Keyword(_, _)
+                | Symbol(_, _)
+                | List(_)
+                | Vector(_)
+                | Map(_)
+                | Set(_)
+                | Fn(_)
+                | Primitive(_) => Ordering::Greater,
+                Var(y) => x.cmp(y),
             },
         }
     }
@@ -268,6 +319,9 @@ impl Hash for Value {
                 let identifier = unsafe { std::mem::transmute::<*const NativeFn, usize>(ptr) };
                 identifier.hash(state);
             }
+            Var(v) => {
+                (*v.borrow()).hash(state);
+            }
         }
     }
 }
@@ -308,6 +362,7 @@ impl fmt::Debug for Value {
             Set(elems) => write!(f, "#{{{}}}", join(elems, " ")),
             Fn(_) => write!(f, "<fn*>"),
             Primitive(_) => write!(f, "<native function>"),
+            Var(v) => write!(f, "(var {})", *v.borrow()),
         }
     }
 }
