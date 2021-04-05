@@ -73,6 +73,7 @@ pub enum Value {
     Fn(Lambda),
     Primitive(NativeFn),
     Var(VarImpl),
+    Recur(PersistentVector<Value>),
 }
 
 impl PartialEq for Value {
@@ -138,6 +139,10 @@ impl PartialEq for Value {
             },
             Var(ref x) => match other {
                 Var(ref y) => x == y,
+                _ => false,
+            },
+            Recur(ref x) => match other {
+                Recur(ref y) => x == y,
                 _ => false,
             },
         }
@@ -278,6 +283,23 @@ impl Ord for Value {
                 | Fn(_)
                 | Primitive(_) => Ordering::Greater,
                 Var(y) => x.cmp(y),
+                _ => Ordering::Less,
+            },
+            Recur(ref x) => match other {
+                Nil
+                | Bool(_)
+                | Number(_)
+                | String(_)
+                | Keyword(_, _)
+                | Symbol(_, _)
+                | List(_)
+                | Vector(_)
+                | Map(_)
+                | Set(_)
+                | Fn(_)
+                | Primitive(_)
+                | Var(_) => Ordering::Greater,
+                Recur(ref y) => x.cmp(y),
             },
         }
     }
@@ -322,6 +344,7 @@ impl Hash for Value {
             Var(v) => {
                 (*v.borrow()).hash(state);
             }
+            Recur(v) => v.hash(state),
         }
     }
 }
@@ -363,6 +386,7 @@ impl fmt::Debug for Value {
             Fn(_) => write!(f, "<fn*>"),
             Primitive(_) => write!(f, "<native function>"),
             Var(v) => write!(f, "(var {})", *v.borrow()),
+            Recur(elems) => write!(f, "[{}]", join(elems, " ")),
         }
     }
 }

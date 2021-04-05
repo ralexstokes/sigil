@@ -535,6 +535,100 @@ impl Interpreter {
                                 "could not evaluate `let*`".to_string(),
                             )));
                         }
+                        // (loop* [bindings*] body)
+                        Value::Symbol(s, None) if s == "loop*" => {
+                            if let Some(rest) = forms.drop_first() {
+                                if let Some(bindings) = rest.first() {
+                                    match bindings {
+                                        Value::Vector(elems) => {
+                                            if elems.len() % 2 == 0 {
+                                                if let Some(body) = rest.drop_first() {
+                                                    // analyze loop*
+                                                    // if recur, ensure it is in tail position
+                                                    self.enter_scope();
+                                                    let mut bindings_keys = vec![];
+                                                    for (name, value_form) in elems.iter().tuples()
+                                                    {
+                                                        match name {
+                                                            Value::Symbol(s, None) => {
+                                                                let value =
+                                                                    self.evaluate(value_form)?;
+                                                                bindings_keys.push(s.clone());
+                                                                self.insert_value_in_current_scope(
+                                                                    s, value,
+                                                                )
+                                                            }
+                                                            _ => {
+                                                                self.leave_scope();
+                                                                return Err(EvaluationError::List(
+                                                                    ListEvaluationError::Failure(
+                                                                        "could not evaluate `loop*`"
+                                                                            .to_string(),
+                                                                    ),
+                                                                ));
+                                                            }
+                                                        }
+                                                    }
+                                                    let form = body.push_front(Value::Symbol(
+                                                        "do".to_string(),
+                                                        None,
+                                                    ));
+                                                    let form_to_eval = &Value::List(form);
+                                                    let mut result = self.evaluate(form_to_eval);
+                                                    while let Ok(Value::Recur(next_bindings)) =
+                                                        result
+                                                    {
+                                                        if next_bindings.len()
+                                                            != bindings_keys.len()
+                                                        {
+                                                            self.leave_scope();
+                                                            return Err(EvaluationError::List(
+                                                                    ListEvaluationError::Failure(
+                                                                        "could not evaluate `loop*`: recur with incorrect number of bindings"
+                                                                            .to_string(),
+                                                                    ),
+                                                                ));
+                                                        }
+                                                        for (key, value) in bindings_keys
+                                                            .iter()
+                                                            .zip(next_bindings.iter())
+                                                        {
+                                                            self.insert_value_in_current_scope(
+                                                                key,
+                                                                value.clone(),
+                                                            );
+                                                        }
+                                                        result = self.evaluate(form_to_eval);
+                                                    }
+                                                    self.leave_scope();
+                                                    return result;
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                "could not evaluate `loop*`".to_string(),
+                            )));
+                        }
+                        // (recur forms*)
+                        Value::Symbol(s, None) if s == "recur" => {
+                            if let Some(rest) = forms.drop_first() {
+                                let mut result = vec![];
+                                for form in rest.into_iter() {
+                                    let value = self.evaluate(form)?;
+                                    result.push(value);
+                                }
+                                return Ok(Value::Recur(PersistentVector::from_iter(
+                                    result.into_iter(),
+                                )));
+                            }
+                            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                "could not evaluate `recur`".to_string(),
+                            )));
+                        }
                         // (if predicate consequent alternate?)
                         Value::Symbol(s, None) if s == "if" => {
                             if let Some(rest) = forms.drop_first() {
@@ -725,6 +819,7 @@ impl Interpreter {
             Value::Fn(_) => unreachable!(),
             Value::Primitive(_) => unreachable!(),
             Value::Var(v) => var_impl_into_inner(v),
+            Value::Recur(_) => unreachable!(),
         };
         Ok(result)
     }
@@ -813,6 +908,15 @@ mod test {
                 "(do (def! b 12) (def! f (fn* [a] ((fn* [] (+ a b))))) (def! b 22) (f 1))",
                 Number(23),
             ),
+            ("(if (< 2 3) 12 13)", Number(12)),
+            ("(loop* [i 12] i)", Number(12)),
+            ("(loop* [i 12])", Nil),
+            ("(loop* [i 0] (if (< i 5) (recur (+ i 1)) i))", Number(5)),
+            ("(do (def! factorial (fn* [n] (loop* [n n acc 1] (if (< n 1) acc (recur (- n 1) (* acc n)))))) (factorial 20))", Number(2432902008176640000))
+            // (
+            //     "(def! inc (fn* [a] (+ a 1))) (loop* [i 0] (if (< i 5) (recur (inc i)) i))",
+            //     Number(5),
+            // ),
         ];
 
         for (input, expected) in &test_cases {
