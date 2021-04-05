@@ -184,3 +184,26 @@ pub fn count(args: &[Value]) -> Result<Value, EvaluationError> {
     }
 }
 
+pub fn less(args: &[Value]) -> Result<Value, EvaluationError> {
+    if args.len() != 2 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::Number(a) => match &args[1] {
+            Value::Number(b) => Ok(Value::Bool(a < b)),
+            _ => {
+                return Err(EvaluationError::List(ListEvaluationError::Failure(
+                    "incorrect argument".to_string(),
+                )));
+            }
+        },
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    }
+}
+

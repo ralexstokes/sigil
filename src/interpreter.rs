@@ -1,4 +1,6 @@
-use crate::prelude::{count, divide, is_empty, is_list, list, multiply, plus, pr, prn, subtract};
+use crate::prelude::{
+    count, divide, is_empty, is_list, less, list, multiply, plus, pr, prn, subtract,
+};
 use crate::value::{var_impl_into_inner, var_into_inner, var_with_value, Lambda, Value};
 use itertools::Itertools;
 use rpds::{
@@ -80,6 +82,7 @@ impl Default for Interpreter {
             ("list?", Value::Primitive(is_list)),
             ("empty?", Value::Primitive(is_empty)),
             ("count", Value::Primitive(count)),
+            ("<", Value::Primitive(less)),
         ];
         let global_scope =
             HashMap::from_iter(bindings.iter().map(|(k, v)| (k.to_string(), v.clone())));
