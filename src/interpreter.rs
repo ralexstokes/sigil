@@ -210,9 +210,8 @@ impl Interpreter {
         self.get_var(identifier).map(var_into_inner)
     }
 
-    fn enter_scope(&mut self) -> usize {
+    fn enter_scope(&mut self) {
         self.scopes.push(Scope::default());
-        self.scopes.len()
     }
 
     fn insert_value_in_current_scope(&mut self, identifier: &str, value: Value) {
