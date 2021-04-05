@@ -397,6 +397,7 @@ impl Interpreter {
                 Ok(Value::Set(analyzed_elems))
             }
             Value::Fn(_) => unreachable!(),
+            Value::Primitive(_) => unreachable!(),
             other @ _ => Ok(other.clone()),
         }
     }
@@ -607,6 +608,38 @@ impl Interpreter {
                                 "could not evaluate `fn*`".to_string(),
                             )));
                         }
+                        Value::Fn(Lambda { body, arity, level }) => {
+                            if let Some(rest) = forms.drop_first() {
+                                if rest.len() == *arity {
+                                    self.enter_scope();
+                                    for (index, operand_form) in rest.iter().enumerate() {
+                                        match self.evaluate(operand_form) {
+                                            Ok(operand) => {
+                                                let parameter = lambda_parameter_key(index, *level);
+                                                self.insert_value_in_current_scope(
+                                                    &parameter, operand,
+                                                );
+                                            }
+                                            Err(e) => {
+                                                self.leave_scope();
+                                                let mut error =
+                                                    String::from("could not apply `fn*`: ");
+                                                error += &e.to_string();
+                                                return Err(EvaluationError::List(
+                                                    ListEvaluationError::Failure(error),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    let result = self.evaluate(&Value::List(body.clone()));
+                                    self.leave_scope();
+                                    return result;
+                                }
+                            }
+                            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                "could not apply `fn*`".to_string(),
+                            )));
+                        }
                         _ => match self.evaluate(operator_form)? {
                             Value::Fn(Lambda { body, arity, level }) => {
                                 if let Some(rest) = forms.drop_first() {
@@ -686,7 +719,7 @@ impl Interpreter {
                 }
                 Value::Set(PersistentSet::from_iter(result.into_iter()))
             }
-            Value::Fn(lambda) => Value::Fn(lambda.clone()),
+            Value::Fn(_) => unreachable!(),
             Value::Primitive(_) => unreachable!(),
             Value::Var(v) => var_impl_into_inner(v),
         };
