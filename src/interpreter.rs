@@ -230,10 +230,11 @@ impl Interpreter {
     fn analyze_form_in_lambda(
         &mut self,
         form: &Value,
-        // local scopes to the lambda context
         scopes: &mut Vec<Scope>,
     ) -> EvaluationResult<Value> {
         match form {
+            // NOTE: if we do not resolve vars here then lambdas will fail
+            // if any captures are unmapped later...
             Value::Symbol(identifier, ns_opt) => {
                 // if namespaced, check there
                 if let Some(ns_desc) = ns_opt {
@@ -252,124 +253,9 @@ impl Interpreter {
             }
             Value::List(elems) => {
                 let mut analyzed_elems = vec![];
-                let mut elems = elems.iter();
-                if let Some(elem) = elems.next() {
-                    match elem {
-                        // handle `let*` forms with special care...
-                        Value::Symbol(s, None) if s == "let*" => {
-                            analyzed_elems.push(Value::Symbol("let*".to_string(), None));
-                            if let Some(bindings) = elems.next() {
-                                match bindings {
-                                    Value::Vector(bindings) => {
-                                        let mut let_scope = Scope::new();
-                                        let mut analyzed_bindings = PersistentVector::new();
-                                        let mut pairs = bindings.iter().tuples();
-                                        while let Some((symbol, binding)) = pairs.next() {
-                                            match symbol {
-                                                Value::Symbol(identifier, None) => {
-                                                    // let bindings resolve to themselves to
-                                                    // preserve meaning during further syntactic analysis
-                                                    let analyzed_symbol =
-                                                        Value::Symbol(identifier.to_string(), None);
-                                                    let_scope.insert(
-                                                        identifier.to_string(),
-                                                        analyzed_symbol.clone(),
-                                                    );
-                                                    scopes.push(let_scope.clone());
-                                                    let analyzed_binding = self
-                                                        .analyze_form_in_lambda(binding, scopes)?;
-                                                    scopes.pop();
-                                                    analyzed_bindings
-                                                        .push_back_mut(analyzed_symbol);
-                                                    analyzed_bindings
-                                                        .push_back_mut(analyzed_binding);
-                                                }
-                                                symbol @ _ => {
-                                                    // invalid let binding
-                                                    // drain rest of form and bail...
-                                                    analyzed_bindings.push_back_mut(symbol.clone());
-                                                    analyzed_bindings
-                                                        .push_back_mut(binding.clone());
-                                                    while let Some((symbol, binding)) = pairs.next()
-                                                    {
-                                                        analyzed_bindings
-                                                            .push_back_mut(symbol.clone());
-                                                        analyzed_bindings
-                                                            .push_back_mut(binding.clone());
-                                                    }
-                                                    analyzed_elems
-                                                        .push(Value::Vector(analyzed_bindings));
-                                                    while let Some(elem) = elems.next() {
-                                                        analyzed_elems.push(elem.clone());
-                                                    }
-                                                    // NOTE: not "Ok" but currently no way to signal errors at
-                                                    // the analysis stage...
-                                                    return Ok(Value::List(
-                                                        PersistentList::from_iter(analyzed_elems),
-                                                    ));
-                                                }
-                                            }
-                                        }
-                                        analyzed_elems.push(Value::Vector(analyzed_bindings));
-                                        // analyze rest of let* form with extended scope
-                                        scopes.push(let_scope);
-                                        while let Some(elem) = elems.next() {
-                                            let analyzed_elem =
-                                                self.analyze_form_in_lambda(elem, scopes)?;
-                                            analyzed_elems.push(analyzed_elem);
-                                        }
-                                        scopes.pop();
-                                    }
-                                    // bindings are not in a vector...
-                                    // drain rest of list and bail...
-                                    bindings @ _ => {
-                                        analyzed_elems.push(bindings.clone());
-                                        while let Some(elem) = elems.next() {
-                                            analyzed_elems.push(elem.clone());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // and handle `fn*` forms with special care...
-                        Value::Symbol(s, None) if s == "fn*" => {
-                            analyzed_elems.push(Value::Symbol("fn*".to_string(), None));
-                            if let Some(bindings) = elems.next() {
-                                match bindings {
-                                    Value::Vector(params) => {
-                                        let mut forms = vec![];
-                                        while let Some(form) = elems.next() {
-                                            forms.push(form.clone());
-                                        }
-                                        return self.analyze_lambda(
-                                            PersistentList::from_iter(forms.into_iter()),
-                                            params,
-                                            scopes,
-                                        );
-                                    }
-                                    // bindings are not in a vector...
-                                    // drain rest of list and bail...
-                                    bindings @ _ => {
-                                        analyzed_elems.push(bindings.clone());
-                                        while let Some(elem) = elems.next() {
-                                            analyzed_elems.push(elem.clone());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // otherwise, just map analysis over the list...
-                        elem @ _ => {
-                            // analyze first form
-                            let analyzed_elem = self.analyze_form_in_lambda(elem, scopes)?;
-                            analyzed_elems.push(analyzed_elem);
-                            // rest of body is not special wrt scope, analyze and proceed
-                            while let Some(elem) = elems.next() {
-                                let analyzed_elem = self.analyze_form_in_lambda(elem, scopes)?;
-                                analyzed_elems.push(analyzed_elem);
-                            }
-                        }
-                    }
+                for elem in elems.iter() {
+                    let analyzed_elem = self.analyze_form_in_lambda(elem, scopes)?;
+                    analyzed_elems.push(analyzed_elem);
                 }
                 Ok(Value::List(PersistentList::from_iter(analyzed_elems)))
             }
@@ -400,6 +286,8 @@ impl Interpreter {
             }
             Value::Fn(_) => unreachable!(),
             Value::Primitive(_) => unreachable!(),
+            Value::Recur(_) => unreachable!(),
+            // Nil, Bool, Number, String, Keyword, Var
             other @ _ => Ok(other.clone()),
         }
     }
@@ -410,7 +298,7 @@ impl Interpreter {
     // otherwise, the lambda is an error
     //
     // Note: parameters are resolved to (ordinal) reserved symbols
-    fn analyze_lambda(
+    fn analyze_symbols_in_lambda(
         &mut self,
         forms: PersistentList<Value>,
         params: &PersistentVector<Value>,
@@ -542,8 +430,11 @@ impl Interpreter {
                                         Value::Vector(elems) => {
                                             if elems.len() % 2 == 0 {
                                                 if let Some(body) = rest.drop_first() {
-                                                    // analyze loop*
-                                                    // if recur, ensure it is in tail position
+                                                    if body.len() == 0 {
+                                                        return Ok(Value::Nil);
+                                                    }
+                                                    // TODO: analyze loop*
+                                                    // if recur, must be in tail position
                                                     self.enter_scope();
                                                     let mut bindings_keys = vec![];
                                                     for (name, value_form) in elems.iter().tuples()
@@ -631,39 +522,36 @@ impl Interpreter {
                         // (if predicate consequent alternate?)
                         Value::Symbol(s, None) if s == "if" => {
                             if let Some(rest) = forms.drop_first() {
-                                let mut forms = vec![];
-                                for form in rest.iter() {
-                                    let value = self.evaluate(form)?;
-                                    forms.push(value);
-                                }
-                                match forms.len() {
-                                    n @ 2 | n @ 3 => match &forms[0] {
-                                        &Value::Bool(predicate) => {
-                                            if predicate {
-                                                // consequent
-                                                return Ok(forms[1].clone());
-                                            } else {
-                                                if n == 2 {
-                                                    // false predicate with no alternate
-                                                    return Ok(Value::Nil);
-                                                } else {
-                                                    // alternate
-                                                    return Ok(forms[2].clone());
+                                if let Some(predicate_form) = rest.first() {
+                                    if let Some(rest) = rest.drop_first() {
+                                        if let Some(consequent_form) = rest.first() {
+                                            match self.evaluate(predicate_form)? {
+                                                Value::Bool(predicate) => {
+                                                    if predicate {
+                                                        return self.evaluate(consequent_form);
+                                                    } else {
+                                                        if let Some(rest) = rest.drop_first() {
+                                                            if let Some(alternate) = rest.first() {
+                                                                return self.evaluate(alternate);
+                                                            } else {
+                                                                return Ok(Value::Nil);
+                                                            }
+                                                        }
+                                                    }
                                                 }
+                                                Value::Nil => {
+                                                    if let Some(rest) = rest.drop_first() {
+                                                        if let Some(alternate) = rest.first() {
+                                                            return self.evaluate(alternate);
+                                                        } else {
+                                                            return Ok(Value::Nil);
+                                                        }
+                                                    }
+                                                }
+                                                _ => {}
                                             }
                                         }
-                                        &Value::Nil => {
-                                            if n == 2 {
-                                                // false predicate with no alternate
-                                                return Ok(Value::Nil);
-                                            } else {
-                                                // alternate
-                                                return Ok(forms[2].clone());
-                                            }
-                                        }
-                                        _ => {}
-                                    },
-                                    _ => {}
+                                    }
                                 }
                             }
                             return Err(EvaluationError::List(ListEvaluationError::Failure(
@@ -689,7 +577,7 @@ impl Interpreter {
                                         Value::Vector(params) => {
                                             if let Some(body) = rest.drop_first() {
                                                 let mut lambda_scopes = vec![];
-                                                return self.analyze_lambda(
+                                                return self.analyze_symbols_in_lambda(
                                                     body,
                                                     &params,
                                                     &mut lambda_scopes,
@@ -702,38 +590,6 @@ impl Interpreter {
                             }
                             return Err(EvaluationError::List(ListEvaluationError::Failure(
                                 "could not evaluate `fn*`".to_string(),
-                            )));
-                        }
-                        Value::Fn(Lambda { body, arity, level }) => {
-                            if let Some(rest) = forms.drop_first() {
-                                if rest.len() == *arity {
-                                    self.enter_scope();
-                                    for (index, operand_form) in rest.iter().enumerate() {
-                                        match self.evaluate(operand_form) {
-                                            Ok(operand) => {
-                                                let parameter = lambda_parameter_key(index, *level);
-                                                self.insert_value_in_current_scope(
-                                                    &parameter, operand,
-                                                );
-                                            }
-                                            Err(e) => {
-                                                self.leave_scope();
-                                                let mut error =
-                                                    String::from("could not apply `fn*`: ");
-                                                error += &e.to_string();
-                                                return Err(EvaluationError::List(
-                                                    ListEvaluationError::Failure(error),
-                                                ));
-                                            }
-                                        }
-                                    }
-                                    let result = self.evaluate(&Value::List(body.clone()));
-                                    self.leave_scope();
-                                    return result;
-                                }
-                            }
-                            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                                "could not apply `fn*`".to_string(),
                             )));
                         }
                         _ => match self.evaluate(operator_form)? {
@@ -829,15 +685,44 @@ mod test {
     use super::*;
     use crate::reader::read;
     use crate::value::list_with_values;
+    use Value::*;
+
+    fn run_eval_test(test_cases: &[(&str, Value)]) {
+        for (input, expected) in test_cases {
+            let mut interpreter = Interpreter::default();
+            let forms = read(input).unwrap();
+            let mut final_result: Option<Value> = None;
+            for form in forms.iter() {
+                // dbg!(&form);
+                let result = interpreter.evaluate(form).unwrap();
+                // dbg!(&result);
+                final_result = Some(result);
+            }
+            assert_eq!(final_result.unwrap(), *expected)
+        }
+    }
 
     #[test]
-    fn test_basic_eval() {
-        use Value::*;
-
+    fn test_self_evaluating() {
         let test_cases = vec![
             ("nil", Nil),
+            ("true", Bool(true)),
+            ("false", Bool(false)),
             ("1337", Number(1337)),
             ("-1337", Number(-1337)),
+            ("\"hi\"", String("hi".to_string())),
+            (":hi", Keyword("hi".to_string(), None)),
+            (
+                ":foo/hi",
+                Keyword("hi".to_string(), Some("foo".to_string())),
+            ),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_basic_apply() {
+        let test_cases = vec![
             ("(+)", Number(0)),
             ("(+ 1)", Number(1)),
             ("(+ 1 10)", Number(11)),
@@ -856,9 +741,28 @@ mod test {
             ("(/ 22 2 1 1 1)", Number(11)),
             ("(/ 22 2 1 1 1)", Number(11)),
             ("(+ 2 (* 3 4))", Number(14)),
-            ("(do 1 2 3)", Number(3)),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_basic_do() {
+        let test_cases = vec![("(do )", Nil), ("(do 1 2 3)", Number(3))];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_basic_def() {
+        let test_cases = vec![
             ("(def! a 3)", var_with_value(Number(3))),
-            ("(do (def! a 3) (+ a 1))", Number(4)),
+            ("(def! a 3) (+ a 1)", Number(4)),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_basic_let() {
+        let test_cases = vec![
             ("(let* [] )", Nil),
             ("(let* [a 1] )", Nil),
             ("(let* [a 3] a)", Number(3)),
@@ -870,9 +774,16 @@ mod test {
                 "(let* [a 3 b 33] (+ a (let* [c 4] (+ c 1)) b 5))",
                 Number(46),
             ),
-            ("(do (def! a 1) (let* [a 3] a))", Number(3)),
-            ("(do (def! a 1) (let* [a 3] a) a)", Number(1)),
-            ("(do (def! b 1) (let* [a 3] (+ a b)))", Number(4)),
+            ("(def! a 1) (let* [a 3] a)", Number(3)),
+            ("(def! a 1) (let* [a 3] a) a", Number(1)),
+            ("(def! b 1) (let* [a 3] (+ a b))", Number(4)),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_basic_if() {
+        let test_cases = vec![
             ("(if true 1 2)", Number(1)),
             ("(if true 1)", Number(1)),
             ("(if false 1 2)", Number(2)),
@@ -880,6 +791,13 @@ mod test {
             ("(if nil 1 2)", Number(2)),
             ("(if nil 2)", Nil),
             ("(let* [b nil] (if b 2 3))", Number(3)),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_basic_prelude() {
+        let test_cases = vec![
             (
                 "(list 1 2)",
                 list_with_values([Number(1), Number(2)].iter().map(|arg| arg.clone())),
@@ -889,56 +807,59 @@ mod test {
             ("(empty? (list))", Bool(true)),
             ("(empty? (list 1))", Bool(false)),
             ("(count (list 44 42 41))", Number(3)),
+            ("(if (< 2 3) 12 13)", Number(12)),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_basic_fn() {
+        let test_cases = vec![
             ("((fn* [a] (+ a 1)) 23)", Number(24)),
             ("((fn* [a] (let* [b 2] (+ a b))) 23)", Number(25)),
             ("((fn* [a] (let* [a 2] (+ a a))) 23)", Number(4)),
             (
-                "(do (def! inc (fn* [a] (+ a 1))) ((fn* [a] (inc a)) 1))",
+                "(def! inc (fn* [a] (+ a 1))) ((fn* [a] (inc a)) 1)",
                 Number(2),
             ),
             ("((fn* [a] ((fn* [b] (+ b 1)) a)) 1)", Number(2)),
             ("((fn* [] ((fn* [] ((fn* [] 13))))))", Number(13)),
-            ("(do (def! f (fn* [a] (+ a 1))) (f 23))", Number(24)),
+            ("(def! factorial (fn* [n] (if (< n 2) 1 (* n (factorial (- n 1)))))) (factorial 20)", Number(2432902008176640000)),
+            ("(def! f (fn* [a] (+ a 1))) (f 23)", Number(24)),
             (
-                "(do (def! b 12) (def! f (fn* [a] (+ a b))) (def! b 22) (f 1))",
+                "(def! b 12) (def! f (fn* [a] (+ a b))) (def! b 22) (f 1)",
                 Number(23),
             ),
             (
-                "(do (def! b 12) (def! f (fn* [a] ((fn* [] (+ a b))))) (def! b 22) (f 1))",
+                "(def! b 12) (def! f (fn* [a] ((fn* [] (+ a b))))) (def! b 22) (f 1)",
                 Number(23),
             ),
-            ("(if (< 2 3) 12 13)", Number(12)),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_basic_loop_recur() {
+        let test_cases = vec![
             ("(loop* [i 12] i)", Number(12)),
             ("(loop* [i 12])", Nil),
             ("(loop* [i 0] (if (< i 5) (recur (+ i 1)) i))", Number(5)),
-            ("(do (def! factorial (fn* [n] (loop* [n n acc 1] (if (< n 1) acc (recur (- n 1) (* acc n)))))) (factorial 20))", Number(2432902008176640000))
+            ("(def! factorial (fn* [n] (loop* [n n acc 1] (if (< n 1) acc (recur (- n 1) (* acc n)))))) (factorial 20)", Number(2432902008176640000)),
+            (
+                "(def! inc (fn* [a] (+ a 1))) (loop* [i 0] (if (< i 5) (recur (inc i)) i))",
+                Number(5),
+            ),
+            // // NOTE: the following will overflow the stack
             // (
-            //     "(def! inc (fn* [a] (+ a 1))) (loop* [i 0] (if (< i 5) (recur (inc i)) i))",
-            //     Number(5),
+            //     "(def! f (fn* [i] (if (< i 400) (f (+ 1 i)) i))) (f 0)",
+            //     Number(400),
             // ),
+            // // but, the loop/recur form is stack efficient
+            (
+                "(def! f (fn* [i] (loop* [n i] (if (< n 400) (recur (+ 1 n)) n)))) (f 0)",
+                Number(400),
+            ),
         ];
-
-        for (input, expected) in &test_cases {
-            let mut interpreter = Interpreter::default();
-            let read_result = read(input).unwrap();
-            // dbg!(&input);
-            let form = &read_result[0];
-            // dbg!(&form);
-            let result = interpreter.evaluate(form).unwrap();
-            // dbg!(&result);
-            assert_eq!(result, *expected)
-        }
-
-        // try again while retaining state in the interpreter
-        let mut interpreter = Interpreter::default();
-        for (input, expected) in test_cases {
-            let read_result = read(input).unwrap();
-            // dbg!(&input);
-            let form = &read_result[0];
-            // dbg!(&form);
-            let result = interpreter.evaluate(form).unwrap();
-            // dbg!(&result);
-            assert_eq!(result, expected)
-        }
+        run_eval_test(&test_cases);
     }
 }
