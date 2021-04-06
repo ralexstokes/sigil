@@ -1,8 +1,10 @@
-use crate::interpreter::{EvaluationError, ListEvaluationError, PrimitiveEvaluationError};
+use crate::interpreter::{
+    EvaluationError, EvaluationResult, ListEvaluationError, PrimitiveEvaluationError,
+};
 use crate::value::{list_with_values, Value};
 use itertools::join;
 
-pub fn plus(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn plus(args: &[Value]) -> EvaluationResult<Value> {
     args.iter()
         .try_fold(i64::default(), |acc, x| match x {
             &Value::Number(n) => acc.checked_add(n).ok_or_else(|| {
@@ -17,7 +19,7 @@ pub fn plus(args: &[Value]) -> Result<Value, EvaluationError> {
         .map(Value::Number)
 }
 
-pub fn subtract(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn subtract(args: &[Value]) -> EvaluationResult<Value> {
     match args.len() {
         0 => Err(EvaluationError::Primitve(
             PrimitiveEvaluationError::Failure("subtract needs more than 0 args".to_string()),
@@ -66,7 +68,7 @@ pub fn subtract(args: &[Value]) -> Result<Value, EvaluationError> {
     }
 }
 
-pub fn multiply(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn multiply(args: &[Value]) -> EvaluationResult<Value> {
     args.iter()
         .try_fold(1 as i64, |acc, x| match x {
             &Value::Number(n) => acc.checked_mul(n).ok_or_else(|| {
@@ -83,7 +85,7 @@ pub fn multiply(args: &[Value]) -> Result<Value, EvaluationError> {
         .map(Value::Number)
 }
 
-pub fn divide(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn divide(args: &[Value]) -> EvaluationResult<Value> {
     match args.len() {
         0 => Err(EvaluationError::Primitve(
             PrimitiveEvaluationError::Failure("divide needs more than 0 args".to_string()),
@@ -130,21 +132,21 @@ pub fn divide(args: &[Value]) -> Result<Value, EvaluationError> {
     }
 }
 
-pub fn pr(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn pr(args: &[Value]) -> EvaluationResult<Value> {
     print!("{}", join(args, " "));
     Ok(Value::Nil)
 }
 
-pub fn prn(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn prn(args: &[Value]) -> EvaluationResult<Value> {
     println!("{}", join(args, " "));
     Ok(Value::Nil)
 }
 
-pub fn list(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn list(args: &[Value]) -> EvaluationResult<Value> {
     Ok(list_with_values(args.iter().map(|arg| arg.clone())))
 }
 
-pub fn is_list(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn is_list(args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -156,7 +158,7 @@ pub fn is_list(args: &[Value]) -> Result<Value, EvaluationError> {
     }
 }
 
-pub fn is_empty(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn is_empty(args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -168,7 +170,7 @@ pub fn is_empty(args: &[Value]) -> Result<Value, EvaluationError> {
     }
 }
 
-pub fn count(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn count(args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -184,7 +186,7 @@ pub fn count(args: &[Value]) -> Result<Value, EvaluationError> {
     }
 }
 
-pub fn less(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn less(args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -207,7 +209,7 @@ pub fn less(args: &[Value]) -> Result<Value, EvaluationError> {
     }
 }
 
-pub fn less_eq(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn less_eq(args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -230,7 +232,7 @@ pub fn less_eq(args: &[Value]) -> Result<Value, EvaluationError> {
     }
 }
 
-pub fn greater(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn greater(args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -253,7 +255,7 @@ pub fn greater(args: &[Value]) -> Result<Value, EvaluationError> {
     }
 }
 
-pub fn greater_eq(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn greater_eq(args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -276,7 +278,7 @@ pub fn greater_eq(args: &[Value]) -> Result<Value, EvaluationError> {
     }
 }
 
-pub fn equal(args: &[Value]) -> Result<Value, EvaluationError> {
+pub fn equal(args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
