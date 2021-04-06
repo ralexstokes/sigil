@@ -1,4 +1,4 @@
-use crate::interpreter::EvaluationError;
+use crate::interpreter::{EvaluationError, Interpreter};
 use itertools::{join, sorted};
 use rpds::{
     HashTrieMap as PersistentMap, HashTrieSet as PersistentSet, List as PersistentList,
@@ -44,7 +44,7 @@ pub fn var_into_inner(value: Value) -> Value {
     }
 }
 
-pub type NativeFn = fn(&[Value]) -> Result<Value, EvaluationError>;
+pub type NativeFn = fn(&mut Interpreter, &[Value]) -> Result<Value, EvaluationError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Lambda {
@@ -394,6 +394,52 @@ impl fmt::Debug for Value {
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+impl Value {
+    pub fn to_readable_string(&self) -> String {
+        use Value::*;
+
+        let mut f = std::string::String::new();
+
+        let _ = match self {
+            Nil => write!(&mut f, "nil"),
+            Bool(ref b) => write!(&mut f, "{}", b),
+            Number(ref n) => write!(&mut f, "{}", n),
+            String(ref s) => write!(&mut f, "{}", s),
+            Keyword(ref id, ref ns_opt) => {
+                let _ = write!(&mut f, ":");
+                if let Some(ns) = ns_opt {
+                    let _ = write!(&mut f, "{}/", ns);
+                }
+                write!(&mut f, "{}", id)
+            }
+            Symbol(ref id, ref ns_opt) => {
+                if let Some(ns) = ns_opt {
+                    let _ = write!(&mut f, "{}/", ns);
+                }
+                write!(&mut f, "{}", id)
+            }
+            List(elems) => write!(&mut f, "({})", join(elems, " ")),
+            Vector(elems) => write!(&mut f, "[{}]", join(elems, " ")),
+            Map(elems) => {
+                let mut inner = vec![];
+                for (k, v) in elems {
+                    let mut buffer = std::string::String::new();
+                    let _ = write!(buffer, "{} {}", k, v);
+                    inner.push(buffer);
+                }
+                write!(&mut f, "{{{}}}", join(inner, ", "))
+            }
+            Set(elems) => write!(&mut f, "#{{{}}}", join(elems, " ")),
+            Fn(_) => write!(&mut f, "<fn*>"),
+            Primitive(_) => write!(&mut f, "<native function>"),
+            Var(v) => write!(&mut f, "(var {})", *v.borrow()),
+            Recur(elems) => write!(&mut f, "[{}]", join(elems, " ")),
+        };
+
+        f
     }
 }
 

@@ -1,7 +1,8 @@
 use crate::prelude::{
-    count, divide, equal, greater, greater_eq, is_empty, is_list, less, less_eq, list, multiply,
-    plus, pr, prn, subtract,
+    self, count, divide, equal, eval, greater, greater_eq, is_empty, is_list, less, less_eq, list,
+    multiply, plus, pr, prn, read_string, slurp, spit, subtract, to_str,
 };
+use crate::reader::{read, ReaderError};
 use crate::value::{var_impl_into_inner, var_into_inner, var_with_value, Lambda, Value};
 use itertools::Itertools;
 use rpds::{
@@ -9,6 +10,7 @@ use rpds::{
     Vector as PersistentVector,
 };
 use std::collections::HashMap;
+use std::convert::From;
 use std::default::Default;
 use std::fmt::Write;
 use std::iter::FromIterator;
@@ -52,6 +54,14 @@ pub enum EvaluationError {
     List(ListEvaluationError),
     #[error("primitive error: {0}")]
     Primitve(PrimitiveEvaluationError),
+    #[error("reader error: {0}")]
+    ReaderError(ReaderError),
+}
+
+impl From<ReaderError> for EvaluationError {
+    fn from(error: ReaderError) -> Self {
+        Self::ReaderError(error)
+    }
 }
 
 type Scope = HashMap<String, Value>;
@@ -88,6 +98,11 @@ impl Default for Interpreter {
             (">", Value::Primitive(greater)),
             (">=", Value::Primitive(greater_eq)),
             ("=", Value::Primitive(equal)),
+            ("read-string", Value::Primitive(read_string)),
+            ("spit", Value::Primitive(spit)),
+            ("slurp", Value::Primitive(slurp)),
+            ("eval", Value::Primitive(eval)),
+            ("str", Value::Primitive(to_str)),
         ];
         let global_scope =
             HashMap::from_iter(bindings.iter().map(|(k, v)| (k.to_string(), v.clone())));
@@ -95,11 +110,21 @@ impl Default for Interpreter {
         let mut default_namespaces = HashMap::new();
         default_namespaces.insert(DEFAULT_NAMESPACE.to_string(), Namespace::default());
 
-        Interpreter {
+        let mut interpreter = Interpreter {
             current_namespace: DEFAULT_NAMESPACE.to_string(),
             namespaces: default_namespaces,
             scopes: vec![global_scope],
+        };
+        for line in prelude::SOURCE.lines() {
+            let forms = read(line).expect("prelude source has no reader errors");
+            for form in forms.iter() {
+                let _ = interpreter
+                    .evaluate(form)
+                    .expect("prelude forms have no evaluation errors");
+            }
         }
+
+        interpreter
     }
 }
 
@@ -597,6 +622,16 @@ impl Interpreter {
                                 "could not evaluate `fn*`".to_string(),
                             )));
                         }
+                        Value::Primitive(native_fn) => {
+                            let mut operands = vec![];
+                            if let Some(rest) = forms.drop_first() {
+                                for operand_form in rest.iter() {
+                                    let operand = self.evaluate(operand_form)?;
+                                    operands.push(operand);
+                                }
+                            }
+                            return native_fn(self, &operands);
+                        }
                         _ => match self.evaluate(operator_form)? {
                             Value::Fn(Lambda { body, arity, level }) => {
                                 if let Some(rest) = forms.drop_first() {
@@ -639,7 +674,7 @@ impl Interpreter {
                                         operands.push(operand);
                                     }
                                 }
-                                return native_fn(&operands);
+                                return native_fn(self, &operands);
                             }
                             v @ _ => {
                                 return Err(EvaluationError::List(
@@ -821,6 +856,17 @@ mod test {
             ("(>= 13 14)", Bool(false)),
             ("(= 12 12)", Bool(true)),
             ("(= 12 13)", Bool(false)),
+            (
+                "(read-string \"(+ 1 2)\")",
+                List(PersistentList::from_iter(vec![
+                    Symbol("+".to_string(), None),
+                    Number(1),
+                    Number(2),
+                ])),
+            ),
+            ("(eval (list + 1 2 3))", Number(6)),
+            ("(str \"hi\" 3 :foo)", String("hi3:foo".to_string())),
+            ("(str \"hi   \" 3 :foo)", String("hi   3:foo".to_string())),
         ];
         run_eval_test(&test_cases);
     }

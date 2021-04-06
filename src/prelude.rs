@@ -1,10 +1,13 @@
 use crate::interpreter::{
-    EvaluationError, EvaluationResult, ListEvaluationError, PrimitiveEvaluationError,
+    EvaluationError, EvaluationResult, Interpreter, ListEvaluationError, PrimitiveEvaluationError,
 };
+use crate::reader::read;
 use crate::value::{list_with_values, Value};
 use itertools::join;
+use std::fmt::Write;
+use std::fs;
 
-pub fn plus(args: &[Value]) -> EvaluationResult<Value> {
+pub fn plus(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     args.iter()
         .try_fold(i64::default(), |acc, x| match x {
             &Value::Number(n) => acc.checked_add(n).ok_or_else(|| {
@@ -19,7 +22,7 @@ pub fn plus(args: &[Value]) -> EvaluationResult<Value> {
         .map(Value::Number)
 }
 
-pub fn subtract(args: &[Value]) -> EvaluationResult<Value> {
+pub fn subtract(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     match args.len() {
         0 => Err(EvaluationError::Primitve(
             PrimitiveEvaluationError::Failure("subtract needs more than 0 args".to_string()),
@@ -68,7 +71,7 @@ pub fn subtract(args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
-pub fn multiply(args: &[Value]) -> EvaluationResult<Value> {
+pub fn multiply(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     args.iter()
         .try_fold(1 as i64, |acc, x| match x {
             &Value::Number(n) => acc.checked_mul(n).ok_or_else(|| {
@@ -85,7 +88,7 @@ pub fn multiply(args: &[Value]) -> EvaluationResult<Value> {
         .map(Value::Number)
 }
 
-pub fn divide(args: &[Value]) -> EvaluationResult<Value> {
+pub fn divide(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     match args.len() {
         0 => Err(EvaluationError::Primitve(
             PrimitiveEvaluationError::Failure("divide needs more than 0 args".to_string()),
@@ -132,21 +135,21 @@ pub fn divide(args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
-pub fn pr(args: &[Value]) -> EvaluationResult<Value> {
+pub fn pr(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     print!("{}", join(args, " "));
     Ok(Value::Nil)
 }
 
-pub fn prn(args: &[Value]) -> EvaluationResult<Value> {
+pub fn prn(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     println!("{}", join(args, " "));
     Ok(Value::Nil)
 }
 
-pub fn list(args: &[Value]) -> EvaluationResult<Value> {
+pub fn list(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     Ok(list_with_values(args.iter().map(|arg| arg.clone())))
 }
 
-pub fn is_list(args: &[Value]) -> EvaluationResult<Value> {
+pub fn is_list(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -158,7 +161,7 @@ pub fn is_list(args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
-pub fn is_empty(args: &[Value]) -> EvaluationResult<Value> {
+pub fn is_empty(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -170,7 +173,7 @@ pub fn is_empty(args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
-pub fn count(args: &[Value]) -> EvaluationResult<Value> {
+pub fn count(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -186,7 +189,7 @@ pub fn count(args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
-pub fn less(args: &[Value]) -> EvaluationResult<Value> {
+pub fn less(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -209,7 +212,7 @@ pub fn less(args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
-pub fn less_eq(args: &[Value]) -> EvaluationResult<Value> {
+pub fn less_eq(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -232,7 +235,7 @@ pub fn less_eq(args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
-pub fn greater(args: &[Value]) -> EvaluationResult<Value> {
+pub fn greater(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -255,7 +258,7 @@ pub fn greater(args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
-pub fn greater_eq(args: &[Value]) -> EvaluationResult<Value> {
+pub fn greater_eq(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -278,7 +281,7 @@ pub fn greater_eq(args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
-pub fn equal(args: &[Value]) -> EvaluationResult<Value> {
+pub fn equal(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
@@ -300,3 +303,89 @@ pub fn equal(args: &[Value]) -> EvaluationResult<Value> {
         }
     }
 }
+
+pub fn read_string(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::String(s) => {
+            let mut forms = read(s)?;
+            if forms.len() != 1 {
+                return Err(EvaluationError::List(ListEvaluationError::Failure(
+                    "`read-string` only reads one form".to_string(),
+                )));
+            }
+            Ok(forms.pop().unwrap())
+        }
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    }
+}
+
+pub fn spit(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 2 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::String(path) => {
+            let mut contents = String::new();
+            let _ = write!(&mut contents, "{}", &args[1]);
+            let _ = fs::write(path, contents).unwrap();
+            Ok(Value::Nil)
+        }
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    }
+}
+
+pub fn slurp(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::String(path) => {
+            let contents = fs::read_to_string(path).unwrap();
+            Ok(Value::String(contents))
+        }
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    }
+}
+
+pub fn eval(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+
+    interpreter.evaluate(&args[0])
+}
+
+pub fn to_str(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    let mut result = String::new();
+    for arg in args {
+        let _ = write!(&mut result, "{}", arg.to_readable_string());
+    }
+    Ok(Value::String(result))
+}
+
+pub const SOURCE: &str = r#"
+(def! load-file (fn* [f] (eval (read-string (str "(do " (slurp f) " nil)")))))
+"#;
