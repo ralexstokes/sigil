@@ -1,5 +1,6 @@
 use crate::prelude::{
-    count, divide, is_empty, is_list, less, list, multiply, plus, pr, prn, subtract,
+    count, divide, equal, greater, greater_eq, is_empty, is_list, less, less_eq, list, multiply,
+    plus, pr, prn, subtract,
 };
 use crate::value::{var_impl_into_inner, var_into_inner, var_with_value, Lambda, Value};
 use itertools::Itertools;
@@ -83,6 +84,10 @@ impl Default for Interpreter {
             ("empty?", Value::Primitive(is_empty)),
             ("count", Value::Primitive(count)),
             ("<", Value::Primitive(less)),
+            ("<=", Value::Primitive(less_eq)),
+            (">", Value::Primitive(greater)),
+            (">=", Value::Primitive(greater_eq)),
+            ("=", Value::Primitive(equal)),
         ];
         let global_scope =
             HashMap::from_iter(bindings.iter().map(|(k, v)| (k.to_string(), v.clone())));
@@ -808,6 +813,14 @@ mod test {
             ("(empty? (list 1))", Bool(false)),
             ("(count (list 44 42 41))", Number(3)),
             ("(if (< 2 3) 12 13)", Number(12)),
+            ("(<= 12 12)", Bool(true)),
+            ("(<= 13 12)", Bool(false)),
+            ("(<= 12 13)", Bool(true)),
+            ("(>= 13 12)", Bool(true)),
+            ("(>= 13 13)", Bool(true)),
+            ("(>= 13 14)", Bool(false)),
+            ("(= 12 12)", Bool(true)),
+            ("(= 12 13)", Bool(false)),
         ];
         run_eval_test(&test_cases);
     }
