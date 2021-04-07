@@ -661,6 +661,18 @@ impl Interpreter {
                                 "could not evaluate `fn*`".to_string(),
                             )));
                         }
+                        // (quote form)
+                        Value::Symbol(s, None) if s == "quote" => {
+                            if let Some(rest) = forms.drop_first() {
+                                if let Some(form) = rest.first() {
+                                    return Ok(form.clone());
+                                }
+                            }
+                            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                "could not evaluate `quote`".to_string(),
+                            )));
+                        }
+                        // apply phase when operator is already evaluated:
                         Value::Fn(Lambda { body, arity, level }) => {
                             if let Some(rest) = forms.drop_first() {
                                 if rest.len() == *arity {
@@ -1060,6 +1072,39 @@ mod test {
             (
                 "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (reset! a 10) (deref a)",
                 Number(10),
+            ),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_basic_quote() {
+        let test_cases = vec![
+            ("(quote 5)", Number(5)),
+            (
+                "(quote (1 2 3))",
+                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(quote (1 2 (into+ [] foo :baz/bar)))",
+                list_with_values(
+                    [
+                        Number(1),
+                        Number(2),
+                        list_with_values(
+                            [
+                                Symbol("into+".to_string(), None),
+                                Vector(PersistentVector::new()),
+                                Symbol("foo".to_string(), None),
+                                Keyword("bar".to_string(), Some("baz".to_string())),
+                            ]
+                            .iter()
+                            .cloned(),
+                        ),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
             ),
         ];
         run_eval_test(&test_cases);
