@@ -969,6 +969,8 @@ mod test {
             ("(atom? (atom 5))", Bool(true)),
             ("(atom? nil)", Bool(false)),
             ("(def! a (atom 5)) (deref a)", Number(5)),
+            ("(def! a (atom 5)) @a", Number(5)),
+            ("(def! a (atom (fn* [a] (+ a 1)))) (@a 4)", Number(5)),
             ("(def! a (atom 5)) (reset! a 10)", Number(10)),
             (
                 "(def! a (atom 5)) (def! inc (fn* [x] (+ x 1))) (swap! a inc)",

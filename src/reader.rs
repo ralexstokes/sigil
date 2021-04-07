@@ -97,6 +97,7 @@ parser! {
         let vector = between(char('['), char(']'), many::<Vec<_>, _,_>(read_form())).map(vector_with_values);
         let map = between(char('{'), char('}'), many::<Vec<_>, _, _>((read_form(), read_form()))).map(map_with_values);
         let set = (char('#'), between(char('{'), char('}'), many::<Vec<_>, _, _>(read_form()))).map(|(_, elems)| set_with_values(elems));
+        let deref = char('@').with(read_form()).map(|form| list_with_values([Value::Symbol("deref".to_string(), None), form].iter().map(|f| f.clone())));
 
         choice((
             nil,
@@ -110,6 +111,7 @@ parser! {
             vector,
             map,
             set,
+            deref,
         ))
     }
 }
