@@ -54,7 +54,7 @@ pub enum EvaluationError {
     #[error("list error: {0}")]
     List(ListEvaluationError),
     #[error("primitive error: {0}")]
-    Primitve(PrimitiveEvaluationError),
+    Primitive(PrimitiveEvaluationError),
     #[error("reader error: {0}")]
     ReaderError(ReaderError),
 }

@@ -11,11 +11,11 @@ pub fn plus(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     args.iter()
         .try_fold(i64::default(), |acc, x| match x {
             &Value::Number(n) => acc.checked_add(n).ok_or_else(|| {
-                EvaluationError::Primitve(PrimitiveEvaluationError::Failure(
+                EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
                     "overflow detected".to_string(),
                 ))
             }),
-            _ => Err(EvaluationError::Primitve(
+            _ => Err(EvaluationError::Primitive(
                 PrimitiveEvaluationError::Failure("plus only takes number arguments".to_string()),
             )),
         })
@@ -24,19 +24,19 @@ pub fn plus(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 
 pub fn subtract(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     match args.len() {
-        0 => Err(EvaluationError::Primitve(
+        0 => Err(EvaluationError::Primitive(
             PrimitiveEvaluationError::Failure("subtract needs more than 0 args".to_string()),
         )),
         1 => match &args[0] {
             &Value::Number(first) => first
                 .checked_neg()
                 .ok_or_else(|| {
-                    EvaluationError::Primitve(PrimitiveEvaluationError::Failure(
+                    EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
                         "negation failed".to_string(),
                     ))
                 })
                 .map(Value::Number),
-            _ => Err(EvaluationError::Primitve(
+            _ => Err(EvaluationError::Primitive(
                 PrimitiveEvaluationError::Failure(
                     "negation requires an integer argument".to_string(),
                 ),
@@ -50,18 +50,18 @@ pub fn subtract(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> 
                     .iter()
                     .try_fold(first, |acc, x| match x {
                         &Value::Number(next) => acc.checked_sub(next).ok_or_else(|| {
-                            EvaluationError::Primitve(PrimitiveEvaluationError::Failure(
+                            EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
                                 "underflow detected".to_string(),
                             ))
                         }),
-                        _ => Err(EvaluationError::Primitve(
+                        _ => Err(EvaluationError::Primitive(
                             PrimitiveEvaluationError::Failure(
                                 "subtract only takes number arguments".to_string(),
                             ),
                         )),
                     })
                     .map(Value::Number),
-                _ => Err(EvaluationError::Primitve(
+                _ => Err(EvaluationError::Primitive(
                     PrimitiveEvaluationError::Failure(
                         "subtract only takes number arguments".to_string(),
                     ),
@@ -75,11 +75,11 @@ pub fn multiply(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> 
     args.iter()
         .try_fold(1 as i64, |acc, x| match x {
             &Value::Number(n) => acc.checked_mul(n).ok_or_else(|| {
-                EvaluationError::Primitve(PrimitiveEvaluationError::Failure(
+                EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
                     "overflow detected".to_string(),
                 ))
             }),
-            _ => Err(EvaluationError::Primitve(
+            _ => Err(EvaluationError::Primitive(
                 PrimitiveEvaluationError::Failure(
                     "multiply only takes number arguments".to_string(),
                 ),
@@ -90,19 +90,19 @@ pub fn multiply(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> 
 
 pub fn divide(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     match args.len() {
-        0 => Err(EvaluationError::Primitve(
+        0 => Err(EvaluationError::Primitive(
             PrimitiveEvaluationError::Failure("divide needs more than 0 args".to_string()),
         )),
         1 => match &args[0] {
             &Value::Number(first) => (1 as i64)
                 .checked_div_euclid(first)
                 .ok_or_else(|| {
-                    EvaluationError::Primitve(PrimitiveEvaluationError::Failure(
+                    EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
                         "overflow detected".to_string(),
                     ))
                 })
                 .map(Value::Number),
-            _ => Err(EvaluationError::Primitve(
+            _ => Err(EvaluationError::Primitive(
                 PrimitiveEvaluationError::Failure("divide requires number arguments".to_string()),
             )),
         },
@@ -114,18 +114,18 @@ pub fn divide(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
                     .iter()
                     .try_fold(first, |acc, x| match x {
                         &Value::Number(next) => acc.checked_div_euclid(next).ok_or_else(|| {
-                            EvaluationError::Primitve(PrimitiveEvaluationError::Failure(
+                            EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
                                 "overflow detected".to_string(),
                             ))
                         }),
-                        _ => Err(EvaluationError::Primitve(
+                        _ => Err(EvaluationError::Primitive(
                             PrimitiveEvaluationError::Failure(
                                 "divide only takes number arguments".to_string(),
                             ),
                         )),
                     })
                     .map(Value::Number),
-                _ => Err(EvaluationError::Primitve(
+                _ => Err(EvaluationError::Primitive(
                     PrimitiveEvaluationError::Failure(
                         "divide only takes number arguments".to_string(),
                     ),
