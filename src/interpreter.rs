@@ -1,7 +1,7 @@
 use crate::prelude::{
-    self, count, deref, divide, equal, eval, greater, greater_eq, is_atom, is_empty, is_list, less,
-    less_eq, list, multiply, plus, pr, prn, read_string, reset_atom, slurp, spit, subtract,
-    swap_atom, to_atom, to_str,
+    self, concat, cons, count, deref, divide, equal, eval, greater, greater_eq, is_atom, is_empty,
+    is_list, less, less_eq, list, multiply, plus, pr, prn, read_string, reset_atom, slurp, spit,
+    subtract, swap_atom, to_atom, to_str,
 };
 use crate::reader::{read, ReaderError};
 use crate::value::{var_impl_into_inner, var_into_inner, var_with_value, Lambda, Value};
@@ -120,6 +120,8 @@ impl Default for Interpreter {
             ("deref", Value::Primitive(deref)),
             ("reset!", Value::Primitive(reset_atom)),
             ("swap!", Value::Primitive(swap_atom)),
+            ("cons", Value::Primitive(cons)),
+            ("concat", Value::Primitive(concat)),
         ];
         let global_scope =
             HashMap::from_iter(bindings.iter().map(|(k, v)| (k.to_string(), v.clone())));
@@ -938,6 +940,45 @@ mod test {
             ("(eval (list + 1 2 3))", Number(6)),
             ("(str \"hi\" 3 :foo)", String("hi3:foo".to_string())),
             ("(str \"hi   \" 3 :foo)", String("hi   3:foo".to_string())),
+            (
+                "(cons 1 (list))",
+                list_with_values([Number(1)].iter().cloned()),
+            ),
+            (
+                "(cons 1 (list 2 3))",
+                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(cons (list 1) (list 2 3))",
+                list_with_values(
+                    [
+                        list_with_values([Number(1)].iter().cloned()),
+                        Number(2),
+                        Number(3),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
+            ("(concat)", List(PersistentList::new())),
+            (
+                "(concat (list 1) (list 2 3))",
+                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(concat (list 1) (list 2 3) (list (list 4 5) 6))",
+                list_with_values(
+                    [
+                        Number(1),
+                        Number(2),
+                        Number(3),
+                        list_with_values([Number(4), Number(5)].iter().cloned()),
+                        Number(6),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
         ];
         run_eval_test(&test_cases);
     }

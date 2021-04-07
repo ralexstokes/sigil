@@ -484,6 +484,37 @@ pub fn swap_atom(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationRes
     }
 }
 
+pub fn cons(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 2 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[1] {
+        Value::List(seq) => Ok(Value::List(seq.push_front(args[0].clone()))),
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    }
+}
+
+pub fn concat(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    let mut elems = vec![];
+    for arg in args {
+        match arg {
+            Value::List(seq) => elems.extend(seq.iter().cloned()),
+            _ => {
+                return Err(EvaluationError::List(ListEvaluationError::Failure(
+                    "incorrect argument".to_string(),
+                )));
+            }
+        }
+    }
+    Ok(list_with_values(elems))
+}
+
 pub const SOURCE: &str = r#"
 (def! load-file (fn* [f] (eval (read-string (str "(do " (slurp f) " nil)")))))
 "#;
