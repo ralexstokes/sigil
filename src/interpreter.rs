@@ -1,6 +1,7 @@
 use crate::prelude::{
-    self, count, divide, equal, eval, greater, greater_eq, is_empty, is_list, less, less_eq, list,
-    multiply, plus, pr, prn, read_string, slurp, spit, subtract, to_str,
+    self, count, deref, divide, equal, eval, greater, greater_eq, is_atom, is_empty, is_list, less,
+    less_eq, list, multiply, plus, pr, prn, read_string, reset_atom, slurp, spit, subtract,
+    swap_atom, to_atom, to_str,
 };
 use crate::reader::{read, ReaderError};
 use crate::value::{var_impl_into_inner, var_into_inner, var_with_value, Lambda, Value};
@@ -103,6 +104,11 @@ impl Default for Interpreter {
             ("slurp", Value::Primitive(slurp)),
             ("eval", Value::Primitive(eval)),
             ("str", Value::Primitive(to_str)),
+            ("atom", Value::Primitive(to_atom)),
+            ("atom?", Value::Primitive(is_atom)),
+            ("deref", Value::Primitive(deref)),
+            ("reset!", Value::Primitive(reset_atom)),
+            ("swap!", Value::Primitive(swap_atom)),
         ];
         let global_scope =
             HashMap::from_iter(bindings.iter().map(|(k, v)| (k.to_string(), v.clone())));
@@ -622,6 +628,38 @@ impl Interpreter {
                                 "could not evaluate `fn*`".to_string(),
                             )));
                         }
+                        Value::Fn(Lambda { body, arity, level }) => {
+                            if let Some(rest) = forms.drop_first() {
+                                if rest.len() == *arity {
+                                    self.enter_scope();
+                                    for (index, operand_form) in rest.iter().enumerate() {
+                                        match self.evaluate(operand_form) {
+                                            Ok(operand) => {
+                                                let parameter = lambda_parameter_key(index, *level);
+                                                self.insert_value_in_current_scope(
+                                                    &parameter, operand,
+                                                );
+                                            }
+                                            Err(e) => {
+                                                self.leave_scope();
+                                                let mut error =
+                                                    String::from("could not apply `fn*`: ");
+                                                error += &e.to_string();
+                                                return Err(EvaluationError::List(
+                                                    ListEvaluationError::Failure(error),
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    let result = self.evaluate(&Value::List(body.clone()));
+                                    self.leave_scope();
+                                    return result;
+                                }
+                            }
+                            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                "could not apply `fn*`".to_string(),
+                            )));
+                        }
                         Value::Primitive(native_fn) => {
                             let mut operands = vec![];
                             if let Some(rest) = forms.drop_first() {
@@ -715,6 +753,7 @@ impl Interpreter {
             Value::Primitive(_) => unreachable!(),
             Value::Var(v) => var_impl_into_inner(v),
             Value::Recur(_) => unreachable!(),
+            Value::Atom(_) => unreachable!(),
         };
         Ok(result)
     }
@@ -724,12 +763,13 @@ impl Interpreter {
 mod test {
     use super::*;
     use crate::reader::read;
-    use crate::value::list_with_values;
+    use crate::value::{atom_with_value, list_with_values};
     use Value::*;
 
     fn run_eval_test(test_cases: &[(&str, Value)]) {
         for (input, expected) in test_cases {
             let mut interpreter = Interpreter::default();
+            // dbg!(&input);
             let forms = read(input).unwrap();
             let mut final_result: Option<Value> = None;
             for form in forms.iter() {
@@ -917,6 +957,35 @@ mod test {
             (
                 "(def! f (fn* [i] (loop* [n i] (if (< n 400) (recur (+ 1 n)) n)))) (f 0)",
                 Number(400),
+            ),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_basic_atoms() {
+        let test_cases = vec![
+            ("(atom 5)", atom_with_value(Number(5))),
+            ("(atom? (atom 5))", Bool(true)),
+            ("(atom? nil)", Bool(false)),
+            ("(def! a (atom 5)) (deref a)", Number(5)),
+            ("(def! a (atom 5)) (reset! a 10)", Number(10)),
+            (
+                "(def! a (atom 5)) (def! inc (fn* [x] (+ x 1))) (swap! a inc)",
+                Number(6),
+            ),
+            ("(def! a (atom 5)) (swap! a + 1 2 3 4 5)", Number(20)),
+            (
+                "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (deref a)",
+                Number(20),
+            ),
+            (
+                "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (reset! a 10)",
+                Number(10),
+            ),
+            (
+                "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (reset! a 10) (deref a)",
+                Number(10),
             ),
         ];
         run_eval_test(&test_cases);

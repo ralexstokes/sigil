@@ -33,6 +33,10 @@ pub fn var_with_value(value: Value) -> Value {
     Value::Var(Rc::new(RefCell::new(value)))
 }
 
+pub fn atom_with_value(value: Value) -> Value {
+    Value::Atom(Rc::new(RefCell::new(value)))
+}
+
 pub fn var_impl_into_inner(var: &VarImpl) -> Value {
     var.borrow().clone()
 }
@@ -42,6 +46,10 @@ pub fn var_into_inner(value: Value) -> Value {
         Value::Var(v) => var_impl_into_inner(&v),
         _ => panic!("called with non Var value"),
     }
+}
+
+pub fn atom_impl_into_inner(atom: &AtomImpl) -> Value {
+    atom.borrow().clone()
 }
 
 pub type NativeFn = fn(&mut Interpreter, &[Value]) -> Result<Value, EvaluationError>;
@@ -55,6 +63,7 @@ pub struct Lambda {
 }
 
 type VarImpl = Rc<RefCell<Value>>;
+type AtomImpl = Rc<RefCell<Value>>;
 
 #[derive(Clone)]
 pub enum Value {
@@ -74,6 +83,7 @@ pub enum Value {
     Primitive(NativeFn),
     Var(VarImpl),
     Recur(PersistentVector<Value>),
+    Atom(AtomImpl),
 }
 
 impl PartialEq for Value {
@@ -143,6 +153,10 @@ impl PartialEq for Value {
             },
             Recur(ref x) => match other {
                 Recur(ref y) => x == y,
+                _ => false,
+            },
+            Atom(ref x) => match other {
+                Atom(ref y) => x == y,
                 _ => false,
             },
         }
@@ -300,6 +314,24 @@ impl Ord for Value {
                 | Primitive(_)
                 | Var(_) => Ordering::Greater,
                 Recur(ref y) => x.cmp(y),
+                _ => Ordering::Less,
+            },
+            Atom(ref x) => match other {
+                Nil
+                | Bool(_)
+                | Number(_)
+                | String(_)
+                | Keyword(_, _)
+                | Symbol(_, _)
+                | List(_)
+                | Vector(_)
+                | Map(_)
+                | Set(_)
+                | Fn(_)
+                | Primitive(_)
+                | Var(_)
+                | Recur(_) => Ordering::Greater,
+                Atom(ref y) => x.cmp(y),
             },
         }
     }
@@ -345,6 +377,9 @@ impl Hash for Value {
                 (*v.borrow()).hash(state);
             }
             Recur(v) => v.hash(state),
+            Atom(v) => {
+                (*v.borrow()).hash(state);
+            }
         }
     }
 }
@@ -387,6 +422,7 @@ impl fmt::Debug for Value {
             Primitive(_) => write!(f, "<native function>"),
             Var(v) => write!(f, "(var {})", *v.borrow()),
             Recur(elems) => write!(f, "[{}]", join(elems, " ")),
+            Atom(v) => write!(f, "(atom {})", *v.borrow()),
         }
     }
 }
@@ -437,6 +473,7 @@ impl Value {
             Primitive(_) => write!(&mut f, "<native function>"),
             Var(v) => write!(&mut f, "(var {})", *v.borrow()),
             Recur(elems) => write!(&mut f, "[{}]", join(elems, " ")),
+            Atom(v) => write!(&mut f, "(atom {})", *v.borrow()),
         };
 
         f

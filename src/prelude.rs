@@ -2,7 +2,7 @@ use crate::interpreter::{
     EvaluationError, EvaluationResult, Interpreter, ListEvaluationError, PrimitiveEvaluationError,
 };
 use crate::reader::read;
-use crate::value::{list_with_values, Value};
+use crate::value::{atom_impl_into_inner, atom_with_value, list_with_values, Value};
 use itertools::join;
 use std::fmt::Write;
 use std::fs;
@@ -384,6 +384,104 @@ pub fn to_str(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         let _ = write!(&mut result, "{}", arg.to_readable_string());
     }
     Ok(Value::String(result))
+}
+
+pub fn to_atom(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    Ok(atom_with_value(args[0].clone()))
+}
+
+pub fn is_atom(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        &Value::Atom(_) => Ok(Value::Bool(true)),
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
+pub fn deref(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::Atom(inner) => Ok(atom_impl_into_inner(inner)),
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    }
+}
+
+pub fn reset_atom(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 2 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::Atom(inner) => {
+            let value = args[1].clone();
+            *inner.borrow_mut() = value.clone();
+            Ok(value)
+        }
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    }
+}
+
+pub fn swap_atom(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() < 2 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::Atom(cell) => match &args[1] {
+            lambda @ Value::Fn(_) => {
+                let mut inner = cell.borrow_mut();
+                let original_value = inner.clone();
+                let mut elems = vec![lambda.clone(), original_value];
+                elems.extend_from_slice(&args[2..]);
+                let form = list_with_values(elems);
+                let new_value = interpreter.evaluate(&form)?;
+                *inner = new_value.clone();
+                Ok(new_value)
+            }
+            Value::Primitive(native_fn) => {
+                let mut inner = cell.borrow_mut();
+                let original_value = inner.clone();
+                let mut fn_args = vec![original_value];
+                fn_args.extend_from_slice(&args[2..]);
+                let new_value = native_fn(interpreter, &fn_args)?;
+                *inner = new_value.clone();
+                Ok(new_value)
+            }
+            _ => {
+                return Err(EvaluationError::List(ListEvaluationError::Failure(
+                    "incorrect argument".to_string(),
+                )));
+            }
+        },
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    }
 }
 
 pub const SOURCE: &str = r#"
