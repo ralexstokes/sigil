@@ -13,9 +13,12 @@ use rpds::{
 use std::collections::HashMap;
 use std::convert::From;
 use std::default::Default;
+use std::env::Args;
 use std::fmt::Write;
 use std::iter::FromIterator;
 use thiserror::Error;
+
+const COMMAND_LINE_ARGS_SYMBOL: &str = "*command-line-args*";
 
 pub type EvaluationResult<T> = Result<T, EvaluationError>;
 
@@ -48,6 +51,12 @@ pub enum PrimitiveEvaluationError {
 }
 
 #[derive(Debug, Error)]
+pub enum InterpreterError {
+    #[error("requested the {0}th command line arg but only {1} supplied")]
+    MissingCommandLineArg(usize, usize),
+}
+
+#[derive(Debug, Error)]
 pub enum EvaluationError {
     #[error("symbol error: {0}")]
     Symbol(SymbolEvaluationError),
@@ -57,6 +66,8 @@ pub enum EvaluationError {
     Primitive(PrimitiveEvaluationError),
     #[error("reader error: {0}")]
     ReaderError(ReaderError),
+    #[error("interpreter error: {0}")]
+    Interpreter(InterpreterError),
 }
 
 impl From<ReaderError> for EvaluationError {
@@ -172,6 +183,26 @@ fn intern_value_in_namespace(var_desc: &str, value: &Value, namespace: &mut Name
 }
 
 impl Interpreter {
+    pub fn intern_args(&mut self, args: Args) {
+        let form = PersistentList::from_iter(args.map(|arg| Value::String(arg.clone())));
+        self.intern_var(COMMAND_LINE_ARGS_SYMBOL, &Value::List(form));
+    }
+
+    pub fn command_line_arg(&mut self, n: usize) -> EvaluationResult<String> {
+        match self.resolve_symbol(COMMAND_LINE_ARGS_SYMBOL, None)? {
+            Value::List(args) => match args.iter().nth(n) {
+                Some(value) => match value {
+                    Value::String(arg) => Ok(arg.clone()),
+                    _ => unreachable!(),
+                },
+                None => Err(EvaluationError::Interpreter(
+                    InterpreterError::MissingCommandLineArg(n, args.len()),
+                )),
+            },
+            _ => unreachable!(),
+        }
+    }
+
     pub fn current_namespace(&self) -> String {
         self.current_namespace.clone()
     }

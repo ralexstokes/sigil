@@ -6,8 +6,10 @@ use rustyline::Editor;
 use rustyline_derive::{Completer, Helper, Hinter, Validator};
 use std::borrow::Cow;
 use std::default::Default;
+use std::env::Args;
 use std::error::Error;
 use std::fmt::Write;
+use std::fs;
 
 pub struct StdRepl {
     interpreter: Interpreter,
@@ -39,6 +41,27 @@ impl Highlighter for EditorHelper {
 }
 
 impl StdRepl {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_command_line_args(mut self, args: Args) -> Self {
+        self.interpreter.intern_args(args);
+        self
+    }
+
+    pub fn run_file_from_args(&mut self) -> Result<(), Box<dyn Error>> {
+        let path = self.interpreter.command_line_arg(1)?;
+        let contents = fs::read_to_string(path)?;
+        for line in contents.lines() {
+            let forms = read(&line)?;
+            for form in forms.iter() {
+                self.interpreter.evaluate(form)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
         let helper = EditorHelper {
             highlighter: MatchingBracketHighlighter::new(),
