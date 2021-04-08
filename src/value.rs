@@ -94,6 +94,7 @@ pub enum Value {
     Var(VarImpl),
     Recur(PersistentVector<Value>),
     Atom(AtomImpl),
+    Macro(Lambda),
 }
 
 impl PartialEq for Value {
@@ -175,6 +176,10 @@ impl PartialEq for Value {
             },
             Atom(ref x) => match other {
                 Atom(ref y) => x == y,
+                _ => false,
+            },
+            Macro(ref x) => match other {
+                Macro(ref y) => x == y,
                 _ => false,
             },
         }
@@ -358,6 +363,25 @@ impl Ord for Value {
                 | Var(_)
                 | Recur(_) => Ordering::Greater,
                 Atom(ref y) => x.cmp(y),
+                _ => Ordering::Less,
+            },
+            Macro(ref x) => match other {
+                Nil
+                | Bool(_)
+                | Number(_)
+                | String(_)
+                | Keyword(_, _)
+                | Symbol(_, _)
+                | List(_)
+                | Vector(_)
+                | Map(_)
+                | Set(_)
+                | Fn(_)
+                | Primitive(_)
+                | Var(_)
+                | Recur(_)
+                | Atom(_) => Ordering::Greater,
+                Macro(ref y) => x.cmp(y),
             },
         }
     }
@@ -412,6 +436,7 @@ impl Hash for Value {
             Atom(v) => {
                 (*v.borrow()).hash(state);
             }
+            Macro(lambda) => lambda.hash(state),
         }
     }
 }
@@ -459,6 +484,7 @@ impl fmt::Debug for Value {
             }) => write!(f, "#'{}/{}", namespace, identifier),
             Recur(elems) => write!(f, "[{}]", join(elems, " ")),
             Atom(v) => write!(f, "(atom {})", *v.borrow()),
+            Macro(_) => write!(f, "<macro>"),
         }
     }
 }
@@ -514,6 +540,7 @@ impl Value {
             }) => write!(f, "#'{}/{}", namespace, identifier),
             Recur(elems) => write!(&mut f, "[{}]", join(elems, " ")),
             Atom(v) => write!(&mut f, "(atom {})", *v.borrow()),
+            Macro(_) => write!(&mut f, "<macro>"),
         };
 
         f
