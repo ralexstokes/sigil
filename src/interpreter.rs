@@ -4,7 +4,9 @@ use crate::prelude::{
     subtract, swap_atom, to_atom, to_str, vec,
 };
 use crate::reader::{read, ReaderError};
-use crate::value::{var_impl_into_inner, var_into_inner, var_with_value, Lambda, Value};
+use crate::value::{
+    list_with_values, var_impl_into_inner, var_into_inner, var_with_value, Lambda, Value,
+};
 use itertools::Itertools;
 use rpds::{
     HashTrieMap as PersistentMap, HashTrieSet as PersistentSet, List as PersistentList,
@@ -42,6 +44,8 @@ pub enum ListEvaluationError {
     CannotInvoke(Value),
     #[error("some failure: {0}")]
     Failure(String),
+    #[error("error evaluating quasiquote: {0}")]
+    QuasiquoteError(String),
 }
 
 #[derive(Debug, Error)]
@@ -187,6 +191,97 @@ fn intern_value_in_namespace(
             namespace.insert(var_desc.to_string(), var.clone());
             var
         }
+    }
+}
+
+fn quasiquote(value: &Value) -> EvaluationResult<Value> {
+    match value {
+        Value::List(elems) => {
+            if let Some(first) = elems.first() {
+                match first {
+                    Value::Symbol(s, None) if s == "unquote" => {
+                        if let Some(rest) = elems.drop_first() {
+                            if let Some(argument) = rest.first() {
+                                return Ok(argument.clone());
+                            }
+                        }
+                        return Err(EvaluationError::List(ListEvaluationError::QuasiquoteError(
+                            "type error to `unquote`".to_string(),
+                        )));
+                    }
+                    _ => {
+                        let mut result = Value::List(PersistentList::new());
+                        for form in elems.reverse().iter() {
+                            match form {
+                                Value::List(inner) => {
+                                    if let Some(first_inner) = inner.first() {
+                                        match first_inner {
+                                            Value::Symbol(s, None) if s == "splice-unquote" => {
+                                                if let Some(rest) = inner.drop_first() {
+                                                    if let Some(second) = rest.first() {
+                                                        result = list_with_values(
+                                                            [
+                                                                Value::Symbol(
+                                                                    "concat".to_string(),
+                                                                    None,
+                                                                ),
+                                                                second.clone(),
+                                                                result,
+                                                            ]
+                                                            .iter()
+                                                            .cloned(),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                            _ => {
+                                                result = list_with_values(
+                                                    [
+                                                        Value::Symbol("cons".to_string(), None),
+                                                        quasiquote(form)?,
+                                                        result,
+                                                    ]
+                                                    .iter()
+                                                    .cloned(),
+                                                );
+                                            }
+                                        }
+                                    } else {
+                                        result = list_with_values(
+                                            [
+                                                Value::Symbol("cons".to_string(), None),
+                                                Value::List(PersistentList::new()),
+                                                result,
+                                            ]
+                                            .iter()
+                                            .cloned(),
+                                        );
+                                    }
+                                }
+                                form @ _ => {
+                                    result = list_with_values(
+                                        [
+                                            Value::Symbol("cons".to_string(), None),
+                                            quasiquote(form)?,
+                                            result,
+                                        ]
+                                        .iter()
+                                        .cloned(),
+                                    );
+                                }
+                            }
+                        }
+                        return Ok(result);
+                    }
+                }
+            }
+            Ok(Value::List(elems.clone()))
+        }
+        elem @ Value::Map(_) | elem @ Value::Symbol(_, _) => {
+            let args = vec![Value::Symbol("quote".to_string(), None), elem.clone()];
+            Ok(list_with_values(args.into_iter()))
+        }
+        v @ _ => Ok(v.clone()),
     }
 }
 
@@ -671,12 +766,26 @@ impl Interpreter {
                         // (quote form)
                         Value::Symbol(s, None) if s == "quote" => {
                             if let Some(rest) = forms.drop_first() {
-                                if let Some(form) = rest.first() {
-                                    return Ok(form.clone());
+                                if rest.len() == 1 {
+                                    if let Some(form) = rest.first() {
+                                        return Ok(form.clone());
+                                    }
                                 }
                             }
                             return Err(EvaluationError::List(ListEvaluationError::Failure(
                                 "could not evaluate `quote`".to_string(),
+                            )));
+                        }
+                        // (quasiquote form)
+                        Value::Symbol(s, None) if s == "quasiquote" => {
+                            if let Some(rest) = forms.drop_first() {
+                                if let Some(second) = rest.first() {
+                                    let expansion = quasiquote(second)?;
+                                    return self.evaluate(&expansion);
+                                }
+                            }
+                            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                "could not evaluate `recur`".to_string(),
                             )));
                         }
                         // apply phase when operator is already evaluated:
@@ -1134,15 +1243,37 @@ mod test {
                     .cloned(),
                 ),
             ),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_basic_quasiquote() {
+        let test_cases = vec![
             (
-                "(vec '(1 2 3))",
-                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+                "(def! lst '(b c)) `(a lst d)",
+                read("(a lst d)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
             ),
             (
-                "(vec [1 2 3])",
-                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+                "(def! lst '(b c)) `(a ~lst d)",
+                read("(a (b c) d)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
             ),
-            ("(vec nil)", vector_with_values([].iter().cloned())),
+            (
+                "(def! lst '(b c)) `(a ~@lst d)",
+                read("(a b c d)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
         ];
         run_eval_test(&test_cases);
     }

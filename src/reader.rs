@@ -98,6 +98,15 @@ parser! {
         let map = between(char('{'), char('}'), many::<Vec<_>, _, _>((read_form(), read_form()))).map(map_with_values);
         let set = (char('#'), between(char('{'), char('}'), many::<Vec<_>, _, _>(read_form()))).map(|(_, elems)| set_with_values(elems));
         let deref = char('@').with(read_form()).map(|form| list_with_values([Value::Symbol("deref".to_string(), None), form].iter().map(|f| f.clone())));
+        let quote = char('\'').with(read_form()).map(|form| list_with_values([Value::Symbol("quote".to_string(), None), form].iter().map(|f| f.clone())));
+        let quasiquote = char('`').with(read_form()).map(|form| list_with_values([Value::Symbol("quasiquote".to_string(), None), form].iter().map(|f| f.clone())));
+        let unquote_with_optional_splice = (char('~'), optional(char('@')), read_form()).map(|(_, splice_opt, form)| {
+            if splice_opt.is_some() {
+                list_with_values([Value::Symbol("splice-unquote".to_string(), None), form].iter().cloned())
+            } else {
+                list_with_values([Value::Symbol("unquote".to_string(), None), form].iter().cloned())
+            }
+        });
 
         choice((
             nil,
@@ -106,12 +115,15 @@ parser! {
             attempt(number),
             string,
             keyword,
+            deref,
+            quote,
+            quasiquote,
+            unquote_with_optional_splice,
             symbol,
             list,
             vector,
             map,
             set,
-            deref,
         ))
     }
 }
