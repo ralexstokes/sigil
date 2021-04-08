@@ -29,8 +29,12 @@ pub fn set_with_values(values: impl IntoIterator<Item = Value>) -> Value {
     Value::Set(PersistentSet::from_iter(values))
 }
 
-pub fn var_with_value(value: Value) -> Value {
-    Value::Var(Rc::new(RefCell::new(value)))
+pub fn var_with_value(value: Value, namespace: &str, identifier: &str) -> Value {
+    Value::Var(VarImpl {
+        inner: Rc::new(RefCell::new(value)),
+        namespace: namespace.to_string(),
+        identifier: identifier.to_string(),
+    })
 }
 
 pub fn atom_with_value(value: Value) -> Value {
@@ -38,7 +42,7 @@ pub fn atom_with_value(value: Value) -> Value {
 }
 
 pub fn var_impl_into_inner(var: &VarImpl) -> Value {
-    var.borrow().clone()
+    var.inner.borrow().clone()
 }
 
 pub fn var_into_inner(value: Value) -> Value {
@@ -62,7 +66,13 @@ pub struct Lambda {
     pub level: usize,
 }
 
-type VarImpl = Rc<RefCell<Value>>;
+#[derive(Clone)]
+pub struct VarImpl {
+    pub inner: Rc<RefCell<Value>>,
+    namespace: String,
+    identifier: String,
+}
+
 type AtomImpl = Rc<RefCell<Value>>;
 
 #[derive(Clone)]
@@ -147,8 +157,16 @@ impl PartialEq for Value {
                 }
                 _ => false,
             },
-            Var(ref x) => match other {
-                Var(ref y) => x == y,
+            Var(VarImpl {
+                namespace: namespace_x,
+                identifier: identifier_x,
+                ..
+            }) => match other {
+                Var(VarImpl {
+                    namespace: namespace_y,
+                    identifier: identifier_y,
+                    ..
+                }) => (namespace_x, identifier_x) == (namespace_y, identifier_y),
                 _ => false,
             },
             Recur(ref x) => match other {
@@ -283,7 +301,11 @@ impl Ord for Value {
                 }
                 _ => Ordering::Less,
             },
-            Var(x) => match other {
+            Var(VarImpl {
+                namespace: namespace_x,
+                identifier: identifier_x,
+                ..
+            }) => match other {
                 Nil
                 | Bool(_)
                 | Number(_)
@@ -296,7 +318,11 @@ impl Ord for Value {
                 | Set(_)
                 | Fn(_)
                 | Primitive(_) => Ordering::Greater,
-                Var(y) => x.cmp(y),
+                Var(VarImpl {
+                    namespace: namespace_y,
+                    identifier: identifier_y,
+                    ..
+                }) => (namespace_x, identifier_x).cmp(&(namespace_y, identifier_y)),
                 _ => Ordering::Less,
             },
             Recur(ref x) => match other {
@@ -373,8 +399,14 @@ impl Hash for Value {
                 let identifier = unsafe { std::mem::transmute::<*const NativeFn, usize>(ptr) };
                 identifier.hash(state);
             }
-            Var(v) => {
-                (*v.borrow()).hash(state);
+            Var(VarImpl {
+                inner,
+                namespace,
+                identifier,
+            }) => {
+                (*inner.borrow()).hash(state);
+                namespace.hash(state);
+                identifier.hash(state);
             }
             Recur(v) => v.hash(state),
             Atom(v) => {
@@ -420,7 +452,11 @@ impl fmt::Debug for Value {
             Set(elems) => write!(f, "#{{{}}}", join(elems, " ")),
             Fn(_) => write!(f, "<fn*>"),
             Primitive(_) => write!(f, "<native function>"),
-            Var(v) => write!(f, "(var {})", *v.borrow()),
+            Var(VarImpl {
+                namespace,
+                identifier,
+                ..
+            }) => write!(f, "#'{}/{}", namespace, identifier),
             Recur(elems) => write!(f, "[{}]", join(elems, " ")),
             Atom(v) => write!(f, "(atom {})", *v.borrow()),
         }
@@ -471,7 +507,11 @@ impl Value {
             Set(elems) => write!(&mut f, "#{{{}}}", join(elems, " ")),
             Fn(_) => write!(&mut f, "<fn*>"),
             Primitive(_) => write!(&mut f, "<native function>"),
-            Var(v) => write!(&mut f, "(var {})", *v.borrow()),
+            Var(VarImpl {
+                namespace,
+                identifier,
+                ..
+            }) => write!(f, "#'{}/{}", namespace, identifier),
             Recur(elems) => write!(&mut f, "[{}]", join(elems, " ")),
             Atom(v) => write!(&mut f, "(atom {})", *v.borrow()),
         };

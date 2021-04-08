@@ -167,17 +167,22 @@ fn get_var_in_namespace(var_desc: &str, namespace: &Namespace) -> Option<Value> 
     })
 }
 
-fn intern_value_in_namespace(var_desc: &str, value: &Value, namespace: &mut Namespace) -> Value {
+fn intern_value_in_namespace(
+    var_desc: &str,
+    value: &Value,
+    namespace: &mut Namespace,
+    namespace_desc: &str,
+) -> Value {
     match namespace.get(var_desc) {
         Some(var) => match var {
             Value::Var(v) => {
-                *v.borrow_mut() = value.clone();
+                *v.inner.borrow_mut() = value.clone();
                 var.clone()
             }
             _ => unreachable!(),
         },
         None => {
-            let var = var_with_value(value.clone());
+            let var = var_with_value(value.clone(), namespace_desc, var_desc);
             namespace.insert(var_desc.to_string(), var.clone());
             var
         }
@@ -214,11 +219,12 @@ impl Interpreter {
     }
 
     fn intern_var(&mut self, identifier: &str, value: &Value) -> Value {
+        let current_namespace = &self.current_namespace();
         let ns = self
             .namespaces
-            .get_mut(&self.current_namespace())
+            .get_mut(current_namespace)
             .expect("current namespace always resolves");
-        intern_value_in_namespace(identifier, value, ns)
+        intern_value_in_namespace(identifier, value, ns, current_namespace)
     }
 
     // return a ref to some var in the current namespace
@@ -879,7 +885,7 @@ mod test {
     #[test]
     fn test_basic_def() {
         let test_cases = vec![
-            ("(def! a 3)", var_with_value(Number(3))),
+            ("(def! a 3)", var_with_value(Number(3), "sigil", "a")),
             ("(def! a 3) (+ a 1)", Number(4)),
         ];
         run_eval_test(&test_cases);
