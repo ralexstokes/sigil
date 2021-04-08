@@ -1,7 +1,7 @@
 use crate::prelude::{
     self, concat, cons, count, deref, divide, equal, eval, greater, greater_eq, is_atom, is_empty,
     is_list, less, less_eq, list, multiply, plus, pr, prn, read_string, reset_atom, slurp, spit,
-    subtract, swap_atom, to_atom, to_str,
+    subtract, swap_atom, to_atom, to_str, vec,
 };
 use crate::reader::{read, ReaderError};
 use crate::value::{var_impl_into_inner, var_into_inner, var_with_value, Lambda, Value};
@@ -122,6 +122,7 @@ impl Default for Interpreter {
             ("swap!", Value::Primitive(swap_atom)),
             ("cons", Value::Primitive(cons)),
             ("concat", Value::Primitive(concat)),
+            ("vec", Value::Primitive(vec)),
         ];
         let global_scope =
             HashMap::from_iter(bindings.iter().map(|(k, v)| (k.to_string(), v.clone())));
@@ -814,7 +815,7 @@ impl Interpreter {
 mod test {
     use super::*;
     use crate::reader::read;
-    use crate::value::{atom_with_value, list_with_values};
+    use crate::value::{atom_with_value, list_with_values, vector_with_values};
     use Value::*;
 
     fn run_eval_test(test_cases: &[(&str, Value)]) {
@@ -967,6 +968,10 @@ mod test {
                 list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
             ),
             (
+                "(cons 1 [2 3])",
+                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
                 "(cons (list 1) (list 2 3))",
                 list_with_values(
                     [
@@ -984,6 +989,14 @@ mod test {
                 list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
             ),
             (
+                "(concat (list 1) [3 3] (list 2 3))",
+                list_with_values(
+                    [Number(1), Number(3), Number(3), Number(2), Number(3)]
+                        .iter()
+                        .cloned(),
+                ),
+            ),
+            (
                 "(concat (list 1) (list 2 3) (list (list 4 5) 6))",
                 list_with_values(
                     [
@@ -997,6 +1010,15 @@ mod test {
                     .cloned(),
                 ),
             ),
+            (
+                "(vec '(1 2 3))",
+                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(vec [1 2 3])",
+                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            ("(vec nil)", vector_with_values([].iter().cloned())),
         ];
         run_eval_test(&test_cases);
     }
@@ -1112,6 +1134,15 @@ mod test {
                     .cloned(),
                 ),
             ),
+            (
+                "(vec '(1 2 3))",
+                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(vec [1 2 3])",
+                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            ("(vec nil)", vector_with_values([].iter().cloned())),
         ];
         run_eval_test(&test_cases);
     }

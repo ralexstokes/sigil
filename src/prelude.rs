@@ -2,7 +2,9 @@ use crate::interpreter::{
     EvaluationError, EvaluationResult, Interpreter, ListEvaluationError, PrimitiveEvaluationError,
 };
 use crate::reader::read;
-use crate::value::{atom_impl_into_inner, atom_with_value, list_with_values, Value};
+use crate::value::{
+    atom_impl_into_inner, atom_with_value, list_with_values, vector_with_values, Value,
+};
 use itertools::join;
 use std::fmt::Write;
 use std::fs;
@@ -492,6 +494,13 @@ pub fn cons(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
     match &args[1] {
         Value::List(seq) => Ok(Value::List(seq.push_front(args[0].clone()))),
+        Value::Vector(seq) => {
+            let mut result = vec![args[0].clone()];
+            for elem in seq {
+                result.push(elem.clone());
+            }
+            Ok(list_with_values(result.into_iter()))
+        }
         _ => {
             return Err(EvaluationError::List(ListEvaluationError::Failure(
                 "incorrect argument".to_string(),
@@ -505,6 +514,7 @@ pub fn concat(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     for arg in args {
         match arg {
             Value::List(seq) => elems.extend(seq.iter().cloned()),
+            Value::Vector(seq) => elems.extend(seq.iter().cloned()),
             _ => {
                 return Err(EvaluationError::List(ListEvaluationError::Failure(
                     "incorrect argument".to_string(),
@@ -513,6 +523,24 @@ pub fn concat(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         }
     }
     Ok(list_with_values(elems))
+}
+
+pub fn vec(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::List(elems) => Ok(vector_with_values(elems.iter().cloned())),
+        Value::Vector(elems) => Ok(vector_with_values(elems.iter().cloned())),
+        Value::Nil => Ok(vector_with_values([].iter().cloned())),
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    }
 }
 
 pub const SOURCE: &str = r#"
