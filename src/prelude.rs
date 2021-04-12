@@ -6,6 +6,7 @@ use crate::value::{
     atom_impl_into_inner, atom_with_value, list_with_values, vector_with_values, Value,
 };
 use itertools::join;
+use rpds::List as PersistentList;
 use std::fmt::Write;
 use std::fs;
 
@@ -543,6 +544,141 @@ pub fn vec(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
+pub fn nth(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 2 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[1] {
+        &Value::Number(index) if index >= 0 => match &args[0] {
+            Value::List(seq) => seq
+                .iter()
+                .nth(index as usize)
+                .ok_or_else(|| {
+                    EvaluationError::List(ListEvaluationError::Failure(
+                        "collection does not have an element at this index".to_string(),
+                    ))
+                })
+                .map(|elem| elem.clone()),
+            Value::Vector(seq) => seq
+                .iter()
+                .nth(index as usize)
+                .ok_or_else(|| {
+                    EvaluationError::List(ListEvaluationError::Failure(
+                        "collection does not have an element at this index".to_string(),
+                    ))
+                })
+                .map(|elem| elem.clone()),
+            _ => {
+                return Err(EvaluationError::List(ListEvaluationError::Failure(
+                    "incorrect argument".to_string(),
+                )));
+            }
+        },
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    }
+}
+
+pub fn first(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::List(elems) => {
+            if let Some(first) = elems.first() {
+                Ok(first.clone())
+            } else {
+                Ok(Value::Nil)
+            }
+        }
+        Value::Vector(elems) => {
+            if let Some(first) = elems.first() {
+                Ok(first.clone())
+            } else {
+                Ok(Value::Nil)
+            }
+        }
+        Value::Nil => Ok(Value::Nil),
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    }
+}
+
+pub fn rest(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::List(elems) => {
+            if let Some(rest) = elems.drop_first() {
+                dbg!(&rest);
+                Ok(Value::List(rest.clone()))
+            } else {
+                Ok(Value::List(PersistentList::new()))
+            }
+        }
+        Value::Vector(elems) => {
+            let mut result = PersistentList::new();
+            for elem in elems.iter().skip(1).rev() {
+                result.push_front_mut(elem.clone())
+            }
+            Ok(Value::List(result))
+        }
+        Value::Nil => Ok(Value::List(PersistentList::new())),
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    }
+}
+
 pub const SOURCE: &str = r#"
 (def! load-file (fn* [f] (eval (read-string (str "(do " (slurp f) " nil)")))))
 "#;
+
+pub const BINDINGS: &[(&str, Value)] = &[
+    ("+", Value::Primitive(plus)),
+    ("-", Value::Primitive(subtract)),
+    ("*", Value::Primitive(multiply)),
+    ("/", Value::Primitive(divide)),
+    ("pr", Value::Primitive(pr)),
+    ("prn", Value::Primitive(prn)),
+    ("list", Value::Primitive(list)),
+    ("list?", Value::Primitive(is_list)),
+    ("empty?", Value::Primitive(is_empty)),
+    ("count", Value::Primitive(count)),
+    ("<", Value::Primitive(less)),
+    ("<=", Value::Primitive(less_eq)),
+    (">", Value::Primitive(greater)),
+    (">=", Value::Primitive(greater_eq)),
+    ("=", Value::Primitive(equal)),
+    ("read-string", Value::Primitive(read_string)),
+    ("spit", Value::Primitive(spit)),
+    ("slurp", Value::Primitive(slurp)),
+    ("eval", Value::Primitive(eval)),
+    ("str", Value::Primitive(to_str)),
+    ("atom", Value::Primitive(to_atom)),
+    ("atom?", Value::Primitive(is_atom)),
+    ("deref", Value::Primitive(deref)),
+    ("reset!", Value::Primitive(reset_atom)),
+    ("swap!", Value::Primitive(swap_atom)),
+    ("cons", Value::Primitive(cons)),
+    ("concat", Value::Primitive(concat)),
+    ("vec", Value::Primitive(vec)),
+    ("nth", Value::Primitive(nth)),
+    ("first", Value::Primitive(first)),
+    ("rest", Value::Primitive(rest)),
+];

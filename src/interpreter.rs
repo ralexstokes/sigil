@@ -1,8 +1,4 @@
-use crate::prelude::{
-    self, concat, cons, count, deref, divide, equal, eval, greater, greater_eq, is_atom, is_empty,
-    is_list, less, less_eq, list, multiply, plus, pr, prn, read_string, reset_atom, slurp, spit,
-    subtract, swap_atom, to_atom, to_str, vec,
-};
+use crate::prelude;
 use crate::reader::{read, ReaderError};
 use crate::value::{
     list_with_values, var_impl_into_inner, var_into_inner, var_with_value, Lambda, Value,
@@ -98,38 +94,11 @@ const DEFAULT_NAMESPACE: &str = "sigil";
 
 impl Default for Interpreter {
     fn default() -> Self {
-        let bindings = &[
-            ("+", Value::Primitive(plus)),
-            ("-", Value::Primitive(subtract)),
-            ("*", Value::Primitive(multiply)),
-            ("/", Value::Primitive(divide)),
-            ("pr", Value::Primitive(pr)),
-            ("prn", Value::Primitive(prn)),
-            ("list", Value::Primitive(list)),
-            ("list?", Value::Primitive(is_list)),
-            ("empty?", Value::Primitive(is_empty)),
-            ("count", Value::Primitive(count)),
-            ("<", Value::Primitive(less)),
-            ("<=", Value::Primitive(less_eq)),
-            (">", Value::Primitive(greater)),
-            (">=", Value::Primitive(greater_eq)),
-            ("=", Value::Primitive(equal)),
-            ("read-string", Value::Primitive(read_string)),
-            ("spit", Value::Primitive(spit)),
-            ("slurp", Value::Primitive(slurp)),
-            ("eval", Value::Primitive(eval)),
-            ("str", Value::Primitive(to_str)),
-            ("atom", Value::Primitive(to_atom)),
-            ("atom?", Value::Primitive(is_atom)),
-            ("deref", Value::Primitive(deref)),
-            ("reset!", Value::Primitive(reset_atom)),
-            ("swap!", Value::Primitive(swap_atom)),
-            ("cons", Value::Primitive(cons)),
-            ("concat", Value::Primitive(concat)),
-            ("vec", Value::Primitive(vec)),
-        ];
-        let global_scope =
-            HashMap::from_iter(bindings.iter().map(|(k, v)| (k.to_string(), v.clone())));
+        let global_scope = HashMap::from_iter(
+            prelude::BINDINGS
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone())),
+        );
 
         let mut default_namespaces = HashMap::new();
         default_namespaces.insert(DEFAULT_NAMESPACE.to_string(), Namespace::default());
@@ -1286,6 +1255,24 @@ mod test {
                 vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
             ),
             ("(vec nil)", vector_with_values([].iter().cloned())),
+            ("(nth [1 2 3] 2)", Number(3)),
+            ("(nth '(1 2 3) 1)", Number(2)),
+            ("(first '(1 2 3))", Number(1)),
+            ("(first '())", Nil),
+            ("(first [1 2 3])", Number(1)),
+            ("(first [])", Nil),
+            ("(first nil)", Nil),
+            (
+                "(rest '(1 2 3))",
+                list_with_values([Number(2), Number(3)].iter().cloned()),
+            ),
+            ("(rest '())", List(PersistentList::new())),
+            (
+                "(rest [1 2 3])",
+                list_with_values([Number(2), Number(3)].iter().cloned()),
+            ),
+            ("(rest [])", List(PersistentList::new())),
+            ("(rest nil)", List(PersistentList::new())),
         ];
         run_eval_test(&test_cases);
     }
