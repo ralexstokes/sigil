@@ -442,8 +442,8 @@ impl Interpreter {
         &mut self,
         forms: PersistentList<Value>,
         params: &PersistentVector<Value>,
-        lambda_scopes: &mut Vec<Scope>,
     ) -> EvaluationResult<Value> {
+        let mut lambda_scopes = vec![];
         // level of lambda nesting
         let level = lambda_scopes.len();
         // build parameter index
@@ -466,7 +466,7 @@ impl Interpreter {
         lambda_scopes.push(parameters);
         let mut body = PersistentList::new();
         for form in forms.iter() {
-            let analyzed_form = self.analyze_form_in_lambda(form, lambda_scopes)?;
+            let analyzed_form = self.analyze_form_in_lambda(form, &mut lambda_scopes)?;
             body.push_front_mut(analyzed_form);
         }
         lambda_scopes.pop();
@@ -809,11 +809,8 @@ impl Interpreter {
                                             match params {
                                                 Value::Vector(params) => {
                                                     if let Some(body) = rest.drop_first() {
-                                                        let mut lambda_scopes = vec![];
                                                         return self.analyze_symbols_in_lambda(
-                                                            body,
-                                                            &params,
-                                                            &mut lambda_scopes,
+                                                            body, &params,
                                                         );
                                                     }
                                                 }
