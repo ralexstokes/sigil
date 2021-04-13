@@ -947,6 +947,108 @@ impl Interpreter {
                                     }
                                     return native_fn(self, &operands);
                                 }
+                                // (try* body (catch* e exc-body))
+                                Value::Symbol(s, None) if s == "try*" => {
+                                    if let Some(rest) = forms.drop_first() {
+                                        let catch_form = match rest.last() {
+                                            Some(Value::List(last_form)) => {
+                                                match last_form.first() {
+                                                    Some(Value::Symbol(s, None))
+                                                        if s == "catch*" =>
+                                                    {
+                                                        if let Some(catch_form) =
+                                                            last_form.drop_first()
+                                                        {
+                                                            if let Some(exception_symbol) =
+                                                                catch_form.first()
+                                                            {
+                                                                match exception_symbol {
+                                                                    s @ Value::Symbol(_, None) => {
+                                                                        if let Some(
+                                                                            exception_body,
+                                                                        ) =
+                                                                            catch_form.drop_first()
+                                                                        {
+                                                                            let mut exception_binding =
+                                                                        PersistentVector::new();
+                                                                            exception_binding
+                                                                                .push_back_mut(
+                                                                                    s.clone(),
+                                                                                );
+                                                                            let body = self.analyze_symbols_in_lambda(exception_body, &exception_binding)?;
+                                                                            Some(body)
+                                                                        } else {
+                                                                            None
+                                                                        }
+                                                                    }
+                                                                    _ => {
+                                                                        return Err(EvaluationError::List(
+                                                                ListEvaluationError::Failure(
+                                                                    "could not evaluate `catch*`"
+                                                                        .to_string(),
+                                                                ),
+                                                            ));
+                                                                    }
+                                                                }
+                                                            } else {
+                                                                None
+                                                            }
+                                                        } else {
+                                                            return Err(EvaluationError::List(
+                                                                ListEvaluationError::Failure(
+                                                                    "could not evaluate `catch*`"
+                                                                        .to_string(),
+                                                                ),
+                                                            ));
+                                                        }
+                                                    }
+                                                    _ => None,
+                                                }
+                                            }
+                                            _ => None,
+                                        };
+                                        let forms_to_eval = if catch_form.is_none() {
+                                            rest
+                                        } else {
+                                            let mut forms_to_eval = vec![];
+                                            for (index, form) in rest.iter().enumerate() {
+                                                if index == rest.len() - 1 {
+                                                    break;
+                                                }
+                                                forms_to_eval.push(form.clone());
+                                            }
+                                            PersistentList::from_iter(forms_to_eval)
+                                        };
+                                        let body = forms_to_eval
+                                            .push_front(Value::Symbol("do".to_string(), None));
+                                        match self.evaluate(&Value::List(body))? {
+                                            e @ Value::Exception(_) => {
+                                                if let Some(Value::Fn(Lambda {
+                                                    body, level, ..
+                                                })) = catch_form
+                                                {
+                                                    self.enter_scope();
+                                                    let parameter = lambda_parameter_key(0, level);
+                                                    self.insert_value_in_current_scope(
+                                                        &parameter, e,
+                                                    );
+                                                    let result =
+                                                        self.evaluate(&Value::List(body.clone()));
+                                                    self.leave_scope();
+                                                    return result;
+                                                } else {
+                                                    return Ok(e);
+                                                }
+                                            }
+                                            result @ _ => return Ok(result),
+                                        }
+                                    }
+                                    return Err(EvaluationError::List(
+                                        ListEvaluationError::Failure(
+                                            "could not evaluate `try*`".to_string(),
+                                        ),
+                                    ));
+                                }
                                 _ => match self.evaluate(operator_form)? {
                                     Value::Fn(Lambda { body, arity, level }) => {
                                         if let Some(rest) = forms.drop_first() {
@@ -1039,6 +1141,7 @@ impl Interpreter {
             Value::Recur(_) => unreachable!(),
             Value::Atom(_) => unreachable!(),
             Value::Macro(_) => unreachable!(),
+            Value::Exception(_) => unreachable!(),
         };
         Ok(result)
     }
@@ -1048,7 +1151,9 @@ impl Interpreter {
 mod test {
     use super::*;
     use crate::reader::read;
-    use crate::value::{atom_with_value, list_with_values, vector_with_values};
+    use crate::value::{
+        atom_with_value, exception, list_with_values, map_with_values, vector_with_values,
+    };
     use Value::*;
 
     fn run_eval_test(test_cases: &[(&str, Value)]) {
@@ -1286,7 +1391,10 @@ mod test {
             ),
             ("((fn* [a] ((fn* [b] (+ b 1)) a)) 1)", Number(2)),
             ("((fn* [] ((fn* [] ((fn* [] 13))))))", Number(13)),
-            ("(def! factorial (fn* [n] (if (< n 2) 1 (* n (factorial (- n 1)))))) (factorial 20)", Number(2432902008176640000)),
+            (
+                "(def! factorial (fn* [n] (if (< n 2) 1 (* n (factorial (- n 1)))))) (factorial 8)",
+                Number(40320),
+            ),
             ("(def! f (fn* [a] (+ a 1))) (f 23)", Number(24)),
             (
                 "(def! b 12) (def! f (fn* [a] (+ a b))) (def! b 22) (f 1)",
@@ -1415,6 +1523,66 @@ mod test {
                     .into_iter()
                     .nth(0)
                     .expect("some"),
+            ),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_basic_try_catch() {
+        let exc = exception(
+            "test",
+            &map_with_values(
+                [(
+                    Keyword("cause".to_string(), None),
+                    String("no memory".to_string()),
+                )]
+                .iter()
+                .cloned(),
+            ),
+        );
+        let test_cases = vec![
+            (
+                "(try* 22)",
+                read("22")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(try* (prn 222) 22)",
+                read("22")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(try* (ex-info \"test\" {:cause \"no memory\"}))",
+                exception(
+                    "test",
+                    &map_with_values(
+                        [(
+                            Keyword("cause".to_string(), None),
+                            String("no memory".to_string()),
+                        )]
+                        .iter()
+                        .cloned(),
+                    ),
+                ),
+            ),
+            (
+                "(try* (ex-info \"test\" {:cause \"no memory\"}) (catch* e e))",
+                exc,
+            ),
+            (
+                "(try* (ex-info \"test\" {:cause \"no memory\"}) (catch* e (str e)))",
+                String("<exception>".to_string()),
+            ),
+            (
+                "(try* (ex-info \"test\" {:cause \"no memory\"}) (catch* e nil))",
+                Nil,
             ),
         ];
         run_eval_test(&test_cases);

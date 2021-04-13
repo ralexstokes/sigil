@@ -56,6 +56,13 @@ pub fn atom_impl_into_inner(atom: &AtomImpl) -> Value {
     atom.borrow().clone()
 }
 
+pub fn exception(msg: &str, data: &Value) -> Value {
+    Value::Exception(ExceptionImpl {
+        message: msg.to_string(),
+        data: Box::new(data.clone()),
+    })
+}
+
 pub type NativeFn = fn(&mut Interpreter, &[Value]) -> Result<Value, EvaluationError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -74,6 +81,12 @@ pub struct VarImpl {
 }
 
 type AtomImpl = Rc<RefCell<Value>>;
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ExceptionImpl {
+    message: String,
+    data: Box<Value>,
+}
 
 #[derive(Clone)]
 pub enum Value {
@@ -95,6 +108,7 @@ pub enum Value {
     Recur(PersistentVector<Value>),
     Atom(AtomImpl),
     Macro(Lambda),
+    Exception(ExceptionImpl),
 }
 
 impl PartialEq for Value {
@@ -180,6 +194,10 @@ impl PartialEq for Value {
             },
             Macro(ref x) => match other {
                 Macro(ref y) => x == y,
+                _ => false,
+            },
+            Exception(ref x) => match other {
+                Exception(ref y) => x == y,
                 _ => false,
             },
         }
@@ -382,6 +400,26 @@ impl Ord for Value {
                 | Recur(_)
                 | Atom(_) => Ordering::Greater,
                 Macro(ref y) => x.cmp(y),
+                _ => Ordering::Less,
+            },
+            Exception(ref x) => match other {
+                Nil
+                | Bool(_)
+                | Number(_)
+                | String(_)
+                | Keyword(_, _)
+                | Symbol(_, _)
+                | List(_)
+                | Vector(_)
+                | Map(_)
+                | Set(_)
+                | Fn(_)
+                | Primitive(_)
+                | Var(_)
+                | Recur(_)
+                | Atom(_)
+                | Macro(_) => Ordering::Greater,
+                Exception(ref y) => x.cmp(y),
             },
         }
     }
@@ -437,6 +475,7 @@ impl Hash for Value {
                 (*v.borrow()).hash(state);
             }
             Macro(lambda) => lambda.hash(state),
+            Exception(e) => e.hash(state),
         }
     }
 }
@@ -485,6 +524,9 @@ impl fmt::Debug for Value {
             Recur(elems) => write!(f, "[{}]", join(elems, " ")),
             Atom(v) => write!(f, "(atom {})", *v.borrow()),
             Macro(_) => write!(f, "<macro>"),
+            Exception(ExceptionImpl { message, data }) => {
+                write!(f, "exception: {}, {}", message, data)
+            }
         }
     }
 }
@@ -541,6 +583,7 @@ impl Value {
             Recur(elems) => write!(&mut f, "[{}]", join(elems, " ")),
             Atom(v) => write!(&mut f, "(atom {})", *v.borrow()),
             Macro(_) => write!(&mut f, "<macro>"),
+            Exception(_) => write!(&mut f, "<exception>"),
         };
 
         f
