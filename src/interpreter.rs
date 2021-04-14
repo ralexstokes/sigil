@@ -1542,49 +1542,53 @@ mod test {
             ),
         );
         let test_cases = vec![
-            (
-                "(try* 22)",
-                read("22")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
-            ),
-            (
-                "(try* (prn 222) 22)",
-                read("22")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
-            ),
-            (
-                "(try* (ex-info \"test\" {:cause \"no memory\"}))",
-                exception(
-                    "test",
-                    &map_with_values(
-                        [(
-                            Keyword("cause".to_string(), None),
-                            String("no memory".to_string()),
-                        )]
-                        .iter()
-                        .cloned(),
+                    (
+                        "(try* 22)",
+                        read("22")
+                            .expect("example is correct")
+                            .into_iter()
+                            .nth(0)
+                            .expect("some"),
                     ),
-                ),
-            ),
-            (
-                "(try* (ex-info \"test\" {:cause \"no memory\"}) (catch* e e))",
-                exc,
-            ),
-            (
-                "(try* (ex-info \"test\" {:cause \"no memory\"}) (catch* e (str e)))",
-                String("<exception>".to_string()),
-            ),
-            (
-                "(try* (ex-info \"test\" {:cause \"no memory\"}) (catch* e nil))",
-                Nil,
-            ),
-        ];
+                    (
+                        "(try* (prn 222) 22)",
+                        read("22")
+                            .expect("example is correct")
+                            .into_iter()
+                            .nth(0)
+                            .expect("some"),
+                    ),
+                    (
+                        "(try* (ex-info \"test\" {:cause \"no memory\"}))",
+                        exception(
+                            "test",
+                            &map_with_values(
+                                [(
+                                    Keyword("cause".to_string(), None),
+                                    String("no memory".to_string()),
+                                )]
+                                .iter()
+                                .cloned(),
+                            ),
+                        ),
+                    ),
+                    (
+                        "(try* (ex-info \"test\" {:cause \"no memory\"}) (catch* e e))",
+                        exc,
+                    ),
+                    (
+                        "(try* (ex-info \"test\" {:cause \"no memory\"}) (catch* e (str e)))",
+                        String("<exception>".to_string()),
+                    ),
+                    (
+                        "(try* (ex-info \"test\" {:cause \"no memory\"}) (catch* e nil))",
+                        Nil,
+                    ),
+                    (
+                        "(try* (ex-info \"first\" {}) (ex-info \"test\" {:cause \"no memory\"}) (catch* e e))",
+                        exception("first", &Map(PersistentMap::new())),
+                    ),
+                ];
         run_eval_test(&test_cases);
     }
 }
