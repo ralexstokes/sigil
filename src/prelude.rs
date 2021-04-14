@@ -624,7 +624,6 @@ pub fn rest(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     match &args[0] {
         Value::List(elems) => {
             if let Some(rest) = elems.drop_first() {
-                dbg!(&rest);
                 Ok(Value::List(rest.clone()))
             } else {
                 Ok(Value::List(PersistentList::new()))
