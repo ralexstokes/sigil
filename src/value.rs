@@ -1,4 +1,4 @@
-use crate::interpreter::{EvaluationError, Interpreter};
+use crate::interpreter::{EvaluationResult, Interpreter};
 use itertools::{join, sorted};
 use rpds::{
     HashTrieMap as PersistentMap, HashTrieSet as PersistentSet, List as PersistentList,
@@ -63,7 +63,7 @@ pub fn exception(msg: &str, data: &Value) -> Value {
     })
 }
 
-pub type NativeFn = fn(&mut Interpreter, &[Value]) -> Result<Value, EvaluationError>;
+pub type NativeFn = fn(&mut Interpreter, &[Value]) -> EvaluationResult<Value>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Lambda {
