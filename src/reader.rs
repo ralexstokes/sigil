@@ -4,9 +4,8 @@ use combine::error::StreamError;
 use combine::parser;
 use combine::parser::{
     char::alpha_num, char::char, char::digit, char::space, choice::choice, choice::optional,
-    combinator::attempt, range::range, range::recognize, repeat::many, repeat::many1,
-    repeat::skip_many, repeat::skip_many1, repeat::skip_until, sequence::between, token::eof,
-    token::one_of,
+    combinator::attempt, range::recognize, repeat::many, repeat::many1, repeat::skip_many,
+    repeat::skip_many1, repeat::skip_until, sequence::between, token::eof, token::one_of,
 };
 use combine::stream::position::Stream;
 use combine::stream::StreamErrorFor;
@@ -35,9 +34,6 @@ parser! {
     fn read_form_inner['a, Input]()(Input) -> Value
     where [ Input: RangeStream<Token = char, Range = &'a str> + 'a]
     {
-        let nil = recognize(range("nil")).map(|_| Value::Nil);
-        let true_parser = recognize(range("true")).map(|_| Value::Bool(true));
-        let false_parser = recognize(range("false")).map(|_| Value::Bool(false));
         let number = optional(char('-')).and(recognize(skip_many1(digit()))).map(|(sign, digits): (Option<char>, &str)| {
             let value = digits.parse::<i64>().unwrap();
             let result = if sign.is_some() {
@@ -90,7 +86,34 @@ parser! {
             }
         });
 
-        let symbol = identifier_with_optional_namespace().map(|(id, ns)| Value::Symbol(id,ns));
+        let symbol = identifier_with_optional_namespace().and_then(|(id, ns)| {
+            match id.as_ref() {
+                "nil" => {
+                    if ns.is_none() {
+                        Ok(Value::Nil)
+                    } else {
+                        Err(StreamErrorFor::<Input>::expected_static_message("can only attach namespace to symbol"))
+                    }
+                }
+                "true" => {
+                    if ns.is_none() {
+                        Ok(Value::Bool(true))
+                    } else {
+                        Err(StreamErrorFor::<Input>::expected_static_message("can only attach namespace to symbol"))
+                    }
+                }
+                "false" => {
+                    if ns.is_none() {
+                        Ok(Value::Bool(false))
+                    } else {
+                        Err(StreamErrorFor::<Input>::expected_static_message("can only attach namespace to symbol"))
+                    }
+                }
+                _ => {
+                    Ok(Value::Symbol(id, ns))
+                }
+            }
+        });
         let keyword = (char(':'), identifier_with_optional_namespace()).map(|(_, (id, ns))| Value::Keyword(id, ns));
 
         let list = between(char('('), char(')'), many::<Vec<_>, _,_>(read_form())).map(list_with_values);
@@ -109,9 +132,6 @@ parser! {
         });
 
         choice((
-            nil,
-            true_parser,
-            false_parser,
             attempt(number),
             string,
             keyword,

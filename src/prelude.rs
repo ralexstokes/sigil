@@ -677,6 +677,103 @@ pub fn throw(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
+pub fn apply(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() < 2 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    let (last, prefix) = &args.split_last().expect("has enough elements");
+    let wrapped_prefix = list_with_values(prefix.iter().cloned());
+    let form = concat(interpreter, &[wrapped_prefix, (*last).clone()]).expect("can concat inputs");
+
+    interpreter.evaluate(&form)
+}
+
+pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 2 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    let f = match &args[0] {
+        f @ Value::Fn(_) | f @ Value::Primitive(_) => f,
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    };
+    let coll: Vec<_> = match &args[1] {
+        Value::List(elems) => elems.iter().collect(),
+        Value::Vector(elems) => elems.iter().collect(),
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    };
+    let mut results = vec![];
+    for elem in coll {
+        let mut body = PersistentList::new();
+        body.push_front_mut(elem.clone());
+        body.push_front_mut(f.clone());
+
+        let form = Value::List(body);
+        let result = interpreter.evaluate(&form)?;
+        results.push(result);
+    }
+    Ok(list_with_values(results.into_iter()))
+}
+
+pub fn is_nil(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::Nil => Ok(Value::Bool(true)),
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
+pub fn is_true(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::Bool(true) => Ok(Value::Bool(true)),
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
+pub fn is_false(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::Bool(false) => Ok(Value::Bool(true)),
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
+pub fn is_symbol(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::Symbol(..) => Ok(Value::Bool(true)),
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
 pub const SOURCE: &str = r#"
 (def! load-file (fn* [f] (eval (read-string (str "(do " (slurp f) " nil)")))))
 "#;
@@ -715,4 +812,10 @@ pub const BINDINGS: &[(&str, Value)] = &[
     ("rest", Value::Primitive(rest)),
     ("ex-info", Value::Primitive(ex_info)),
     ("throw", Value::Primitive(throw)),
+    ("apply", Value::Primitive(apply)),
+    ("map", Value::Primitive(map)),
+    ("nil?", Value::Primitive(is_nil)),
+    ("true?", Value::Primitive(is_true)),
+    ("false?", Value::Primitive(is_false)),
+    ("symbol?", Value::Primitive(is_symbol)),
 ];
