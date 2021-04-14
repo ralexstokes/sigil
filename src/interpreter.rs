@@ -1,8 +1,10 @@
 use crate::prelude;
 use crate::reader::{read, ReaderError};
 use crate::value::{
-    list_with_values, var_impl_into_inner, var_into_inner, var_with_value, Lambda, Value,
+    exception_is_thrown, list_with_values, var_impl_into_inner, var_into_inner, var_with_value,
+    Lambda, Value,
 };
+use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
 use rpds::{
     HashTrieMap as PersistentMap, HashTrieSet as PersistentSet, List as PersistentList,
@@ -794,7 +796,20 @@ impl Interpreter {
                                     if let Some(rest) = forms.drop_first() {
                                         return rest
                                             .iter()
-                                            .try_fold(Value::Nil, |_, next| self.evaluate(next));
+                                            .fold_while(Ok(Value::Nil), |_, next| {
+                                                match self.evaluate(next) {
+                                                    Ok(e @ Value::Exception(_)) => {
+                                                        if exception_is_thrown(&e) {
+                                                            Done(Ok(e))
+                                                        } else {
+                                                            Continue(Ok(e))
+                                                        }
+                                                    }
+                                                    e @ Err(_) => Done(e),
+                                                    value => Continue(value),
+                                                }
+                                            })
+                                            .into_inner();
                                     }
                                     return Err(EvaluationError::List(
                                         ListEvaluationError::Failure(

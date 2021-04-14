@@ -3,7 +3,8 @@ use crate::interpreter::{
 };
 use crate::reader::read;
 use crate::value::{
-    atom_impl_into_inner, atom_with_value, exception, list_with_values, vector_with_values, Value,
+    atom_impl_into_inner, atom_with_value, exception, exception_into_thrown, list_with_values,
+    vector_with_values, Value,
 };
 use itertools::join;
 use rpds::List as PersistentList;
@@ -661,6 +662,22 @@ pub fn ex_info(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
+pub fn throw(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        e @ Value::Exception(_) => Ok(exception_into_thrown(e)),
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    }
+}
+
 pub const SOURCE: &str = r#"
 (def! load-file (fn* [f] (eval (read-string (str "(do " (slurp f) " nil)")))))
 "#;
@@ -698,4 +715,5 @@ pub const BINDINGS: &[(&str, Value)] = &[
     ("first", Value::Primitive(first)),
     ("rest", Value::Primitive(rest)),
     ("ex-info", Value::Primitive(ex_info)),
+    ("throw", Value::Primitive(throw)),
 ];

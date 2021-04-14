@@ -60,7 +60,25 @@ pub fn exception(msg: &str, data: &Value) -> Value {
     Value::Exception(ExceptionImpl {
         message: msg.to_string(),
         data: Box::new(data.clone()),
+        thrown: false,
     })
+}
+
+pub fn exception_into_thrown(exception: &Value) -> Value {
+    match exception {
+        Value::Exception(e @ ExceptionImpl { .. }) => Value::Exception(ExceptionImpl {
+            thrown: true,
+            ..e.clone()
+        }),
+        _ => unreachable!("programmer error to call with value other than exception"),
+    }
+}
+
+pub fn exception_is_thrown(exception: &Value) -> bool {
+    match exception {
+        Value::Exception(ExceptionImpl { thrown, .. }) => *thrown,
+        _ => unreachable!("programmer error to call with value other than exception"),
+    }
 }
 
 pub type NativeFn = fn(&mut Interpreter, &[Value]) -> EvaluationResult<Value>;
@@ -86,6 +104,10 @@ type AtomImpl = Rc<RefCell<Value>>;
 pub struct ExceptionImpl {
     message: String,
     data: Box<Value>,
+    // indicates if this exception has been thrown or not
+    // exceptions can be created but only influence control flow
+    // if "thrown"
+    thrown: bool,
 }
 
 #[derive(Clone)]
@@ -524,7 +546,7 @@ impl fmt::Debug for Value {
             Recur(elems) => write!(f, "[{}]", join(elems, " ")),
             Atom(v) => write!(f, "(atom {})", *v.borrow()),
             Macro(_) => write!(f, "<macro>"),
-            Exception(ExceptionImpl { message, data }) => {
+            Exception(ExceptionImpl { message, data, .. }) => {
                 write!(f, "exception: {}, {}", message, data)
             }
         }
@@ -583,7 +605,9 @@ impl Value {
             Recur(elems) => write!(&mut f, "[{}]", join(elems, " ")),
             Atom(v) => write!(&mut f, "(atom {})", *v.borrow()),
             Macro(_) => write!(&mut f, "<macro>"),
-            Exception(_) => write!(&mut f, "<exception>"),
+            Exception(ExceptionImpl { message, data, .. }) => {
+                write!(&mut f, "exception: {}, {}", message, data)
+            }
         };
 
         f
