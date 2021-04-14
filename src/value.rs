@@ -74,6 +74,16 @@ pub fn exception_into_thrown(exception: &Value) -> Value {
     }
 }
 
+pub fn exception_from_thrown(exception: &Value) -> Value {
+    match exception {
+        Value::Exception(e @ ExceptionImpl { .. }) => Value::Exception(ExceptionImpl {
+            thrown: false,
+            ..e.clone()
+        }),
+        _ => unreachable!("programmer error to call with value other than exception"),
+    }
+}
+
 pub fn exception_is_thrown(exception: &Value) -> bool {
     match exception {
         Value::Exception(ExceptionImpl { thrown, .. }) => *thrown,
@@ -100,7 +110,7 @@ pub struct VarImpl {
 
 type AtomImpl = Rc<RefCell<Value>>;
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Eq, PartialOrd, Ord, Hash)]
 pub struct ExceptionImpl {
     message: String,
     data: Box<Value>,
@@ -108,6 +118,12 @@ pub struct ExceptionImpl {
     // exceptions can be created but only influence control flow
     // if "thrown"
     thrown: bool,
+}
+
+impl PartialEq for ExceptionImpl {
+    fn eq(&self, other: &Self) -> bool {
+        (&self.message, &self.data) == (&other.message, &other.data)
+    }
 }
 
 #[derive(Clone)]

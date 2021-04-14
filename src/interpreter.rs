@@ -1,8 +1,8 @@
 use crate::prelude;
 use crate::reader::{read, ReaderError};
 use crate::value::{
-    exception_is_thrown, list_with_values, var_impl_into_inner, var_into_inner, var_with_value,
-    Lambda, Value,
+    exception_from_thrown, exception_is_thrown, list_with_values, var_impl_into_inner,
+    var_into_inner, var_with_value, Lambda, Value,
 };
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
@@ -466,14 +466,14 @@ impl Interpreter {
         }
         // walk the `forms`, resolving symbols where possible...
         lambda_scopes.push(parameters);
-        let mut body = PersistentList::new();
+        let mut body = vec![Value::Symbol("do".to_string(), None)];
         for form in forms.iter() {
             let analyzed_form = self.analyze_form_in_lambda(form, &mut lambda_scopes)?;
-            body.push_front_mut(analyzed_form);
+            body.push(analyzed_form);
         }
         lambda_scopes.pop();
         return Ok(Value::Fn(Lambda {
-            body: body.push_front(Value::Symbol("do".to_string(), None)),
+            body: body.into_iter().collect(),
             arity: params.len(),
             level,
         }));
@@ -1037,7 +1037,7 @@ impl Interpreter {
                                         let body = forms_to_eval
                                             .push_front(Value::Symbol("do".to_string(), None));
                                         match self.evaluate(&Value::List(body))? {
-                                            e @ Value::Exception(_) => {
+                                            e @ Value::Exception(_) if exception_is_thrown(&e) => {
                                                 if let Some(Value::Fn(Lambda {
                                                     body, level, ..
                                                 })) = catch_form
@@ -1045,7 +1045,8 @@ impl Interpreter {
                                                     self.enter_scope();
                                                     let parameter = lambda_parameter_key(0, level);
                                                     self.insert_value_in_current_scope(
-                                                        &parameter, e,
+                                                        &parameter,
+                                                        exception_from_thrown(&e),
                                                     );
                                                     let result =
                                                         self.evaluate(&Value::List(body.clone()));
@@ -1055,7 +1056,7 @@ impl Interpreter {
                                                     return Ok(e);
                                                 }
                                             }
-                                            result @ _ => return Ok(result),
+                                            result => return Ok(result),
                                         }
                                     }
                                     return Err(EvaluationError::List(
@@ -1398,6 +1399,7 @@ mod test {
     fn test_basic_fn() {
         let test_cases = vec![
             ("((fn* [a] (+ a 1)) 23)", Number(24)),
+            ("((fn* [a] (+ a 1) 25) 23)", Number(25)),
             ("((fn* [a] (let* [b 2] (+ a b))) 23)", Number(25)),
             ("((fn* [a] (let* [a 2] (+ a a))) 23)", Number(4)),
             (
@@ -1557,53 +1559,62 @@ mod test {
             ),
         );
         let test_cases = vec![
-                    (
-                        "(try* 22)",
-                        read("22")
-                            .expect("example is correct")
-                            .into_iter()
-                            .nth(0)
-                            .expect("some"),
+            (
+                "(try* 22)",
+                Number(22),
+            ),
+            (
+                "(try* (prn 222) 22)",
+                Number(22),
+            ),
+            (
+                "(try* (ex-info \"test\" {:cause \"no memory\"}))",
+                exc.clone(),
+            ),
+            (
+                "(try* (ex-info \"test\" {:cause \"no memory\"}) (catch* e 0))",
+                exc,
+            ),
+            (
+                "(try* (throw (ex-info \"test\" {:cause \"no memory\"})) (catch* e (str e)))",
+                String("exception: test, {:cause \"no memory\"}".to_string()),
+            ),
+            (
+                "(try* (throw (ex-info \"test\" {:cause \"no memory\"})) (catch* e 999))",
+                Number(999),
+            ),
+            (
+                // must throw exception to change control flow
+                "(try* (ex-info \"first\" {}) (ex-info \"test\" {:cause \"no memory\"}) 22 (catch* e e))",
+                Number(22),
+            ),
+            (
+                // must throw exception to change control flow
+                "(try* (ex-info \"first\" {}) (ex-info \"test\" {:cause \"no memory\"}) (catch* e 22))",
+                exception(
+                    "test",
+                    &map_with_values(
+                        [(
+                            Keyword("cause".to_string(), None),
+                            String("no memory".to_string()),
+                        )]
+                        .iter()
+                        .cloned(),
                     ),
-                    (
-                        "(try* (prn 222) 22)",
-                        read("22")
-                            .expect("example is correct")
-                            .into_iter()
-                            .nth(0)
-                            .expect("some"),
-                    ),
-                    (
-                        "(try* (ex-info \"test\" {:cause \"no memory\"}))",
-                        exception(
-                            "test",
-                            &map_with_values(
-                                [(
-                                    Keyword("cause".to_string(), None),
-                                    String("no memory".to_string()),
-                                )]
-                                .iter()
-                                .cloned(),
-                            ),
-                        ),
-                    ),
-                    (
-                        "(try* (ex-info \"test\" {:cause \"no memory\"}) (catch* e e))",
-                        exc,
-                    ),
-                    (
-                        "(try* (ex-info \"test\" {:cause \"no memory\"}) (catch* e (str e)))",
-                        String("<exception>".to_string()),
-                    ),
-                    (
-                        "(try* (ex-info \"test\" {:cause \"no memory\"}) (catch* e nil))",
-                        Nil,
-                    ),
-                    (
-                        "(try* (ex-info \"first\" {}) (ex-info \"test\" {:cause \"no memory\"}) (catch* e e))",
-                        exception("first", &Map(PersistentMap::new())),
-                    ),
-                ];
+                ),
+            ),
+            (
+                "(try* (throw (ex-info \"first\" {})) (ex-info \"test\" {:cause \"no memory\"}) (catch* e e))",
+                exception(
+                    "first",
+                    &Map(PersistentMap::new()),
+                ),
+            ),
+            (
+                "(try* (throw (ex-info \"first\" {})) (ex-info \"test\" {:cause \"no memory\"}) (catch* e (prn e) 22))",
+                Number(22),
+            ),
+        ];
         run_eval_test(&test_cases);
     }
 }
