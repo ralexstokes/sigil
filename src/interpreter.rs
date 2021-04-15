@@ -1422,6 +1422,101 @@ mod test {
             ("(symbol? true)", Bool(false)),
             ("(symbol? nil)", Bool(false)),
             ("(symbol? [1 2 3])", Bool(false)),
+            ("(symbol \"hi\")", Symbol("hi".to_string(), None)),
+            ("(keyword \"hi\")", Keyword("hi".to_string(), None)),
+            ("(keyword? :a)", Bool(true)),
+            ("(keyword? false)", Bool(false)),
+            ("(vector)", Vector(PersistentVector::new())),
+            (
+                "(vector 1)",
+                vector_with_values([Number(1)].iter().cloned()),
+            ),
+            (
+                "(vector 1 2 3)",
+                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            ("(vector? [1 2])", Bool(true)),
+            ("(vector? :hi)", Bool(false)),
+            ("(sequential? '(1 2))", Bool(true)),
+            ("(sequential? [1 2])", Bool(true)),
+            ("(sequential? :hi)", Bool(false)),
+            ("(hash-map)", Map(PersistentMap::new())),
+            (
+                "(hash-map :a 2)",
+                map_with_values(
+                    [(Keyword("a".to_string(), None), Number(2))]
+                        .iter()
+                        .cloned(),
+                ),
+            ),
+            ("(map? {:a 1 :b 2})", Bool(true)),
+            ("(map? [1 2])", Bool(false)),
+            (
+                "(assoc {} :a 1)",
+                map_with_values(
+                    [(Keyword("a".to_string(), None), Number(1))]
+                        .iter()
+                        .cloned(),
+                ),
+            ),
+            (
+                "(assoc {} :a 1 :b 3)",
+                map_with_values(
+                    [
+                        (Keyword("a".to_string(), None), Number(1)),
+                        (Keyword("b".to_string(), None), Number(3)),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
+            (
+                "(assoc {:a 1} :b 3)",
+                map_with_values(
+                    [
+                        (Keyword("a".to_string(), None), Number(1)),
+                        (Keyword("b".to_string(), None), Number(3)),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
+            ("(dissoc {})", map_with_values([].iter().cloned())),
+            ("(dissoc {} :a)", map_with_values([].iter().cloned())),
+            (
+                "(dissoc {:a 1 :b 3} :a)",
+                map_with_values(
+                    [(Keyword("b".to_string(), None), Number(3))]
+                        .iter()
+                        .cloned(),
+                ),
+            ),
+            (
+                "(dissoc {:a 1 :b 3} :a :b :c)",
+                map_with_values([].iter().cloned()),
+            ),
+            ("(get {:a 1} :a)", Number(1)),
+            ("(get {:a 1} :b)", Nil),
+            ("(contains? {:a 1} :b)", Bool(false)),
+            ("(contains? {:a 1} :a)", Bool(true)),
+            ("(keys {})", list_with_values([].iter().cloned())),
+            // (
+            //     "(keys {:a 1 :b 2 :c 3})",
+            //     list_with_values(
+            //         [
+            //             Keyword("a".to_string(), None),
+            //             Keyword("b".to_string(), None),
+            //             Keyword("c".to_string(), None),
+            //         ]
+            //         .iter()
+            //         .cloned(),
+            //     ),
+            // ),
+            ("(vals {})", list_with_values([].iter().cloned())),
+            // (
+            //     "(vals {:a 1 :b 2 :c 3})",
+            //     list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            // ),
         ];
         run_eval_test(&test_cases);
     }
