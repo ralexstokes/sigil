@@ -1011,11 +1011,10 @@ pub fn last(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 }
 
 pub const SOURCE: &str = r#"
-(def! load-file (fn* [f] (eval (read-string (str "(do " (slurp f) " nil)")))))
-
 (defmacro! defn (fn* [fn-name fn-args & body] `(def! ~fn-name (fn* ~fn-args ~@body))))
 (defmacro! let (fn* [bindings & body] `(let* ~bindings ~@body)))
 
+(defn load-file [f] (eval (read-string (str "(do " (slurp f) " nil)"))))
 (defn inc [x] (+ x 1))
 (defn dec [x] (- x 1))
 (defn not [x] (if x false true))
