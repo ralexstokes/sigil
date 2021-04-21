@@ -1014,6 +1014,8 @@ pub const SOURCE: &str = r#"
 (defmacro! defn (fn* [fn-name fn-args & body] `(def! ~fn-name (fn* ~fn-args ~@body))))
 (defmacro! let (fn* [bindings & body] `(let* ~bindings ~@body)))
 
+(defmacro! cond (fn* [& xs] (if (> (count xs) 0) (list 'if (first xs) (if (> (count xs) 1) (nth xs 1) (throw "odd number of forms to cond")) (cons 'cond (rest (rest xs)))))))
+
 (defn load-file [f] (eval (read-string (str "(do " (slurp f) " nil)"))))
 (defn inc [x] (+ x 1))
 (defn dec [x] (- x 1))
