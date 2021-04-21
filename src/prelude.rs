@@ -1012,6 +1012,9 @@ pub fn last(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 
 pub const SOURCE: &str = r#"
 (def! load-file (fn* [f] (eval (read-string (str "(do " (slurp f) " nil)")))))
+(defmacro! defn (fn* [fn-name fn-args & body] `(def! ~fn-name (fn* ~fn-args ~@body))))
+(defn inc [x] (+ x 1))
+(defn dec [x] (- x 1))
 "#;
 
 pub const BINDINGS: &[(&str, Value)] = &[
