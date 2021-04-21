@@ -581,7 +581,6 @@ impl Interpreter {
         variadic: bool,
         args: &PersistentList<Value>,
     ) -> EvaluationResult<Value> {
-        self.enter_scope();
         let correct_arity = if variadic {
             args.len() >= arity
         } else {
@@ -592,6 +591,7 @@ impl Interpreter {
                 "could not apply `fn*`: incorrect arity".to_string(),
             )));
         }
+        self.enter_scope();
         let mut iter = args.iter().enumerate();
         if arity > 0 {
             while let Some((index, operand_form)) = iter.next() {
