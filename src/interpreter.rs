@@ -1589,6 +1589,10 @@ mod test {
             ("(last [1 2 3])", Number(3)),
             ("(last '())", Nil),
             ("(last [])", Nil),
+            ("(not [])", Bool(false)),
+            ("(not nil)", Bool(true)),
+            ("(not false)", Bool(true)),
+            ("(not 1)", Bool(false)),
         ];
         run_eval_test(&test_cases);
     }

@@ -1018,6 +1018,7 @@ pub const SOURCE: &str = r#"
 
 (defn inc [x] (+ x 1))
 (defn dec [x] (- x 1))
+(defn not [x] (if x false true))
 "#;
 
 pub const BINDINGS: &[(&str, Value)] = &[
