@@ -980,6 +980,36 @@ pub fn to_vals(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
+pub fn last(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::List(elems) => {
+            if let Some(elem) = elems.last() {
+                Ok(elem.clone())
+            } else {
+                Ok(Value::Nil)
+            }
+        }
+        Value::Vector(elems) => {
+            if let Some(elem) = elems.last() {
+                Ok(elem.clone())
+            } else {
+                Ok(Value::Nil)
+            }
+        }
+        Value::Nil => Ok(Value::Nil),
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    }
+}
+
 pub const SOURCE: &str = r#"
 (def! load-file (fn* [f] (eval (read-string (str "(do " (slurp f) " nil)")))))
 "#;
@@ -1038,4 +1068,5 @@ pub const BINDINGS: &[(&str, Value)] = &[
     ("contains?", Value::Primitive(does_contain)),
     ("keys", Value::Primitive(to_keys)),
     ("vals", Value::Primitive(to_vals)),
+    ("last", Value::Primitive(last)),
 ];

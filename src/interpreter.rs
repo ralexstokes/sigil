@@ -1566,6 +1566,10 @@ mod test {
             //     "(vals {:a 1 :b 2 :c 3})",
             //     list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
             // ),
+            ("(last '(1 2 3))", Number(3)),
+            ("(last [1 2 3])", Number(3)),
+            ("(last '())", Nil),
+            ("(last [])", Nil),
         ];
         run_eval_test(&test_cases);
     }
