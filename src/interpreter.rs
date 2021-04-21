@@ -886,7 +886,7 @@ impl Interpreter {
                                                                 }
                                                             }
                                                         }
-                                                        _ => {}
+                                                        _ => return self.evaluate(consequent_form),
                                                     }
                                                 }
                                             }
