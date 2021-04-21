@@ -521,38 +521,57 @@ impl Interpreter {
                         Value::Symbol(identifier, ns_opt) => {
                             // bail early on special forms
                             match self.resolve_symbol(identifier, ns_opt.as_ref()) {
-                                Ok(Value::Macro(Lambda { body, arity, level })) => {
-                                    if let Some(rest) = forms.drop_first() {
-                                        if rest.len() == arity {
-                                            self.enter_scope();
-                                            for (index, operand_form) in rest.iter().enumerate() {
-                                                match self.evaluate(operand_form) {
-                                                    Ok(operand) => {
-                                                        let parameter =
-                                                            lambda_parameter_key(index, level);
-                                                        self.insert_value_in_current_scope(
-                                                            &parameter, operand,
-                                                        );
-                                                    }
-                                                    Err(e) => {
-                                                        self.leave_scope();
-                                                        let mut error =
-                                                            String::from("could not apply macro: ");
-                                                        error += &e.to_string();
-                                                        return Err(EvaluationError::List(
-                                                            ListEvaluationError::Failure(error),
-                                                        ));
-                                                    }
+                                Ok(Value::Macro(Lambda {
+                                    body,
+                                    arity,
+                                    level,
+                                    variadic,
+                                })) => {
+                                    if let Some(args) = forms.drop_first() {
+                                        let correct_arity = if variadic {
+                                            args.len() >= arity
+                                        } else {
+                                            args.len() == arity
+                                        };
+                                        if !correct_arity {
+                                            return Err(EvaluationError::List(
+                                                ListEvaluationError::Failure(
+                                                    "could not apply macro: incorrect arity"
+                                                        .to_string(),
+                                                ),
+                                            ));
+                                        }
+                                        self.enter_scope();
+                                        let mut iter = args.iter().enumerate();
+                                        if arity > 0 {
+                                            while let Some((index, operand_form)) = iter.next() {
+                                                let parameter = lambda_parameter_key(index, level);
+                                                self.insert_value_in_current_scope(
+                                                    &parameter,
+                                                    operand_form.clone(),
+                                                );
+                                                if index == arity - 1 {
+                                                    break;
                                                 }
                                             }
-                                            let result = self.evaluate(&Value::List(body.clone()));
-                                            self.leave_scope();
-                                            match result? {
-                                                forms @ Value::List(_) => {
-                                                    return self.macroexpand(&forms);
-                                                }
-                                                result @ _ => return Ok(result),
+                                        }
+                                        if variadic {
+                                            let mut variadic_args = vec![];
+                                            while let Some((_, elem)) = iter.next() {
+                                                variadic_args.push(elem.clone());
                                             }
+                                            let operand =
+                                                Value::List(variadic_args.into_iter().collect());
+                                            let parameter = lambda_parameter_key(arity, level);
+                                            self.insert_value_in_current_scope(&parameter, operand);
+                                        }
+                                        let result = self.evaluate(&Value::List(body.clone()));
+                                        self.leave_scope();
+                                        match result? {
+                                            forms @ Value::List(_) => {
+                                                return self.macroexpand(&forms);
+                                            }
+                                            result @ _ => return Ok(result),
                                         }
                                     }
                                     return Err(EvaluationError::List(
