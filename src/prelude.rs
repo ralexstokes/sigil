@@ -1011,10 +1011,11 @@ pub fn last(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 }
 
 pub const SOURCE: &str = r#"
-(defmacro! defn (fn* [fn-name fn-args & body] `(def! ~fn-name (fn* ~fn-args ~@body))))
-(defmacro! let (fn* [bindings & body] `(let* ~bindings ~@body)))
+(defmacro! defmacro (fn* [macro-name macro-args & body] `(defmacro! ~macro-name (fn* ~macro-args ~@body))))
+(defmacro defn [fn-name fn-args & body] `(def! ~fn-name (fn* ~fn-args ~@body)))
+(defmacro let [bindings & body] `(let* ~bindings ~@body))
 
-(defmacro! cond (fn* [& xs] (if (> (count xs) 0) (list 'if (first xs) (if (> (count xs) 1) (nth xs 1) (throw "odd number of forms to cond")) (cons 'cond (rest (rest xs)))))))
+(defmacro cond [& xs] (if (> (count xs) 0) (list 'if (first xs) (if (> (count xs) 1) (nth xs 1) (throw "odd number of forms to cond")) (cons 'cond (rest (rest xs))))))
 
 (defn load-file [f] (eval (read-string (str "(do " (slurp f) " nil)"))))
 (defn inc [x] (+ x 1))
