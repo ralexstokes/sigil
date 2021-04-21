@@ -449,8 +449,36 @@ impl Interpreter {
         // level of lambda nesting
         let level = lambda_scopes.len();
         // build parameter index
+        let mut variadic = false;
         let mut parameters = Scope::new();
-        for (index, param) in params.iter().enumerate() {
+        let param_count = params.len();
+        let mut iter = params.iter().enumerate();
+        while let Some((index, param)) = iter.next() {
+            if param_count >= 2 && index == param_count - 2 {
+                match param {
+                    Value::Symbol(s, None) if s == "&" => {
+                        if let Some((index, last_symbol)) = iter.next() {
+                            match last_symbol {
+                                Value::Symbol(s, None) => {
+                                    variadic = true;
+                                    let parameter = lambda_parameter_key(index - 1, level);
+                                    parameters
+                                        .insert(s.to_string(), Value::Symbol(parameter, None));
+                                    break;
+                                }
+                                _ => {
+                                    return Err(EvaluationError::List(ListEvaluationError::Failure("could not evaluate `fn*`: variadic binding must be a symbol".to_string())));
+                                }
+                            }
+                        }
+                        return Err(EvaluationError::List(ListEvaluationError::Failure(
+                            "could not evaluate `fn*`: variadic binding missing after `&`"
+                                .to_string(),
+                        )));
+                    }
+                    _ => {}
+                }
+            }
             match param {
                 Value::Symbol(s, None) => {
                     let parameter = lambda_parameter_key(index, level);
@@ -464,6 +492,11 @@ impl Interpreter {
                 }
             }
         }
+        let arity = if variadic {
+            parameters.len() - 1
+        } else {
+            parameters.len()
+        };
         // walk the `forms`, resolving symbols where possible...
         lambda_scopes.push(parameters);
         let mut body = vec![Value::Symbol("do".to_string(), None)];
@@ -474,8 +507,9 @@ impl Interpreter {
         lambda_scopes.pop();
         return Ok(Value::Fn(Lambda {
             body: body.into_iter().collect(),
-            arity: params.len(),
+            arity,
             level,
+            variadic,
         }));
     }
 
@@ -537,6 +571,60 @@ impl Interpreter {
             _ => {}
         }
         Ok(value.clone())
+    }
+
+    fn apply_lambda(
+        &mut self,
+        body: &PersistentList<Value>,
+        arity: usize,
+        level: usize,
+        variadic: bool,
+        args: &PersistentList<Value>,
+    ) -> EvaluationResult<Value> {
+        self.enter_scope();
+        let correct_arity = if variadic {
+            args.len() >= arity
+        } else {
+            args.len() == arity
+        };
+        if !correct_arity {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "could not apply `fn*`: incorrect arity".to_string(),
+            )));
+        }
+        let mut iter = args.iter().enumerate();
+        if arity > 0 {
+            while let Some((index, operand_form)) = iter.next() {
+                match self.evaluate(operand_form) {
+                    Ok(operand) => {
+                        let parameter = lambda_parameter_key(index, level);
+                        self.insert_value_in_current_scope(&parameter, operand);
+                    }
+                    Err(e) => {
+                        self.leave_scope();
+                        let mut error = String::from("could not apply `fn*`: ");
+                        error += &e.to_string();
+                        return Err(EvaluationError::List(ListEvaluationError::Failure(error)));
+                    }
+                }
+                if index == arity - 1 {
+                    break;
+                }
+            }
+        }
+        if variadic {
+            let mut variadic_args = vec![];
+            while let Some((_, elem)) = iter.next() {
+                let elem = self.evaluate(elem)?;
+                variadic_args.push(elem);
+            }
+            let operand = Value::List(variadic_args.into_iter().collect());
+            let parameter = lambda_parameter_key(arity, level);
+            self.insert_value_in_current_scope(&parameter, operand);
+        }
+        let result = self.evaluate(&Value::List(body.clone()));
+        self.leave_scope();
+        return result;
     }
 
     pub fn evaluate(&mut self, form: &Value) -> EvaluationResult<Value> {
@@ -917,34 +1005,15 @@ impl Interpreter {
                                     ));
                                 }
                                 // apply phase when operator is already evaluated:
-                                Value::Fn(Lambda { body, arity, level }) => {
+                                Value::Fn(Lambda {
+                                    body,
+                                    arity,
+                                    level,
+                                    variadic,
+                                }) => {
                                     if let Some(rest) = forms.drop_first() {
-                                        if rest.len() == *arity {
-                                            self.enter_scope();
-                                            for (index, operand_form) in rest.iter().enumerate() {
-                                                match self.evaluate(operand_form) {
-                                                    Ok(operand) => {
-                                                        let parameter =
-                                                            lambda_parameter_key(index, *level);
-                                                        self.insert_value_in_current_scope(
-                                                            &parameter, operand,
-                                                        );
-                                                    }
-                                                    Err(e) => {
-                                                        self.leave_scope();
-                                                        let mut error =
-                                                            String::from("could not apply `fn*`: ");
-                                                        error += &e.to_string();
-                                                        return Err(EvaluationError::List(
-                                                            ListEvaluationError::Failure(error),
-                                                        ));
-                                                    }
-                                                }
-                                            }
-                                            let result = self.evaluate(&Value::List(body.clone()));
-                                            self.leave_scope();
-                                            return result;
-                                        }
+                                        return self
+                                            .apply_lambda(body, *arity, *level, *variadic, &rest);
                                     }
                                     return Err(EvaluationError::List(
                                         ListEvaluationError::Failure(
@@ -1066,36 +1135,16 @@ impl Interpreter {
                                     ));
                                 }
                                 _ => match self.evaluate(operator_form)? {
-                                    Value::Fn(Lambda { body, arity, level }) => {
+                                    Value::Fn(Lambda {
+                                        body,
+                                        arity,
+                                        level,
+                                        variadic,
+                                    }) => {
                                         if let Some(rest) = forms.drop_first() {
-                                            if rest.len() == arity {
-                                                self.enter_scope();
-                                                for (index, operand_form) in rest.iter().enumerate()
-                                                {
-                                                    match self.evaluate(operand_form) {
-                                                        Ok(operand) => {
-                                                            let parameter =
-                                                                lambda_parameter_key(index, level);
-                                                            self.insert_value_in_current_scope(
-                                                                &parameter, operand,
-                                                            );
-                                                        }
-                                                        Err(e) => {
-                                                            self.leave_scope();
-                                                            let mut error = String::from(
-                                                                "could not apply `fn*`: ",
-                                                            );
-                                                            error += &e.to_string();
-                                                            return Err(EvaluationError::List(
-                                                                ListEvaluationError::Failure(error),
-                                                            ));
-                                                        }
-                                                    }
-                                                }
-                                                let result = self.evaluate(&Value::List(body));
-                                                self.leave_scope();
-                                                return result;
-                                            }
+                                            return self.apply_lambda(
+                                                &body, arity, level, variadic, &rest,
+                                            );
                                         }
                                         return Err(EvaluationError::List(
                                             ListEvaluationError::Failure(
@@ -1739,6 +1788,30 @@ mod test {
             (
                 "(try* (throw (ex-info \"first\" {})) (ex-info \"test\" {:cause \"no memory\"}) (catch* e (prn e) 22))",
                 Number(22),
+            ),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_basic_var_args() {
+        let test_cases = vec![
+            ("((fn* [& rest] (first rest)))", Nil),
+            ("((fn* [& rest] (first rest)) 5)", Number(5)),
+            ("((fn* [& rest] (first rest)) 5 6 7)", Number(5)),
+            ("((fn* [& rest] (last rest)) 5 6 7)", Number(7)),
+            ("((fn* [& rest] (nth rest 1)) 5 6 7)", Number(6)),
+            ("((fn* [& rest] (count rest)))", Number(0)),
+            ("((fn* [& rest] (count rest)) 1 2 3)", Number(3)),
+            ("((fn* [a & rest] (count rest)) 1 2 3)", Number(2)),
+            ("((fn* [a b & rest] (apply + a b rest)) 1 2 3)", Number(6)),
+            (
+                "(def! f (fn* [a & rest] (count rest))) (f 1 2 3)",
+                Number(2),
+            ),
+            (
+                "(def! f (fn* [a b & rest] (apply + a b rest))) (f 1 2 3 4)",
+                Number(10),
             ),
         ];
         run_eval_test(&test_cases);

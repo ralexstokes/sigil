@@ -46,7 +46,7 @@ parser! {
 
         let string =
             (char('"'), recognize(skip_until(char('"'))), char('"')).map(|(_, s, _): (_, &str, _)| Value::String(s.to_string()));
-        let identifier_tokens = || alpha_num().or(one_of("*+!-_'?<>=/".chars()));
+        let identifier_tokens = || alpha_num().or(one_of("*+!-_'?<>=/&".chars()));
         let identifier = || many1(identifier_tokens());
         let identifier_with_optional_namespace = || identifier().and_then(|id_with_maybe_ns: StdString| {
             let partitions = id_with_maybe_ns.split(|c| c == '/').collect::<Vec<&str>>();

@@ -99,6 +99,7 @@ pub struct Lambda {
     pub arity: usize,
     // allow for nested fns
     pub level: usize,
+    pub variadic: bool,
 }
 
 #[derive(Clone)]
