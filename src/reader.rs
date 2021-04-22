@@ -62,14 +62,12 @@ parser! {
                         } else {
                             Err(StreamErrorFor::<Input>::expected_static_message("unexpected / in symbol"))
                         }
-                    } else {
-                        if id.is_empty() {
+                    } else if id.is_empty() {
                             Err(StreamErrorFor::<Input>::expected_static_message("unexpected / in symbol"))
                         } else {
                             // identifier with namespace
                             Ok((id.to_string(), Some(ns.to_string())))
                         }
-                    }
                 }
                 3 => {
                     let ns = &partitions[0];
@@ -120,9 +118,9 @@ parser! {
         let vector = between(char('['), char(']'), many::<Vec<_>, _,_>(read_form())).map(vector_with_values);
         let map = between(char('{'), char('}'), many::<Vec<_>, _, _>((read_form(), read_form()))).map(map_with_values);
         let set = (char('#'), between(char('{'), char('}'), many::<Vec<_>, _, _>(read_form()))).map(|(_, elems)| set_with_values(elems));
-        let deref = char('@').with(read_form()).map(|form| list_with_values([Value::Symbol("deref".to_string(), None), form].iter().map(|f| f.clone())));
-        let quote = char('\'').with(read_form()).map(|form| list_with_values([Value::Symbol("quote".to_string(), None), form].iter().map(|f| f.clone())));
-        let quasiquote = char('`').with(read_form()).map(|form| list_with_values([Value::Symbol("quasiquote".to_string(), None), form].iter().map(|f| f.clone())));
+        let deref = char('@').with(read_form()).map(|form| list_with_values([Value::Symbol("deref".to_string(), None), form].iter().cloned()));
+        let quote = char('\'').with(read_form()).map(|form| list_with_values([Value::Symbol("quote".to_string(), None), form].iter().cloned()));
+        let quasiquote = char('`').with(read_form()).map(|form| list_with_values([Value::Symbol("quasiquote".to_string(), None), form].iter().cloned()));
         let unquote_with_optional_splice = (char('~'), optional(char('@')), read_form()).map(|(_, splice_opt, form)| {
             if splice_opt.is_some() {
                 list_with_values([Value::Symbol("splice-unquote".to_string(), None), form].iter().cloned())

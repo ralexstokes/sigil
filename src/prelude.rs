@@ -14,8 +14,8 @@ use std::fs;
 
 pub fn plus(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     args.iter()
-        .try_fold(i64::default(), |acc, x| match x {
-            &Value::Number(n) => acc.checked_add(n).ok_or_else(|| {
+        .try_fold(i64::default(), |acc, x| match *x {
+            Value::Number(n) => acc.checked_add(n).ok_or_else(|| {
                 EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
                     "overflow detected".to_string(),
                 ))
@@ -32,8 +32,8 @@ pub fn subtract(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> 
         0 => Err(EvaluationError::Primitive(
             PrimitiveEvaluationError::Failure("subtract needs more than 0 args".to_string()),
         )),
-        1 => match &args[0] {
-            &Value::Number(first) => first
+        1 => match args[0] {
+            Value::Number(first) => first
                 .checked_neg()
                 .ok_or_else(|| {
                     EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
@@ -50,11 +50,11 @@ pub fn subtract(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> 
         _ => {
             let first_value = &args[0];
             let rest_values = &args[1..];
-            match first_value {
-                &Value::Number(first) => rest_values
+            match *first_value {
+                Value::Number(first) => rest_values
                     .iter()
-                    .try_fold(first, |acc, x| match x {
-                        &Value::Number(next) => acc.checked_sub(next).ok_or_else(|| {
+                    .try_fold(first, |acc, x| match *x {
+                        Value::Number(next) => acc.checked_sub(next).ok_or_else(|| {
                             EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
                                 "underflow detected".to_string(),
                             ))
@@ -78,8 +78,8 @@ pub fn subtract(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> 
 
 pub fn multiply(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     args.iter()
-        .try_fold(1 as i64, |acc, x| match x {
-            &Value::Number(n) => acc.checked_mul(n).ok_or_else(|| {
+        .try_fold(1_i64, |acc, x| match *x {
+            Value::Number(n) => acc.checked_mul(n).ok_or_else(|| {
                 EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
                     "overflow detected".to_string(),
                 ))
@@ -98,8 +98,8 @@ pub fn divide(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         0 => Err(EvaluationError::Primitive(
             PrimitiveEvaluationError::Failure("divide needs more than 0 args".to_string()),
         )),
-        1 => match &args[0] {
-            &Value::Number(first) => (1 as i64)
+        1 => match args[0] {
+            Value::Number(first) => 1_i64
                 .checked_div_euclid(first)
                 .ok_or_else(|| {
                     EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
@@ -114,11 +114,11 @@ pub fn divide(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         _ => {
             let first_value = &args[0];
             let rest_values = &args[1..];
-            match first_value {
-                &Value::Number(first) => rest_values
+            match *first_value {
+                Value::Number(first) => rest_values
                     .iter()
-                    .try_fold(first, |acc, x| match x {
-                        &Value::Number(next) => acc.checked_div_euclid(next).ok_or_else(|| {
+                    .try_fold(first, |acc, x| match *x {
+                        Value::Number(next) => acc.checked_div_euclid(next).ok_or_else(|| {
                             EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
                                 "overflow detected".to_string(),
                             ))
@@ -151,7 +151,7 @@ pub fn prn(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 }
 
 pub fn list(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    Ok(list_with_values(args.iter().map(|arg| arg.clone())))
+    Ok(list_with_values(args.iter().cloned()))
 }
 
 pub fn is_list(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
@@ -160,8 +160,8 @@ pub fn is_list(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             "wrong arity".to_string(),
         )));
     }
-    match &args[0] {
-        &Value::List(_) => Ok(Value::Bool(true)),
+    match args[0] {
+        Value::List(_) => Ok(Value::Bool(true)),
         _ => Ok(Value::Bool(false)),
     }
 }
@@ -186,11 +186,9 @@ pub fn count(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
     match &args[0] {
         Value::List(elems) => Ok(Value::Number(elems.len() as i64)),
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -203,17 +201,13 @@ pub fn less(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     match &args[0] {
         Value::Number(a) => match &args[1] {
             Value::Number(b) => Ok(Value::Bool(a < b)),
-            _ => {
-                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                    "incorrect argument".to_string(),
-                )));
-            }
-        },
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
+            _ => Err(EvaluationError::List(ListEvaluationError::Failure(
                 "incorrect argument".to_string(),
-            )));
-        }
+            ))),
+        },
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -226,17 +220,13 @@ pub fn less_eq(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     match &args[0] {
         Value::Number(a) => match &args[1] {
             Value::Number(b) => Ok(Value::Bool(a <= b)),
-            _ => {
-                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                    "incorrect argument".to_string(),
-                )));
-            }
-        },
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
+            _ => Err(EvaluationError::List(ListEvaluationError::Failure(
                 "incorrect argument".to_string(),
-            )));
-        }
+            ))),
+        },
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -249,17 +239,13 @@ pub fn greater(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     match &args[0] {
         Value::Number(a) => match &args[1] {
             Value::Number(b) => Ok(Value::Bool(a > b)),
-            _ => {
-                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                    "incorrect argument".to_string(),
-                )));
-            }
-        },
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
+            _ => Err(EvaluationError::List(ListEvaluationError::Failure(
                 "incorrect argument".to_string(),
-            )));
-        }
+            ))),
+        },
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -272,17 +258,13 @@ pub fn greater_eq(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value
     match &args[0] {
         Value::Number(a) => match &args[1] {
             Value::Number(b) => Ok(Value::Bool(a >= b)),
-            _ => {
-                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                    "incorrect argument".to_string(),
-                )));
-            }
-        },
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
+            _ => Err(EvaluationError::List(ListEvaluationError::Failure(
                 "incorrect argument".to_string(),
-            )));
-        }
+            ))),
+        },
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -295,17 +277,13 @@ pub fn equal(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     match &args[0] {
         Value::Number(a) => match &args[1] {
             Value::Number(b) => Ok(Value::Bool(a == b)),
-            _ => {
-                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                    "incorrect argument".to_string(),
-                )));
-            }
-        },
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
+            _ => Err(EvaluationError::List(ListEvaluationError::Failure(
                 "incorrect argument".to_string(),
-            )));
-        }
+            ))),
+        },
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -325,11 +303,9 @@ pub fn read_string(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Valu
             }
             Ok(forms.pop().unwrap())
         }
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -346,11 +322,9 @@ pub fn spit(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             let _ = fs::write(path, contents).unwrap();
             Ok(Value::Nil)
         }
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -365,11 +339,9 @@ pub fn slurp(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             let contents = fs::read_to_string(path).unwrap();
             Ok(Value::String(contents))
         }
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -406,8 +378,8 @@ pub fn is_atom(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             "wrong arity".to_string(),
         )));
     }
-    match &args[0] {
-        &Value::Atom(_) => Ok(Value::Bool(true)),
+    match args[0] {
+        Value::Atom(_) => Ok(Value::Bool(true)),
         _ => Ok(Value::Bool(false)),
     }
 }
@@ -420,11 +392,9 @@ pub fn deref(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
     match &args[0] {
         Value::Atom(inner) => Ok(atom_impl_into_inner(inner)),
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -440,11 +410,9 @@ pub fn reset_atom(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value
             *inner.borrow_mut() = value.clone();
             Ok(value)
         }
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -475,17 +443,13 @@ pub fn swap_atom(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationRes
                 *inner = new_value.clone();
                 Ok(new_value)
             }
-            _ => {
-                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                    "incorrect argument".to_string(),
-                )));
-            }
-        },
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
+            _ => Err(EvaluationError::List(ListEvaluationError::Failure(
                 "incorrect argument".to_string(),
-            )));
-        }
+            ))),
+        },
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -504,11 +468,9 @@ pub fn cons(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             }
             Ok(list_with_values(result.into_iter()))
         }
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -538,11 +500,9 @@ pub fn vec(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         Value::List(elems) => Ok(vector_with_values(elems.iter().cloned())),
         Value::Vector(elems) => Ok(vector_with_values(elems.iter().cloned())),
         Value::Nil => Ok(vector_with_values([].iter().cloned())),
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -552,8 +512,8 @@ pub fn nth(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             "wrong arity".to_string(),
         )));
     }
-    match &args[1] {
-        &Value::Number(index) if index >= 0 => match &args[0] {
+    match args[1] {
+        Value::Number(index) if index >= 0 => match &args[0] {
             Value::List(seq) => seq
                 .iter()
                 .nth(index as usize)
@@ -572,17 +532,13 @@ pub fn nth(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
                     ))
                 })
                 .map(|elem| elem.clone()),
-            _ => {
-                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                    "incorrect argument".to_string(),
-                )));
-            }
-        },
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
+            _ => Err(EvaluationError::List(ListEvaluationError::Failure(
                 "incorrect argument".to_string(),
-            )));
-        }
+            ))),
+        },
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -608,11 +564,9 @@ pub fn first(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             }
         }
         Value::Nil => Ok(Value::Nil),
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -625,7 +579,7 @@ pub fn rest(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     match &args[0] {
         Value::List(elems) => {
             if let Some(rest) = elems.drop_first() {
-                Ok(Value::List(rest.clone()))
+                Ok(Value::List(rest))
             } else {
                 Ok(Value::List(PersistentList::new()))
             }
@@ -638,11 +592,9 @@ pub fn rest(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             Ok(Value::List(result))
         }
         Value::Nil => Ok(Value::List(PersistentList::new())),
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -654,11 +606,9 @@ pub fn ex_info(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
     match &args[0] {
         Value::String(msg) => Ok(exception(msg, &args[1])),
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -670,11 +620,9 @@ pub fn throw(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
     match &args[0] {
         e @ Value::Exception(_) => Ok(exception_into_thrown(e)),
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -783,11 +731,9 @@ pub fn to_symbol(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value>
     }
     match &args[0] {
         Value::String(name) => Ok(Value::Symbol(name.clone(), None)),
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -800,11 +746,9 @@ pub fn to_keyword(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value
     match &args[0] {
         Value::String(name) => Ok(Value::Keyword(name.clone(), None)),
         k @ Value::Keyword(..) => Ok(k.clone()),
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -895,7 +839,7 @@ pub fn assoc(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 }
 
 pub fn dissoc(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() < 1 {
+    if args.is_empty() {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
             "wrong arity".to_string(),
         )));
@@ -1002,11 +946,9 @@ pub fn last(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             }
         }
         Value::Nil => Ok(Value::Nil),
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 

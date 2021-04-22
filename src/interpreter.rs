@@ -96,11 +96,10 @@ const DEFAULT_NAMESPACE: &str = "sigil";
 
 impl Default for Interpreter {
     fn default() -> Self {
-        let global_scope = HashMap::from_iter(
-            prelude::BINDINGS
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.clone())),
-        );
+        let global_scope = prelude::BINDINGS
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
 
         let mut default_namespaces = HashMap::new();
         default_namespaces.insert(DEFAULT_NAMESPACE.to_string(), Namespace::default());
@@ -229,7 +228,7 @@ fn quasiquote(value: &Value) -> EvaluationResult<Value> {
                                         );
                                     }
                                 }
-                                form @ _ => {
+                                form => {
                                     result = list_with_values(
                                         [
                                             Value::Symbol("cons".to_string(), None),
@@ -252,13 +251,13 @@ fn quasiquote(value: &Value) -> EvaluationResult<Value> {
             let args = vec![Value::Symbol("quote".to_string(), None), elem.clone()];
             Ok(list_with_values(args.into_iter()))
         }
-        v @ _ => Ok(v.clone()),
+        v => Ok(v.clone()),
     }
 }
 
 impl Interpreter {
     pub fn intern_args(&mut self, args: Args) {
-        let form = PersistentList::from_iter(args.map(|arg| Value::String(arg.clone())));
+        let form = args.map(Value::String).collect();
         self.intern_var(COMMAND_LINE_ARGS_SYMBOL, &Value::List(form));
     }
 
@@ -311,7 +310,7 @@ impl Interpreter {
     fn resolve_var_in_namespace(
         &mut self,
         identifier: &str,
-        ns_desc: &String,
+        ns_desc: &str,
     ) -> EvaluationResult<Value> {
         self.find_namespace(ns_desc)
             .ok_or_else(|| {
@@ -430,7 +429,7 @@ impl Interpreter {
             Value::Primitive(_) => unreachable!(),
             Value::Recur(_) => unreachable!(),
             // Nil, Bool, Number, String, Keyword, Var
-            other @ _ => Ok(other.clone()),
+            other => Ok(other.clone()),
         }
     }
 
@@ -505,89 +504,73 @@ impl Interpreter {
             body.push(analyzed_form);
         }
         lambda_scopes.pop();
-        return Ok(Value::Fn(Lambda {
+        Ok(Value::Fn(Lambda {
             body: body.into_iter().collect(),
             arity,
             level,
             variadic,
-        }));
+        }))
     }
 
     fn macroexpand(&mut self, value: &Value) -> EvaluationResult<Value> {
-        match value {
-            Value::List(forms) => {
-                if let Some(operator_form) = forms.first() {
-                    match operator_form {
-                        Value::Symbol(identifier, ns_opt) => {
-                            // bail early on special forms
-                            match self.resolve_symbol(identifier, ns_opt.as_ref()) {
-                                Ok(Value::Macro(Lambda {
-                                    body,
-                                    arity,
-                                    level,
-                                    variadic,
-                                })) => {
-                                    if let Some(args) = forms.drop_first() {
-                                        let correct_arity = if variadic {
-                                            args.len() >= arity
-                                        } else {
-                                            args.len() == arity
-                                        };
-                                        if !correct_arity {
-                                            return Err(EvaluationError::List(
-                                                ListEvaluationError::Failure(
-                                                    "could not apply macro: incorrect arity"
-                                                        .to_string(),
-                                                ),
-                                            ));
-                                        }
-                                        self.enter_scope();
-                                        let mut iter = args.iter().enumerate();
-                                        if arity > 0 {
-                                            while let Some((index, operand_form)) = iter.next() {
-                                                let parameter = lambda_parameter_key(index, level);
-                                                self.insert_value_in_current_scope(
-                                                    &parameter,
-                                                    operand_form.clone(),
-                                                );
-                                                if index == arity - 1 {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        if variadic {
-                                            let mut variadic_args = vec![];
-                                            while let Some((_, elem)) = iter.next() {
-                                                variadic_args.push(elem.clone());
-                                            }
-                                            let operand =
-                                                Value::List(variadic_args.into_iter().collect());
-                                            let parameter = lambda_parameter_key(arity, level);
-                                            self.insert_value_in_current_scope(&parameter, operand);
-                                        }
-                                        let result = self.evaluate(&Value::List(body.clone()));
-                                        self.leave_scope();
-                                        match result? {
-                                            forms @ Value::List(_) => {
-                                                return self.macroexpand(&forms);
-                                            }
-                                            result @ _ => return Ok(result),
-                                        }
-                                    }
-                                    return Err(EvaluationError::List(
-                                        ListEvaluationError::Failure(
-                                            "could not apply macro".to_string(),
-                                        ),
-                                    ));
+        if let Value::List(forms) = value {
+            if let Some(Value::Symbol(identifier, ns_opt)) = forms.first() {
+                // bail early on special forms
+                if let Ok(Value::Macro(Lambda {
+                    body,
+                    arity,
+                    level,
+                    variadic,
+                })) = self.resolve_symbol(identifier, ns_opt.as_ref())
+                {
+                    if let Some(args) = forms.drop_first() {
+                        let correct_arity = if variadic {
+                            args.len() >= arity
+                        } else {
+                            args.len() == arity
+                        };
+                        if !correct_arity {
+                            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                "could not apply macro: incorrect arity".to_string(),
+                            )));
+                        }
+                        self.enter_scope();
+                        let mut iter = args.iter().enumerate();
+                        if arity > 0 {
+                            while let Some((index, operand_form)) = iter.next() {
+                                let parameter = lambda_parameter_key(index, level);
+                                self.insert_value_in_current_scope(
+                                    &parameter,
+                                    operand_form.clone(),
+                                );
+                                if index == arity - 1 {
+                                    break;
                                 }
-                                _ => {}
                             }
                         }
-                        _ => {}
+                        if variadic {
+                            let mut variadic_args = vec![];
+                            for (_, elem) in iter {
+                                variadic_args.push(elem.clone());
+                            }
+                            let operand = Value::List(variadic_args.into_iter().collect());
+                            let parameter = lambda_parameter_key(arity, level);
+                            self.insert_value_in_current_scope(&parameter, operand);
+                        }
+                        let result = self.evaluate(&Value::List(body));
+                        self.leave_scope();
+                        match result? {
+                            forms @ Value::List(_) => {
+                                return self.macroexpand(&forms);
+                            }
+                            result => return Ok(result),
+                        }
                     }
+                    return Err(EvaluationError::List(ListEvaluationError::Failure(
+                        "could not apply macro".to_string(),
+                    )));
                 }
             }
-            _ => {}
         }
         Ok(value.clone())
     }
@@ -633,7 +616,7 @@ impl Interpreter {
         }
         if variadic {
             let mut variadic_args = vec![];
-            while let Some((_, elem)) = iter.next() {
+            for (_, elem) in iter {
                 let elem = self.evaluate(elem)?;
                 variadic_args.push(elem);
             }
@@ -643,7 +626,7 @@ impl Interpreter {
         }
         let result = self.evaluate(&Value::List(body.clone()));
         self.leave_scope();
-        return result;
+        result
     }
 
     pub fn evaluate(&mut self, form: &Value) -> EvaluationResult<Value> {
@@ -666,19 +649,13 @@ impl Interpreter {
                                 // (def! symbol value)
                                 Value::Symbol(s, None) if s == "def!" => {
                                     if let Some(rest) = forms.drop_first() {
-                                        if let Some(identifier) = rest.first() {
-                                            match identifier {
-                                                Value::Symbol(id, None) => {
-                                                    if let Some(rest) = rest.drop_first() {
-                                                        if let Some(value_form) = rest.first() {
-                                                            let value =
-                                                                self.evaluate(value_form)?;
-                                                            let var = self.intern_var(id, &value);
-                                                            return Ok(var);
-                                                        }
-                                                    }
+                                        if let Some(Value::Symbol(id, None)) = rest.first() {
+                                            if let Some(rest) = rest.drop_first() {
+                                                if let Some(value_form) = rest.first() {
+                                                    let value = self.evaluate(value_form)?;
+                                                    let var = self.intern_var(id, &value);
+                                                    return Ok(var);
                                                 }
-                                                _ => {}
                                             }
                                         }
                                     }
@@ -691,47 +668,39 @@ impl Interpreter {
                                 // (let* [bindings*] body)
                                 Value::Symbol(s, None) if s == "let*" => {
                                     if let Some(rest) = forms.drop_first() {
-                                        if let Some(bindings) = rest.first() {
-                                            match bindings {
-                                                Value::Vector(elems) => {
-                                                    if elems.len() % 2 == 0 {
-                                                        if let Some(body) = rest.drop_first() {
-                                                            self.enter_scope();
-                                                            for (name, value_form) in
-                                                                elems.iter().tuples()
-                                                            {
-                                                                match name {
-                                                                    Value::Symbol(s, None) => {
-                                                                        let value = self
-                                                                            .evaluate(value_form)?;
-                                                                        self.insert_value_in_current_scope(
+                                        if let Some(Value::Vector(elems)) = rest.first() {
+                                            if elems.len() % 2 == 0 {
+                                                if let Some(body) = rest.drop_first() {
+                                                    self.enter_scope();
+                                                    for (name, value_form) in elems.iter().tuples()
+                                                    {
+                                                        match name {
+                                                            Value::Symbol(s, None) => {
+                                                                let value =
+                                                                    self.evaluate(value_form)?;
+                                                                self.insert_value_in_current_scope(
                                                                     s, value,
                                                                 )
-                                                                    }
-                                                                    _ => {
-                                                                        self.leave_scope();
-                                                                        return Err(EvaluationError::List(
+                                                            }
+                                                            _ => {
+                                                                self.leave_scope();
+                                                                return Err(EvaluationError::List(
                                                                     ListEvaluationError::Failure(
                                                                         "could not evaluate `let*`"
                                                                             .to_string(),
                                                                     ),
                                                                 ));
-                                                                    }
-                                                                }
                                                             }
-                                                            let form =
-                                                                body.push_front(Value::Symbol(
-                                                                    "do".to_string(),
-                                                                    None,
-                                                                ));
-                                                            let result =
-                                                                self.evaluate(&Value::List(form));
-                                                            self.leave_scope();
-                                                            return result;
                                                         }
                                                     }
+                                                    let form = body.push_front(Value::Symbol(
+                                                        "do".to_string(),
+                                                        None,
+                                                    ));
+                                                    let result = self.evaluate(&Value::List(form));
+                                                    self.leave_scope();
+                                                    return result;
                                                 }
-                                                _ => {}
                                             }
                                         }
                                     }
@@ -744,83 +713,72 @@ impl Interpreter {
                                 // (loop* [bindings*] body)
                                 Value::Symbol(s, None) if s == "loop*" => {
                                     if let Some(rest) = forms.drop_first() {
-                                        if let Some(bindings) = rest.first() {
-                                            match bindings {
-                                                Value::Vector(elems) => {
-                                                    if elems.len() % 2 == 0 {
-                                                        if let Some(body) = rest.drop_first() {
-                                                            if body.len() == 0 {
-                                                                return Ok(Value::Nil);
-                                                            }
-                                                            // TODO: analyze loop*
-                                                            // if recur, must be in tail position
-                                                            self.enter_scope();
-                                                            let mut bindings_keys = vec![];
-                                                            for (name, value_form) in
-                                                                elems.iter().tuples()
-                                                            {
-                                                                match name {
-                                                                    Value::Symbol(s, None) => {
-                                                                        let value = self
-                                                                            .evaluate(value_form)?;
-                                                                        bindings_keys
-                                                                            .push(s.clone());
-                                                                        self.insert_value_in_current_scope(
+                                        if let Some(Value::Vector(elems)) = rest.first() {
+                                            if elems.len() % 2 == 0 {
+                                                if let Some(body) = rest.drop_first() {
+                                                    if body.is_empty() {
+                                                        return Ok(Value::Nil);
+                                                    }
+                                                    // TODO: analyze loop*
+                                                    // if recur, must be in tail position
+                                                    self.enter_scope();
+                                                    let mut bindings_keys = vec![];
+                                                    for (name, value_form) in elems.iter().tuples()
+                                                    {
+                                                        match name {
+                                                            Value::Symbol(s, None) => {
+                                                                let value =
+                                                                    self.evaluate(value_form)?;
+                                                                bindings_keys.push(s.clone());
+                                                                self.insert_value_in_current_scope(
                                                                     s, value,
                                                                 )
-                                                                    }
-                                                                    _ => {
-                                                                        self.leave_scope();
-                                                                        return Err(EvaluationError::List(
+                                                            }
+                                                            _ => {
+                                                                self.leave_scope();
+                                                                return Err(EvaluationError::List(
                                                                     ListEvaluationError::Failure(
                                                                         "could not evaluate `loop*`"
                                                                             .to_string(),
                                                                     ),
                                                                 ));
-                                                                    }
-                                                                }
                                                             }
-                                                            let form =
-                                                                body.push_front(Value::Symbol(
-                                                                    "do".to_string(),
-                                                                    None,
-                                                                ));
-                                                            let form_to_eval = &Value::List(form);
-                                                            let mut result =
-                                                                self.evaluate(form_to_eval);
-                                                            while let Ok(Value::Recur(
-                                                                next_bindings,
-                                                            )) = result
-                                                            {
-                                                                if next_bindings.len()
-                                                                    != bindings_keys.len()
-                                                                {
-                                                                    self.leave_scope();
-                                                                    return Err(EvaluationError::List(
+                                                        }
+                                                    }
+                                                    let form = body.push_front(Value::Symbol(
+                                                        "do".to_string(),
+                                                        None,
+                                                    ));
+                                                    let form_to_eval = &Value::List(form);
+                                                    let mut result = self.evaluate(form_to_eval);
+                                                    while let Ok(Value::Recur(next_bindings)) =
+                                                        result
+                                                    {
+                                                        if next_bindings.len()
+                                                            != bindings_keys.len()
+                                                        {
+                                                            self.leave_scope();
+                                                            return Err(EvaluationError::List(
                                                                     ListEvaluationError::Failure(
                                                                         "could not evaluate `loop*`: recur with incorrect number of bindings"
                                                                             .to_string(),
                                                                     ),
                                                                 ));
-                                                                }
-                                                                for (key, value) in bindings_keys
-                                                                    .iter()
-                                                                    .zip(next_bindings.iter())
-                                                                {
-                                                                    self.insert_value_in_current_scope(
+                                                        }
+                                                        for (key, value) in bindings_keys
+                                                            .iter()
+                                                            .zip(next_bindings.iter())
+                                                        {
+                                                            self.insert_value_in_current_scope(
                                                                 key,
                                                                 value.clone(),
                                                             );
-                                                                }
-                                                                result =
-                                                                    self.evaluate(form_to_eval);
-                                                            }
-                                                            self.leave_scope();
-                                                            return result;
                                                         }
+                                                        result = self.evaluate(form_to_eval);
                                                     }
+                                                    self.leave_scope();
+                                                    return result;
                                                 }
-                                                _ => {}
                                             }
                                         }
                                     }
@@ -838,9 +796,7 @@ impl Interpreter {
                                             let value = self.evaluate(form)?;
                                             result.push(value);
                                         }
-                                        return Ok(Value::Recur(PersistentVector::from_iter(
-                                            result.into_iter(),
-                                        )));
+                                        return Ok(Value::Recur(result.into_iter().collect()));
                                     }
                                     return Err(EvaluationError::List(
                                         ListEvaluationError::Failure(
@@ -859,18 +815,16 @@ impl Interpreter {
                                                             if predicate {
                                                                 return self
                                                                     .evaluate(consequent_form);
-                                                            } else {
-                                                                if let Some(rest) =
-                                                                    rest.drop_first()
+                                                            } else if let Some(rest) =
+                                                                rest.drop_first()
+                                                            {
+                                                                if let Some(alternate) =
+                                                                    rest.first()
                                                                 {
-                                                                    if let Some(alternate) =
-                                                                        rest.first()
-                                                                    {
-                                                                        return self
-                                                                            .evaluate(alternate);
-                                                                    } else {
-                                                                        return Ok(Value::Nil);
-                                                                    }
+                                                                    return self
+                                                                        .evaluate(alternate);
+                                                                } else {
+                                                                    return Ok(Value::Nil);
                                                                 }
                                                             }
                                                         }
@@ -927,16 +881,10 @@ impl Interpreter {
                                 // (fn* [parameters*] body)
                                 Value::Symbol(s, None) if s == "fn*" => {
                                     if let Some(rest) = forms.drop_first() {
-                                        if let Some(params) = rest.first() {
-                                            match params {
-                                                Value::Vector(params) => {
-                                                    if let Some(body) = rest.drop_first() {
-                                                        return self.analyze_symbols_in_lambda(
-                                                            body, &params,
-                                                        );
-                                                    }
-                                                }
-                                                _ => {}
+                                        if let Some(Value::Vector(params)) = rest.first() {
+                                            if let Some(body) = rest.drop_first() {
+                                                return self
+                                                    .analyze_symbols_in_lambda(body, &params);
                                             }
                                         }
                                     }
@@ -978,29 +926,24 @@ impl Interpreter {
                                 // (defmacro! symbol value)
                                 Value::Symbol(s, None) if s == "defmacro!" => {
                                     if let Some(rest) = forms.drop_first() {
-                                        if let Some(identifier) = rest.first() {
-                                            match identifier {
-                                                Value::Symbol(id, None) => {
-                                                    if let Some(rest) = rest.drop_first() {
-                                                        if let Some(value_form) = rest.first() {
-                                                            match self.evaluate(value_form)? {
-                                                                Value::Fn(lambda) => {
-                                                                    let var = self.intern_var(
-                                                                        id,
-                                                                        &Value::Macro(lambda),
-                                                                    );
-                                                                    return Ok(var);
-                                                                }
-                                                                _ => {
-                                                                    return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                        if let Some(Value::Symbol(id, None)) = rest.first() {
+                                            if let Some(rest) = rest.drop_first() {
+                                                if let Some(value_form) = rest.first() {
+                                                    match self.evaluate(value_form)? {
+                                                        Value::Fn(lambda) => {
+                                                            let var = self.intern_var(
+                                                                id,
+                                                                &Value::Macro(lambda),
+                                                            );
+                                                            return Ok(var);
+                                                        }
+                                                        _ => {
+                                                            return Err(EvaluationError::List(ListEvaluationError::Failure(
                                                                 "could not evaluate `defmacro!`".to_string(),
                                                             )));
-                                                                }
-                                                            }
                                                         }
                                                     }
                                                 }
-                                                _ => {}
                                             }
                                         }
                                     }
@@ -1136,8 +1079,7 @@ impl Interpreter {
                                                         &parameter,
                                                         exception_from_thrown(&e),
                                                     );
-                                                    let result =
-                                                        self.evaluate(&Value::List(body.clone()));
+                                                    let result = self.evaluate(&Value::List(body));
                                                     self.leave_scope();
                                                     return result;
                                                 } else {
@@ -1181,7 +1123,7 @@ impl Interpreter {
                                         }
                                         return native_fn(self, &operands);
                                     }
-                                    v @ _ => {
+                                    v => {
                                         return Err(EvaluationError::List(
                                             ListEvaluationError::CannotInvoke(v),
                                         ));
@@ -1190,7 +1132,7 @@ impl Interpreter {
                             }
                         }
                     }
-                    expansion @ _ => return self.evaluate(&expansion),
+                    expansion => return self.evaluate(&expansion),
                 }
                 Value::List(PersistentList::new())
             }
@@ -1200,7 +1142,7 @@ impl Interpreter {
                     let value = self.evaluate(form)?;
                     result.push(value);
                 }
-                Value::Vector(PersistentVector::from_iter(result.into_iter()))
+                Value::Vector(result.into_iter().collect())
             }
             Value::Map(forms) => {
                 let mut result = vec![];
@@ -1209,7 +1151,7 @@ impl Interpreter {
                     let value = self.evaluate(v)?;
                     result.push((key, value));
                 }
-                Value::Map(PersistentMap::from_iter(result.into_iter()))
+                Value::Map(result.into_iter().collect())
             }
             Value::Set(forms) => {
                 let mut result = vec![];
@@ -1217,7 +1159,7 @@ impl Interpreter {
                     let value = self.evaluate(form)?;
                     result.push(value);
                 }
-                Value::Set(PersistentSet::from_iter(result.into_iter()))
+                Value::Set(result.into_iter().collect())
             }
             Value::Fn(_) => unreachable!(),
             Value::Primitive(_) => unreachable!(),

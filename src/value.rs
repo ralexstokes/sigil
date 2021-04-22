@@ -111,7 +111,7 @@ pub struct VarImpl {
 
 type AtomImpl = Rc<RefCell<Value>>;
 
-#[derive(Clone, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Eq, PartialOrd, Ord)]
 pub struct ExceptionImpl {
     message: String,
     data: Box<Value>,
@@ -124,6 +124,13 @@ pub struct ExceptionImpl {
 impl PartialEq for ExceptionImpl {
     fn eq(&self, other: &Self) -> bool {
         (&self.message, &self.data) == (&other.message, &other.data)
+    }
+}
+
+impl Hash for ExceptionImpl {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.message.hash(state);
+        self.data.hash(state);
     }
 }
 
@@ -155,10 +162,7 @@ impl PartialEq for Value {
         use Value::*;
 
         match self {
-            Nil => match other {
-                Nil => true,
-                _ => false,
-            },
+            Nil => matches!(other, Nil),
             Bool(ref x) => match other {
                 Bool(ref y) => x == y,
                 _ => false,
@@ -202,11 +206,9 @@ impl PartialEq for Value {
             Primitive(x) => match other {
                 Primitive(y) => {
                     let x_ptr = x as *const NativeFn;
-                    let x_identifier =
-                        unsafe { std::mem::transmute::<*const NativeFn, usize>(x_ptr) };
+                    let x_identifier = x_ptr as usize;
                     let y_ptr = y as *const NativeFn;
-                    let y_identifier =
-                        unsafe { std::mem::transmute::<*const NativeFn, usize>(y_ptr) };
+                    let y_identifier = y_ptr as usize;
                     x_identifier == y_identifier
                 }
                 _ => false,
@@ -279,12 +281,12 @@ impl Ord for Value {
             },
             Keyword(ref x, ref x_ns_opt) => match other {
                 Nil | Bool(_) | Number(_) | String(_) => Ordering::Greater,
-                Keyword(ref y, ref y_ns_opt) => ((x, x_ns_opt)).cmp(&(y, y_ns_opt)),
+                Keyword(ref y, ref y_ns_opt) => (x, x_ns_opt).cmp(&(y, y_ns_opt)),
                 _ => Ordering::Less,
             },
             Symbol(ref x, ref x_ns_opt) => match other {
                 Nil | Bool(_) | Number(_) | String(_) | Keyword(_, _) => Ordering::Greater,
-                Symbol(ref y, ref y_ns_opt) => ((x, x_ns_opt)).cmp(&(y, y_ns_opt)),
+                Symbol(ref y, ref y_ns_opt) => (x, x_ns_opt).cmp(&(y, y_ns_opt)),
                 _ => Ordering::Less,
             },
             List(ref x) => match other {
@@ -354,11 +356,9 @@ impl Ord for Value {
                 | Fn(_) => Ordering::Greater,
                 Primitive(y) => {
                     let x_ptr = x as *const NativeFn;
-                    let x_identifier =
-                        unsafe { std::mem::transmute::<*const NativeFn, usize>(x_ptr) };
+                    let x_identifier = x_ptr as usize;
                     let y_ptr = y as *const NativeFn;
-                    let y_identifier =
-                        unsafe { std::mem::transmute::<*const NativeFn, usize>(y_ptr) };
+                    let y_identifier = y_ptr as usize;
                     x_identifier.cmp(&y_identifier)
                 }
                 _ => Ordering::Less,
@@ -497,7 +497,7 @@ impl Hash for Value {
             Fn(lambda) => lambda.hash(state),
             Primitive(f) => {
                 let ptr = f as *const NativeFn;
-                let identifier = unsafe { std::mem::transmute::<*const NativeFn, usize>(ptr) };
+                let identifier = ptr as usize;
                 identifier.hash(state);
             }
             Var(VarImpl {
