@@ -361,8 +361,7 @@ impl Interpreter {
     }
 
     fn leave_scope(&mut self) {
-        // NOTE: error if scopes underflow...
-        let _ = self.scopes.pop().unwrap();
+        let _ = self.scopes.pop().expect("no underflow in scope stack");
     }
 
     // Analyze symbols (recursively) in `form`:
