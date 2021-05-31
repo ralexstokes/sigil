@@ -675,6 +675,9 @@ impl Interpreter {
                                         if let Some(Value::Symbol(id, None)) = rest.first() {
                                             if let Some(rest) = rest.drop_first() {
                                                 if let Some(value_form) = rest.first() {
+                                                    // allocate the var first, so e.g. `fn`s can
+                                                    // capture them allowing for recursive calls
+                                                    let _ = self.intern_var(id, &Value::Nil);
                                                     let value = self.evaluate(value_form)?;
                                                     let var = self.intern_var(id, &value);
                                                     return Ok(var);
@@ -952,6 +955,9 @@ impl Interpreter {
                                         if let Some(Value::Symbol(id, None)) = rest.first() {
                                             if let Some(rest) = rest.drop_first() {
                                                 if let Some(value_form) = rest.first() {
+                                                    // allocate the var first, so e.g. `fn`s can
+                                                    // capture them allowing for recursive calls
+                                                    let _ = self.intern_var(id, &Value::Nil);
                                                     match self.evaluate(value_form)? {
                                                         Value::Fn(lambda) => {
                                                             let var = self.intern_var(
