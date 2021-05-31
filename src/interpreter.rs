@@ -511,63 +511,87 @@ impl Interpreter {
         }))
     }
 
+    fn apply_macro(
+        &mut self,
+        body: PersistentList<Value>,
+        arity: usize,
+        level: usize,
+        variadic: bool,
+        forms: &PersistentList<Value>,
+    ) -> EvaluationResult<Value> {
+        if let Some(args) = forms.drop_first() {
+            let correct_arity = if variadic {
+                args.len() >= arity
+            } else {
+                args.len() == arity
+            };
+            if !correct_arity {
+                return Err(EvaluationError::List(ListEvaluationError::Failure(
+                    "could not apply macro: incorrect arity".to_string(),
+                )));
+            }
+            self.enter_scope();
+            let mut iter = args.iter().enumerate();
+            if arity > 0 {
+                while let Some((index, operand_form)) = iter.next() {
+                    let parameter = lambda_parameter_key(index, level);
+                    self.insert_value_in_current_scope(&parameter, operand_form.clone());
+                    if index == arity - 1 {
+                        break;
+                    }
+                }
+            }
+            if variadic {
+                let mut variadic_args = vec![];
+                for (_, elem) in iter {
+                    variadic_args.push(elem.clone());
+                }
+                let operand = Value::List(variadic_args.into_iter().collect());
+                let parameter = lambda_parameter_key(arity, level);
+                self.insert_value_in_current_scope(&parameter, operand);
+            }
+            let result = self.evaluate(&Value::List(body));
+            self.leave_scope();
+            match result? {
+                forms @ Value::List(_) => {
+                    return self.macroexpand(&forms);
+                }
+                result => return Ok(result),
+            }
+        }
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "could not apply macro".to_string(),
+        )));
+    }
+
     fn macroexpand(&mut self, value: &Value) -> EvaluationResult<Value> {
         if let Value::List(forms) = value {
-            if let Some(Value::Symbol(identifier, ns_opt)) = forms.first() {
-                // bail early on special forms
-                if let Ok(Value::Macro(Lambda {
-                    body,
-                    arity,
-                    level,
-                    variadic,
-                })) = self.resolve_symbol(identifier, ns_opt.as_ref())
-                {
-                    if let Some(args) = forms.drop_first() {
-                        let correct_arity = if variadic {
-                            args.len() >= arity
-                        } else {
-                            args.len() == arity
-                        };
-                        if !correct_arity {
-                            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                                "could not apply macro: incorrect arity".to_string(),
-                            )));
-                        }
-                        self.enter_scope();
-                        let mut iter = args.iter().enumerate();
-                        if arity > 0 {
-                            while let Some((index, operand_form)) = iter.next() {
-                                let parameter = lambda_parameter_key(index, level);
-                                self.insert_value_in_current_scope(
-                                    &parameter,
-                                    operand_form.clone(),
-                                );
-                                if index == arity - 1 {
-                                    break;
-                                }
-                            }
-                        }
-                        if variadic {
-                            let mut variadic_args = vec![];
-                            for (_, elem) in iter {
-                                variadic_args.push(elem.clone());
-                            }
-                            let operand = Value::List(variadic_args.into_iter().collect());
-                            let parameter = lambda_parameter_key(arity, level);
-                            self.insert_value_in_current_scope(&parameter, operand);
-                        }
-                        let result = self.evaluate(&Value::List(body));
-                        self.leave_scope();
-                        match result? {
-                            forms @ Value::List(_) => {
-                                return self.macroexpand(&forms);
-                            }
-                            result => return Ok(result),
+            if let Some(operator) = forms.first() {
+                match operator {
+                    Value::Symbol(identifier, ns_opt) => {
+                        // bail early on special forms
+                        if let Ok(Value::Macro(Lambda {
+                            body,
+                            arity,
+                            level,
+                            variadic,
+                        })) = self.resolve_symbol(identifier, ns_opt.as_ref())
+                        {
+                            return self.apply_macro(body, arity, level, variadic, forms);
                         }
                     }
-                    return Err(EvaluationError::List(ListEvaluationError::Failure(
-                        "could not apply macro".to_string(),
-                    )));
+                    v @ Value::Var(_) => {
+                        if let Value::Macro(Lambda {
+                            body,
+                            arity,
+                            level,
+                            variadic,
+                        }) = var_into_inner(v.clone())
+                        {
+                            return self.apply_macro(body, arity, level, variadic, forms);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
