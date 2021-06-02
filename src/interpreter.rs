@@ -949,7 +949,7 @@ impl Interpreter {
                                         ),
                                     ));
                                 }
-                                // (defmacro! symbol value)
+                                // (defmacro! symbol fn*)
                                 Value::Symbol(s, None) if s == "defmacro!" => {
                                     if let Some(rest) = forms.drop_first() {
                                         if let Some(Value::Symbol(id, None)) = rest.first() {
