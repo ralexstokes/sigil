@@ -92,23 +92,51 @@ pub struct Interpreter {
     scopes: Vec<Scope>,
 }
 
-const DEFAULT_NAMESPACE: &str = "sigil";
+const DEFAULT_NAMESPACE: &str = "core";
+
+const SPECIAL_FORMS: &[&str] = &[
+    "def!",           // (def! symbol form)
+    "let*",           // (let* [bindings*] form*)
+    "loop*",          // (loop* [bindings*] form*)
+    "recur",          // (recur form*)
+    "if",             // (if predicate consequent alternate)
+    "do",             // (do forms*)
+    "fn*",            // (fn* [args] forms*)
+    "quote",          // (quote form)
+    "quasiquote",     // (quasiquote form)
+    "unquote",        // (unquote form)
+    "splice-unquote", // (splice-unquote form)
+    "defmacro!",      // (defmacro! name fn*-form)
+    "macroexpand",    // (macroexpand macro)
+    "try*",           // (try* forms* catch*-form?)
+    "catch*",         // (catch* exc-binding forms*)
+];
 
 impl Default for Interpreter {
     fn default() -> Self {
-        let global_scope = prelude::BINDINGS
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.clone()))
-            .collect();
+        // build the "core" namespace
+        let mut default_namespace = Namespace::default();
+        for (symbol, value) in prelude::BINDINGS.iter() {
+            intern_value_in_namespace(symbol, value, &mut default_namespace, DEFAULT_NAMESPACE);
+        }
 
         let mut default_namespaces = HashMap::new();
-        default_namespaces.insert(DEFAULT_NAMESPACE.to_string(), Namespace::default());
+        default_namespaces.insert(DEFAULT_NAMESPACE.to_string(), default_namespace);
+
+        // build the default scope, which resolves special forms to themselves
+        // so that they fall through to the interpreter's evaluation
+        let mut default_scope = Scope::new();
+        for form in SPECIAL_FORMS {
+            default_scope.insert(form.to_string(), Value::Symbol(form.to_string(), None));
+        }
 
         let mut interpreter = Interpreter {
             current_namespace: DEFAULT_NAMESPACE.to_string(),
             namespaces: default_namespaces,
-            scopes: vec![global_scope],
+            scopes: vec![default_scope],
         };
+
+        // load the "prelude" source
         for line in prelude::SOURCE.lines() {
             let forms = read(line).expect("prelude source has no reader errors");
             for form in forms.iter() {
@@ -207,7 +235,10 @@ fn quasiquote(value: &Value) -> EvaluationResult<Value> {
                                             _ => {
                                                 result = list_with_values(
                                                     [
-                                                        Value::Symbol("cons".to_string(), None),
+                                                        Value::Symbol(
+                                                            "cons".to_string(),
+                                                            Some("core".to_string()),
+                                                        ),
                                                         quasiquote(form)?,
                                                         result,
                                                     ]
@@ -219,7 +250,10 @@ fn quasiquote(value: &Value) -> EvaluationResult<Value> {
                                     } else {
                                         result = list_with_values(
                                             [
-                                                Value::Symbol("cons".to_string(), None),
+                                                Value::Symbol(
+                                                    "cons".to_string(),
+                                                    Some("core".to_string()),
+                                                ),
                                                 Value::List(PersistentList::new()),
                                                 result,
                                             ]
@@ -231,7 +265,10 @@ fn quasiquote(value: &Value) -> EvaluationResult<Value> {
                                 form => {
                                     result = list_with_values(
                                         [
-                                            Value::Symbol("cons".to_string(), None),
+                                            Value::Symbol(
+                                                "cons".to_string(),
+                                                Some("core".to_string()),
+                                            ),
                                             quasiquote(form)?,
                                             result,
                                         ]
@@ -373,29 +410,87 @@ impl Interpreter {
         scopes: &mut Vec<Scope>,
     ) -> EvaluationResult<Value> {
         match form {
-            // NOTE: if we do not resolve vars here then lambdas will fail
-            // if any captures are unmapped later...
             Value::Symbol(identifier, ns_opt) => {
                 // if namespaced, check there
                 if let Some(ns_desc) = ns_opt {
                     return self.resolve_var_in_namespace(identifier, ns_desc);
                 }
-
                 // else resolve in lexical scopes
                 // here we resolve parameters to internal representations
                 if let Some(value) = resolve_symbol_in_scopes(scopes.iter().rev(), identifier) {
                     return Ok(value.clone());
                 }
+                if let Some(value) = resolve_symbol_in_scopes(self.scopes.iter().rev(), identifier)
+                {
+                    return Ok(value.clone());
+                }
                 // otherwise check current namespace
                 self.get_var(identifier)
-                    // unresolved symbols are preserved to be interpreted later
-                    .or_else(|_| Ok(Value::Symbol(identifier.to_string(), None)))
             }
             Value::List(elems) => {
+                // if first elem introduces a new lexical scope...
+                let mut iter = elems.iter();
+                let mut did_push_scope = false;
+                match iter.next() {
+                    Some(Value::Symbol(s, None)) if s == "let*" || s == "loop*" => {
+                        match iter.next() {
+                            Some(Value::Vector(bindings)) => {
+                                let mut scope = Scope::new();
+                                if bindings.len() % 2 != 0 {
+                                    return Err(EvaluationError::List(
+                                        ListEvaluationError::Failure(
+                                            "could not evaluate `let*`".to_string(),
+                                        ),
+                                    ));
+                                }
+                                for (name, _) in bindings.iter().tuples() {
+                                    scope.insert(
+                                        name.to_string(),
+                                        Value::Symbol(name.to_string(), None),
+                                    );
+                                }
+                                did_push_scope = true;
+                                scopes.push(scope);
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(Value::Symbol(s, None)) if s == "fn*" => match iter.next() {
+                        Some(Value::Vector(bindings)) => {
+                            let mut scope = Scope::new();
+                            for name in bindings.iter() {
+                                scope.insert(
+                                    name.to_string(),
+                                    Value::Symbol(name.to_string(), None),
+                                );
+                            }
+                            did_push_scope = true;
+                            scopes.push(scope);
+                        }
+                        _ => {}
+                    },
+                    Some(Value::Symbol(s, None)) if s == "catch*" || s == "quote" => {
+                        match iter.next() {
+                            Some(Value::Symbol(s, None)) => {
+                                let mut scope = Scope::new();
+                                scope.insert(s.to_string(), Value::Symbol(s.to_string(), None));
+                                did_push_scope = true;
+                                scopes.push(scope);
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
                 let mut analyzed_elems = vec![];
-                for elem in elems.iter() {
+                for elem in elems {
                     let analyzed_elem = self.analyze_form_in_lambda(elem, scopes)?;
                     analyzed_elems.push(analyzed_elem);
+                }
+                if did_push_scope {
+                    let _ = scopes
+                        .pop()
+                        .expect("only pop if we pushed local to this function");
                 }
                 Ok(Value::List(PersistentList::from_iter(analyzed_elems)))
             }
@@ -1279,7 +1374,10 @@ mod test {
     #[test]
     fn test_basic_def() {
         let test_cases = vec![
-            ("(def! a 3)", var_with_value(Number(3), "sigil", "a")),
+            (
+                "(def! a 3)",
+                var_with_value(Number(3), DEFAULT_NAMESPACE, "a"),
+            ),
             ("(def! a 3) (+ a 1)", Number(4)),
         ];
         run_eval_test(&test_cases);
@@ -1787,6 +1885,14 @@ mod test {
                 "(try* (throw (ex-info \"first\" {})) (ex-info \"test\" {:cause \"no memory\"}) (catch* e (prn e) 22))",
                 Number(22),
             ),
+            (
+                "(def! f (fn* [] (try* (throw (ex-info \"test\" {:cause 22})) (catch* e (prn e) 22)))) (f)",
+                Number(22),
+            ),
+            (
+                "(def! f (fn* [] (try* (throw (ex-info \"test\" {:cause 'foo})) (catch* e (prn e) 22)))) (f)",
+                Number(22),
+            )
         ];
         run_eval_test(&test_cases);
     }
