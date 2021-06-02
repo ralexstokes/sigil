@@ -430,9 +430,11 @@ impl Interpreter {
             Value::List(elems) => {
                 // if first elem introduces a new lexical scope...
                 let mut iter = elems.iter();
-                let mut did_push_scope = false;
+                let scopes_len = scopes.len();
+                let mut analyzed_elems = vec![];
                 match iter.next() {
                     Some(Value::Symbol(s, None)) if s == "let*" || s == "loop*" => {
+                        analyzed_elems.push(Value::Symbol(s.to_string(), None));
                         match iter.next() {
                             Some(Value::Vector(bindings)) => {
                                 let mut scope = Scope::new();
@@ -443,13 +445,15 @@ impl Interpreter {
                                         ),
                                     ));
                                 }
-                                for (name, _) in bindings.iter().tuples() {
-                                    scope.insert(
-                                        name.to_string(),
-                                        Value::Symbol(name.to_string(), None),
-                                    );
+                                let mut analyzed_bindings = PersistentVector::new();
+                                for (name, value) in bindings.iter().tuples() {
+                                    scope.insert(name.to_string(), name.clone());
+                                    let analyzed_value =
+                                        self.analyze_form_in_lambda(value, scopes)?;
+                                    analyzed_bindings.push_back_mut(name.clone());
+                                    analyzed_bindings.push_back_mut(analyzed_value);
                                 }
-                                did_push_scope = true;
+                                analyzed_elems.push(Value::Vector(analyzed_bindings));
                                 scopes.push(scope);
                             }
                             _ => {}
@@ -457,15 +461,8 @@ impl Interpreter {
                     }
                     Some(Value::Symbol(s, None)) if s == "fn*" => match iter.next() {
                         Some(Value::Vector(bindings)) => {
-                            let mut scope = Scope::new();
-                            for name in bindings.iter() {
-                                scope.insert(
-                                    name.to_string(),
-                                    Value::Symbol(name.to_string(), None),
-                                );
-                            }
-                            did_push_scope = true;
-                            scopes.push(scope);
+                            let rest = iter.cloned().collect();
+                            return self.analyze_symbols_in_lambda(rest, bindings, scopes);
                         }
                         _ => {}
                     },
@@ -474,7 +471,6 @@ impl Interpreter {
                             Some(Value::Symbol(s, None)) => {
                                 let mut scope = Scope::new();
                                 scope.insert(s.to_string(), Value::Symbol(s.to_string(), None));
-                                did_push_scope = true;
                                 scopes.push(scope);
                             }
                             _ => {}
@@ -482,12 +478,11 @@ impl Interpreter {
                     }
                     _ => {}
                 }
-                let mut analyzed_elems = vec![];
-                for elem in elems {
+                for elem in elems.iter().skip(analyzed_elems.len()) {
                     let analyzed_elem = self.analyze_form_in_lambda(elem, scopes)?;
                     analyzed_elems.push(analyzed_elem);
                 }
-                if did_push_scope {
+                if scopes_len != scopes.len() {
                     let _ = scopes
                         .pop()
                         .expect("only pop if we pushed local to this function");
@@ -537,8 +532,8 @@ impl Interpreter {
         &mut self,
         forms: PersistentList<Value>,
         params: &PersistentVector<Value>,
+        lambda_scopes: &mut Vec<Scope>,
     ) -> EvaluationResult<Value> {
-        let mut lambda_scopes = vec![];
         // level of lambda nesting
         let level = lambda_scopes.len();
         // build parameter index
@@ -594,7 +589,7 @@ impl Interpreter {
         lambda_scopes.push(parameters);
         let mut body = vec![Value::Symbol("do".to_string(), None)];
         for form in forms.iter() {
-            let analyzed_form = self.analyze_form_in_lambda(form, &mut lambda_scopes)?;
+            let analyzed_form = self.analyze_form_in_lambda(form, lambda_scopes)?;
             body.push(analyzed_form);
         }
         lambda_scopes.pop();
@@ -1004,8 +999,12 @@ impl Interpreter {
                                     if let Some(rest) = forms.drop_first() {
                                         if let Some(Value::Vector(params)) = rest.first() {
                                             if let Some(body) = rest.drop_first() {
-                                                return self
-                                                    .analyze_symbols_in_lambda(body, &params);
+                                                let mut scopes = vec![];
+                                                return self.analyze_symbols_in_lambda(
+                                                    body,
+                                                    &params,
+                                                    &mut scopes,
+                                                );
                                             }
                                         }
                                     }
@@ -1145,7 +1144,8 @@ impl Interpreter {
                                                                                 .push_back_mut(
                                                                                     s.clone(),
                                                                                 );
-                                                                            let body = self.analyze_symbols_in_lambda(exception_body, &exception_binding)?;
+                                                                            let mut scopes = vec![];
+                                                                            let body = self.analyze_symbols_in_lambda(exception_body, &exception_binding, &mut scopes)?;
                                                                             Some(body)
                                                                         } else {
                                                                             None
@@ -1678,6 +1678,7 @@ mod test {
                 Number(2),
             ),
             ("((fn* [a] ((fn* [b] (+ b 1)) a)) 1)", Number(2)),
+            ("((fn* [a] ((fn* [a] (+ a 1)) a)) 1)", Number(2)),
             ("((fn* [] ((fn* [] ((fn* [] 13))))))", Number(13)),
             (
                 "(def! factorial (fn* [n] (if (< n 2) 1 (* n (factorial (- n 1)))))) (factorial 8)",
