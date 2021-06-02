@@ -1,9 +1,11 @@
 use crate::interpreter::Interpreter;
 use crate::reader::read;
+use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::{Highlighter, MatchingBracketHighlighter};
-use rustyline::Editor;
-use rustyline_derive::{Completer, Helper, Hinter, Validator};
+use rustyline::history::Direction;
+use rustyline::{Context, Editor};
+use rustyline_derive::{Helper, Hinter, Validator};
 use std::borrow::Cow;
 use std::default::Default;
 use std::env::Args;
@@ -25,7 +27,7 @@ impl Default for StdRepl {
     }
 }
 
-#[derive(Completer, Helper, Hinter, Validator)]
+#[derive(Helper, Hinter, Validator)]
 struct EditorHelper {
     highlighter: MatchingBracketHighlighter,
 }
@@ -37,6 +39,48 @@ impl Highlighter for EditorHelper {
 
     fn highlight_char(&self, line: &str, pos: usize) -> bool {
         self.highlighter.highlight_char(line, pos)
+    }
+}
+
+impl Completer for EditorHelper {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        _pos: usize,
+        ctx: &Context<'_>,
+    ) -> Result<(usize, Vec<Pair>), ReadlineError> {
+        let history = ctx.history();
+        let mut iter = line.chars().rev().enumerate();
+        let mut target_index = None;
+        // advance until not whitespace
+        while let Some((index, ch)) = iter.next() {
+            target_index = Some(index);
+            if !ch.is_whitespace() {
+                break;
+            }
+        }
+        // advance until whitespace again...
+        while let Some((index, ch)) = iter.next() {
+            target_index = Some(index);
+            if ch.is_whitespace() {
+                break;
+            }
+        }
+        if let Some(target_index) = target_index {
+            let line_index = line.len() - target_index - 1;
+
+            if let Some(completion_index) = history.starts_with(line, 0, Direction::Forward) {
+                let history_match = &history[completion_index];
+                let pair = Pair {
+                    display: history_match.to_string(),
+                    replacement: history_match.to_string(),
+                };
+                return Ok((line_index, vec![pair]));
+            }
+        }
+        Ok((0, vec![]))
     }
 }
 
@@ -89,7 +133,12 @@ impl StdRepl {
                     };
                     for form in forms.iter() {
                         match self.interpreter.evaluate(form) {
-                            Ok(result) => println!("{}", result),
+                            Ok(result) => {
+                                let mut line = String::new();
+                                write!(line, "{}", result)?;
+                                editor.add_history_entry(line.as_str());
+                                println!("{}", line);
+                            }
                             Err(e) => {
                                 println!("{}", e);
                             }
