@@ -1,5 +1,7 @@
 mod interpreter;
 mod prelude;
 mod reader;
-pub mod repl;
+mod repl;
 mod value;
+
+pub use repl::StdRepl;

@@ -1,4 +1,4 @@
-use sigil::repl::StdRepl;
+use sigil::StdRepl;
 use std::env;
 
 fn main() {
