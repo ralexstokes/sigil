@@ -352,13 +352,15 @@ impl Interpreter {
             })
     }
 
-    // symbol -> namespace -> var -> value
-    fn resolve_symbol(&self, identifier: &str, ns_opt: Option<&String>) -> EvaluationResult<Value> {
+    // symbol -> namespace -> var
+    fn resolve_symbol_to_var(
+        &self,
+        identifier: &str,
+        ns_opt: Option<&String>,
+    ) -> EvaluationResult<Value> {
         // if namespaced, check there
         if let Some(ns_desc) = ns_opt {
-            return self
-                .resolve_var_in_namespace(identifier, ns_desc)
-                .map(var_into_inner);
+            return self.resolve_var_in_namespace(identifier, ns_desc);
         }
         // else resolve in lexical scopes
         if let Some(value) = resolve_symbol_in_scopes(self.scopes.iter().rev(), identifier) {
@@ -366,7 +368,14 @@ impl Interpreter {
         }
         // otherwise check current namespace
         self.resolve_var_in_current_namespace(identifier)
-            .map(var_into_inner)
+    }
+
+    // symbol -> namespace -> var -> value
+    fn resolve_symbol(&self, identifier: &str, ns_opt: Option<&String>) -> EvaluationResult<Value> {
+        match self.resolve_symbol_to_var(identifier, ns_opt)? {
+            v @ Value::Var(_) => Ok(var_into_inner(v)),
+            other => Ok(other),
+        }
     }
 
     fn enter_scope(&mut self) {
@@ -392,21 +401,10 @@ impl Interpreter {
     ) -> EvaluationResult<Value> {
         match form {
             Value::Symbol(identifier, ns_opt) => {
-                // if namespaced, check there
-                if let Some(ns_desc) = ns_opt {
-                    return self.resolve_var_in_namespace(identifier, ns_desc);
-                }
-                // else resolve in lexical scopes
-                // here we resolve parameters to internal representations
                 if let Some(value) = resolve_symbol_in_scopes(scopes.iter().rev(), identifier) {
                     return Ok(value.clone());
                 }
-                if let Some(value) = resolve_symbol_in_scopes(self.scopes.iter().rev(), identifier)
-                {
-                    return Ok(value.clone());
-                }
-                // otherwise check current namespace
-                self.resolve_var_in_current_namespace(identifier)
+                self.resolve_symbol_to_var(identifier, ns_opt.as_ref())
             }
             Value::List(elems) => {
                 // if first elem introduces a new lexical scope...
