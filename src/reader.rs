@@ -84,7 +84,7 @@ parser! {
             }
         });
 
-        let symbol = identifier_with_optional_namespace().and_then(|(id, ns)| {
+        let symbol = || identifier_with_optional_namespace().and_then(|(id, ns)| {
             match id.as_ref() {
                 "nil" => {
                     if ns.is_none() {
@@ -118,6 +118,7 @@ parser! {
         let vector = between(char('['), char(']'), many::<Vec<_>, _,_>(read_form())).map(vector_with_values);
         let map = between(char('{'), char('}'), many::<Vec<_>, _, _>((read_form(), read_form()))).map(map_with_values);
         let set = (char('#'), between(char('{'), char('}'), many::<Vec<_>, _, _>(read_form()))).map(|(_, elems)| set_with_values(elems));
+        let var = (char('#'), char('\''), symbol()).map(|(_, _, sym)| list_with_values([Value::Symbol("var".to_string(), None), sym].iter().cloned()));
         let deref = char('@').with(read_form()).map(|form| list_with_values([Value::Symbol("deref".to_string(), None), form].iter().cloned()));
         let quote = char('\'').with(read_form()).map(|form| list_with_values([Value::Symbol("quote".to_string(), None), form].iter().cloned()));
         let quasiquote = char('`').with(read_form()).map(|form| list_with_values([Value::Symbol("quasiquote".to_string(), None), form].iter().cloned()));
@@ -133,11 +134,12 @@ parser! {
             attempt(number),
             string,
             keyword,
+            attempt(var),
             deref,
             quote,
             quasiquote,
             unquote_with_optional_splice,
-            symbol,
+            symbol(),
             list,
             vector,
             map,

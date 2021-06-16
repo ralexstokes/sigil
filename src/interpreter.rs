@@ -56,6 +56,8 @@ pub enum PrimitiveEvaluationError {
 pub enum InterpreterError {
     #[error("requested the {0}th command line arg but only {1} supplied")]
     MissingCommandLineArg(usize, usize),
+    #[error("namespace {0} not found")]
+    MissingNamespace(String),
 }
 
 #[derive(Debug, Error)]
@@ -313,8 +315,8 @@ impl Interpreter {
         }
     }
 
-    pub fn current_namespace(&self) -> String {
-        self.current_namespace.clone()
+    pub fn current_namespace(&self) -> &str {
+        &self.current_namespace
     }
 
     fn find_namespace(&mut self, ns_description: &str) -> Option<&mut Namespace> {
@@ -322,24 +324,29 @@ impl Interpreter {
     }
 
     fn intern_var(&mut self, identifier: &str, value: &Value) -> Value {
-        let current_namespace = &self.current_namespace();
+        let current_namespace = self.current_namespace().to_string();
+
         let ns = self
             .namespaces
-            .get_mut(current_namespace)
+            .get_mut(&current_namespace)
             .expect("current namespace always resolves");
-        intern_value_in_namespace(identifier, value, ns, current_namespace)
+        intern_value_in_namespace(identifier, value, ns, &current_namespace)
     }
 
     // return a ref to some var in the current namespace
-    fn get_var(&self, identifier: &str) -> EvaluationResult<Value> {
-        let ns = self
-            .namespaces
-            .get(&self.current_namespace())
-            .expect("current namespace always resolves");
+    fn get_var_in_current_namespace(&self, identifier: &str) -> EvaluationResult<Value> {
+        let ns_desc = self.current_namespace();
+        self.get_var_in_namespace(identifier, ns_desc)
+    }
+
+    fn get_var_in_namespace(&self, identifier: &str, ns_desc: &str) -> EvaluationResult<Value> {
+        let ns = self.namespaces.get(ns_desc).ok_or_else(|| {
+            EvaluationError::Interpreter(InterpreterError::MissingNamespace(ns_desc.to_string()))
+        })?;
         get_var_in_namespace(identifier, ns).ok_or_else(|| {
             EvaluationError::Symbol(SymbolEvaluationError::MissingVar(
                 identifier.to_string(),
-                self.current_namespace.to_string(),
+                ns_desc.to_string(),
             ))
         })
     }
@@ -385,7 +392,8 @@ impl Interpreter {
             return Ok(value.clone());
         }
         // otherwise check current namespace
-        self.get_var(identifier).map(var_into_inner)
+        self.get_var_in_current_namespace(identifier)
+            .map(var_into_inner)
     }
 
     fn enter_scope(&mut self) {
@@ -425,7 +433,7 @@ impl Interpreter {
                     return Ok(value.clone());
                 }
                 // otherwise check current namespace
-                self.get_var(identifier)
+                self.get_var_in_current_namespace(identifier)
             }
             Value::List(elems) => {
                 // if first elem introduces a new lexical scope...
@@ -778,6 +786,22 @@ impl Interpreter {
                                     return Err(EvaluationError::List(
                                         ListEvaluationError::Failure(
                                             "could not evaluate `def!`".to_string(),
+                                        ),
+                                    ));
+                                }
+                                Value::Symbol(s, None) if s == "var" => {
+                                    if let Some(rest) = forms.drop_first() {
+                                        if let Some(Value::Symbol(s, ns_opt)) = rest.first() {
+                                            if let Some(ns_desc) = ns_opt {
+                                                return self.get_var_in_namespace(s, ns_desc);
+                                            } else {
+                                                return self.get_var_in_current_namespace(s);
+                                            }
+                                        }
+                                    }
+                                    return Err(EvaluationError::List(
+                                        ListEvaluationError::Failure(
+                                            "could not evaluate `var`".to_string(),
                                         ),
                                     ));
                                 }

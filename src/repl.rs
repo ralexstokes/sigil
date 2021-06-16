@@ -116,10 +116,9 @@ impl StdRepl {
         let _ = editor.load_history(&self.history_path);
 
         let mut prompt_buffer = String::new();
-
-        let mut current_namespace = self.interpreter.current_namespace();
-        write!(prompt_buffer, "{}=> ", current_namespace)?;
         loop {
+            prompt_buffer.clear();
+            write!(prompt_buffer, "{}=> ", self.interpreter.current_namespace())?;
             let next_line = editor.readline(&prompt_buffer);
             match next_line {
                 Ok(line) => {
@@ -143,11 +142,6 @@ impl StdRepl {
                                 println!("{}", e);
                             }
                         }
-                    }
-                    if self.interpreter.current_namespace() != current_namespace {
-                        current_namespace = self.interpreter.current_namespace();
-                        prompt_buffer.clear();
-                        write!(prompt_buffer, "{}=> ", current_namespace)?;
                     }
                 }
                 Err(ReadlineError::Interrupted) => {
