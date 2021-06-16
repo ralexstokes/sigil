@@ -30,8 +30,6 @@ fn lambda_parameter_key(index: usize, level: usize) -> String {
 
 #[derive(Debug, Error)]
 pub enum SymbolEvaluationError {
-    #[error("namespace `{0}` not found for symbol `{1}`")]
-    UndefinedNamespace(String, String),
     #[error("var `{0}` not found in namespace `{1}`")]
     MissingVar(String, String),
 }
@@ -90,7 +88,7 @@ pub struct Interpreter {
     namespaces: HashMap<String, Namespace>,
 
     // stack of scopes
-    // contains at least one scope, the "default" or "core" scope
+    // contains at least one scope, the "default" scope
     scopes: Vec<Scope>,
 }
 
@@ -194,7 +192,7 @@ fn intern_value_in_namespace(
     }
 }
 
-fn quasiquote(value: &Value) -> EvaluationResult<Value> {
+fn eval_quasiquote(value: &Value) -> EvaluationResult<Value> {
     match value {
         Value::List(elems) => {
             if let Some(first) = elems.first() {
@@ -241,7 +239,7 @@ fn quasiquote(value: &Value) -> EvaluationResult<Value> {
                                                             "cons".to_string(),
                                                             Some("core".to_string()),
                                                         ),
-                                                        quasiquote(form)?,
+                                                        eval_quasiquote(form)?,
                                                         result,
                                                     ]
                                                     .iter()
@@ -271,7 +269,7 @@ fn quasiquote(value: &Value) -> EvaluationResult<Value> {
                                                 "cons".to_string(),
                                                 Some("core".to_string()),
                                             ),
-                                            quasiquote(form)?,
+                                            eval_quasiquote(form)?,
                                             result,
                                         ]
                                         .iter()
@@ -311,16 +309,12 @@ impl Interpreter {
                     InterpreterError::MissingCommandLineArg(n, args.len()),
                 )),
             },
-            _ => unreachable!(),
+            _ => panic!("programmer error to not intern command line args as a list"),
         }
     }
 
     pub fn current_namespace(&self) -> &str {
         &self.current_namespace
-    }
-
-    fn find_namespace(&mut self, ns_description: &str) -> Option<&mut Namespace> {
-        self.namespaces.get_mut(ns_description)
     }
 
     fn intern_var(&mut self, identifier: &str, value: &Value) -> Value {
@@ -334,36 +328,18 @@ impl Interpreter {
     }
 
     // return a ref to some var in the current namespace
-    fn get_var_in_current_namespace(&self, identifier: &str) -> EvaluationResult<Value> {
+    fn resolve_var_in_current_namespace(&self, identifier: &str) -> EvaluationResult<Value> {
         let ns_desc = self.current_namespace();
-        self.get_var_in_namespace(identifier, ns_desc)
+        self.resolve_var_in_namespace(identifier, ns_desc)
     }
 
-    fn get_var_in_namespace(&self, identifier: &str, ns_desc: &str) -> EvaluationResult<Value> {
-        let ns = self.namespaces.get(ns_desc).ok_or_else(|| {
-            EvaluationError::Interpreter(InterpreterError::MissingNamespace(ns_desc.to_string()))
-        })?;
-        get_var_in_namespace(identifier, ns).ok_or_else(|| {
-            EvaluationError::Symbol(SymbolEvaluationError::MissingVar(
-                identifier.to_string(),
-                ns_desc.to_string(),
-            ))
-        })
-    }
-
-    fn resolve_var_in_namespace(
-        &mut self,
-        identifier: &str,
-        ns_desc: &str,
-    ) -> EvaluationResult<Value> {
-        self.find_namespace(ns_desc)
+    // namespace -> var
+    fn resolve_var_in_namespace(&self, identifier: &str, ns_desc: &str) -> EvaluationResult<Value> {
+        self.namespaces
+            .get(ns_desc)
             .ok_or_else(|| {
-                // ns is `Some` but missing in `self`...
-                let mut sym = String::new();
-                let _ = write!(&mut sym, "{}/{}", &ns_desc, identifier);
-                EvaluationError::Symbol(SymbolEvaluationError::UndefinedNamespace(
+                EvaluationError::Interpreter(InterpreterError::MissingNamespace(
                     ns_desc.to_string(),
-                    sym,
                 ))
             })
             .and_then(|ns| {
@@ -376,11 +352,8 @@ impl Interpreter {
             })
     }
 
-    fn resolve_symbol(
-        &mut self,
-        identifier: &str,
-        ns_opt: Option<&String>,
-    ) -> EvaluationResult<Value> {
+    // symbol -> namespace -> var -> value
+    fn resolve_symbol(&self, identifier: &str, ns_opt: Option<&String>) -> EvaluationResult<Value> {
         // if namespaced, check there
         if let Some(ns_desc) = ns_opt {
             return self
@@ -392,7 +365,7 @@ impl Interpreter {
             return Ok(value.clone());
         }
         // otherwise check current namespace
-        self.get_var_in_current_namespace(identifier)
+        self.resolve_var_in_current_namespace(identifier)
             .map(var_into_inner)
     }
 
@@ -433,7 +406,7 @@ impl Interpreter {
                     return Ok(value.clone());
                 }
                 // otherwise check current namespace
-                self.get_var_in_current_namespace(identifier)
+                self.resolve_var_in_current_namespace(identifier)
             }
             Value::List(elems) => {
                 // if first elem introduces a new lexical scope...
@@ -793,9 +766,9 @@ impl Interpreter {
                                     if let Some(rest) = forms.drop_first() {
                                         if let Some(Value::Symbol(s, ns_opt)) = rest.first() {
                                             if let Some(ns_desc) = ns_opt {
-                                                return self.get_var_in_namespace(s, ns_desc);
+                                                return self.resolve_var_in_namespace(s, ns_desc);
                                             } else {
-                                                return self.get_var_in_current_namespace(s);
+                                                return self.resolve_var_in_current_namespace(s);
                                             }
                                         }
                                     }
@@ -1057,7 +1030,7 @@ impl Interpreter {
                                 Value::Symbol(s, None) if s == "quasiquote" => {
                                     if let Some(rest) = forms.drop_first() {
                                         if let Some(second) = rest.first() {
-                                            let expansion = quasiquote(second)?;
+                                            let expansion = eval_quasiquote(second)?;
                                             return self.evaluate(&expansion);
                                         }
                                     }
