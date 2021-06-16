@@ -496,7 +496,7 @@ impl Interpreter {
             Value::Fn(_) => unreachable!(),
             Value::Primitive(_) => unreachable!(),
             Value::Recur(_) => unreachable!(),
-            // Nil, Bool, Number, String, Keyword, Var
+            // Nil, Bool, Number, String, Keyword, Var, Atom, Macro, Exception
             other => Ok(other.clone()),
         }
     }
