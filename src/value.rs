@@ -94,7 +94,7 @@ pub fn exception_is_thrown(exception: &Value) -> bool {
 pub type NativeFn = fn(&mut Interpreter, &[Value]) -> EvaluationResult<Value>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Lambda {
+pub struct FnImpl {
     pub body: PersistentList<Value>,
     pub arity: usize,
     // allow for nested fns
@@ -148,12 +148,12 @@ pub enum Value {
     Vector(PersistentVector<Value>),
     Map(PersistentMap<Value, Value>),
     Set(PersistentSet<Value>),
-    Fn(Lambda),
+    Fn(FnImpl),
     Primitive(NativeFn),
     Var(VarImpl),
     Recur(PersistentVector<Value>),
     Atom(AtomImpl),
-    Macro(Lambda),
+    Macro(FnImpl),
     Exception(ExceptionImpl),
 }
 

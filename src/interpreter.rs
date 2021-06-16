@@ -2,7 +2,7 @@ use crate::prelude;
 use crate::reader::{read, ReaderError};
 use crate::value::{
     exception_from_thrown, exception_is_thrown, list_with_values, var_impl_into_inner,
-    var_into_inner, var_with_value, Lambda, Value,
+    var_into_inner, var_with_value, FnImpl, Value,
 };
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
@@ -572,7 +572,7 @@ impl Interpreter {
             body.push(analyzed_form);
         }
         lambda_scopes.pop();
-        Ok(Value::Fn(Lambda {
+        Ok(Value::Fn(FnImpl {
             body: body.into_iter().collect(),
             arity,
             level,
@@ -639,7 +639,7 @@ impl Interpreter {
                 match operator {
                     Value::Symbol(identifier, ns_opt) => {
                         // bail early on special forms
-                        if let Ok(Value::Macro(Lambda {
+                        if let Ok(Value::Macro(FnImpl {
                             body,
                             arity,
                             level,
@@ -650,7 +650,7 @@ impl Interpreter {
                         }
                     }
                     v @ Value::Var(_) => {
-                        if let Value::Macro(Lambda {
+                        if let Value::Macro(FnImpl {
                             body,
                             arity,
                             level,
@@ -1085,7 +1085,7 @@ impl Interpreter {
                                     ));
                                 }
                                 // apply phase when operator is already evaluated:
-                                Value::Fn(Lambda {
+                                Value::Fn(FnImpl {
                                     body,
                                     arity,
                                     level,
@@ -1188,7 +1188,7 @@ impl Interpreter {
                                             .push_front(Value::Symbol("do".to_string(), None));
                                         match self.evaluate(&Value::List(body))? {
                                             e @ Value::Exception(_) if exception_is_thrown(&e) => {
-                                                if let Some(Value::Fn(Lambda {
+                                                if let Some(Value::Fn(FnImpl {
                                                     body, level, ..
                                                 })) = catch_form
                                                 {
@@ -1215,7 +1215,7 @@ impl Interpreter {
                                     ));
                                 }
                                 _ => match self.evaluate(operator_form)? {
-                                    Value::Fn(Lambda {
+                                    Value::Fn(FnImpl {
                                         body,
                                         arity,
                                         level,
