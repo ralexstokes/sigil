@@ -1,0 +1,7 @@
+(defmacro let [bindings & body] `(let* ~bindings ~@body))
+(defmacro def [var-name value] `(def! ~var-name ~value))
+(defmacro cond [& xs] (if (> (count xs) 0) (list 'if (first xs) (if (> (count xs) 1) (nth xs 1) (throw "odd number of forms to cond")) (cons 'cond (rest (rest xs))))))
+
+(defn inc [x] (+ x 1))
+(defn dec [x] (- x 1))
+(defn not [x] (if x false true))

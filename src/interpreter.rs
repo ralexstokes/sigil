@@ -19,6 +19,25 @@ use std::iter::FromIterator;
 use thiserror::Error;
 
 const COMMAND_LINE_ARGS_SYMBOL: &str = "*command-line-args*";
+const DEFAULT_NAMESPACE: &str = "core";
+const DEFAULT_CORE_FILENAME: &str = "src/core.sigil";
+const SPECIAL_FORMS: &[&str] = &[
+    "def!",           // (def! symbol form)
+    "let*",           // (let* [bindings*] form*)
+    "loop*",          // (loop* [bindings*] form*)
+    "recur",          // (recur form*)
+    "if",             // (if predicate consequent alternate)
+    "do",             // (do forms*)
+    "fn*",            // (fn* [args] forms*)
+    "quote",          // (quote form)
+    "quasiquote",     // (quasiquote form)
+    "unquote",        // (unquote form)
+    "splice-unquote", // (splice-unquote form)
+    "defmacro!",      // (defmacro! name fn*-form)
+    "macroexpand",    // (macroexpand macro)
+    "try*",           // (try* forms* catch*-form?)
+    "catch*",         // (catch* exc-binding forms*)
+];
 
 pub type EvaluationResult<T> = Result<T, EvaluationError>;
 
@@ -92,26 +111,6 @@ pub struct Interpreter {
     scopes: Vec<Scope>,
 }
 
-const DEFAULT_NAMESPACE: &str = "core";
-
-const SPECIAL_FORMS: &[&str] = &[
-    "def!",           // (def! symbol form)
-    "let*",           // (let* [bindings*] form*)
-    "loop*",          // (loop* [bindings*] form*)
-    "recur",          // (recur form*)
-    "if",             // (if predicate consequent alternate)
-    "do",             // (do forms*)
-    "fn*",            // (fn* [args] forms*)
-    "quote",          // (quote form)
-    "quasiquote",     // (quasiquote form)
-    "unquote",        // (unquote form)
-    "splice-unquote", // (splice-unquote form)
-    "defmacro!",      // (defmacro! name fn*-form)
-    "macroexpand",    // (macroexpand macro)
-    "try*",           // (try* forms* catch*-form?)
-    "catch*",         // (catch* exc-binding forms*)
-];
-
 impl Default for Interpreter {
     fn default() -> Self {
         // build the "core" namespace
@@ -145,6 +144,15 @@ impl Default for Interpreter {
                     .expect("prelude forms have no evaluation errors");
             }
         }
+
+        let mut core_boot_form_source = String::from("(load-file \"");
+        core_boot_form_source += DEFAULT_CORE_FILENAME;
+        core_boot_form_source += "\")";
+        let core_boot_result = read(&core_boot_form_source).expect("core boot is well-formed");
+        let core_boot_form = core_boot_result.get(0).expect("core boot is well-formed");
+        let _ = interpreter
+            .evaluate(&core_boot_form)
+            .expect("core boot is well-formed");
 
         interpreter
     }

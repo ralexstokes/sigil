@@ -952,18 +952,12 @@ pub fn last(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
+// `SOURCE` bootstraps the procedure `load-file` so the
+// interpreter can proceed to load further forms from source code.
 pub const SOURCE: &str = r#"
 (defmacro! defmacro (fn* [macro-name macro-args & body] `(defmacro! ~macro-name (fn* ~macro-args ~@body))))
 (defmacro defn [fn-name fn-args & body] `(def! ~fn-name (fn* ~fn-args ~@body)))
-(defmacro let [bindings & body] `(let* ~bindings ~@body))
-(defmacro def [var-name value] `(def! ~var-name ~value))
-
-(defmacro cond [& xs] (if (> (count xs) 0) (list 'if (first xs) (if (> (count xs) 1) (nth xs 1) (throw "odd number of forms to cond")) (cons 'cond (rest (rest xs))))))
-
 (defn load-file [f] (eval (read-string (str "(do " (slurp f) " nil)"))))
-(defn inc [x] (+ x 1))
-(defn dec [x] (- x 1))
-(defn not [x] (if x false true))
 "#;
 
 pub const BINDINGS: &[(&str, Value)] = &[
