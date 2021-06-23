@@ -392,7 +392,7 @@ impl Interpreter {
     }
 
     fn insert_value_in_current_scope(&mut self, identifier: &str, value: Value) {
-        let scope = self.scopes.last_mut().unwrap();
+        let scope = self.scopes.last_mut().expect("always one scope");
         scope.insert(identifier.to_string(), value);
     }
 
@@ -591,13 +591,18 @@ impl Interpreter {
 
     fn apply_macro(
         &mut self,
-        body: PersistentList<Value>,
-        arity: usize,
-        level: usize,
-        variadic: bool,
+        FnImpl {
+            body,
+            arity,
+            level,
+            variadic,
+        }: &FnImpl,
         forms: &PersistentList<Value>,
     ) -> EvaluationResult<Value> {
         if let Some(args) = forms.drop_first() {
+            let variadic = *variadic;
+            let arity = *arity;
+            let level = *level;
             let correct_arity = if variadic {
                 args.len() >= arity
             } else {
@@ -628,7 +633,7 @@ impl Interpreter {
                 let parameter = lambda_parameter_key(arity, level);
                 self.insert_value_in_current_scope(&parameter, operand);
             }
-            let result = self.evaluate(&Value::List(body));
+            let result = self.eval_list(body);
             self.leave_scope();
             match result? {
                 Value::List(forms) => {
@@ -645,25 +650,13 @@ impl Interpreter {
     fn macroexpand(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         match forms.first() {
             Some(Value::Symbol(identifier, ns_opt)) => {
-                if let Ok(Value::Macro(FnImpl {
-                    body,
-                    arity,
-                    level,
-                    variadic,
-                })) = self.resolve_symbol(identifier, ns_opt.as_ref())
-                {
-                    return self.apply_macro(body, arity, level, variadic, forms);
+                if let Ok(Value::Macro(f)) = self.resolve_symbol(identifier, ns_opt.as_ref()) {
+                    return self.apply_macro(&f, forms);
                 }
             }
             Some(Value::Var(v)) => {
-                if let Value::Macro(FnImpl {
-                    body,
-                    arity,
-                    level,
-                    variadic,
-                }) = var_impl_into_inner(v)
-                {
-                    return self.apply_macro(body, arity, level, variadic, forms);
+                if let Value::Macro(f) = var_impl_into_inner(v) {
+                    return self.apply_macro(&f, forms);
                 }
             }
             _ => {}
