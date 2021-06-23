@@ -1,8 +1,8 @@
 use crate::prelude;
 use crate::reader::{read, ReaderError};
 use crate::value::{
-    exception_from_thrown, exception_is_thrown, list_with_values, var_impl_into_inner,
-    var_into_inner, var_with_value, FnImpl, NativeFn, Value,
+    exception_from_thrown, exception_is_thrown, list_with_values, update_var, var_impl_into_inner,
+    var_with_value, FnImpl, NativeFn, Value, VarImpl,
 };
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
@@ -186,19 +186,21 @@ fn intern_value_in_namespace(
     namespace_desc: &str,
 ) -> Value {
     match namespace.get(var_desc) {
-        Some(var) => match var {
-            Value::Var(v) => {
-                *v.inner.borrow_mut() = value.clone();
-                var.clone()
-            }
-            _ => unreachable!(),
-        },
+        // NOTE: must be Some(Value::Var)
+        Some(var) => {
+            update_var(var, value);
+            var.clone()
+        }
         None => {
             let var = var_with_value(value.clone(), namespace_desc, var_desc);
             namespace.insert(var_desc.to_string(), var.clone());
             var
         }
     }
+}
+
+fn unintern_value_in_namespace(identifier: &str, namespace: &mut Namespace) {
+    let _ = namespace.remove(identifier);
 }
 
 fn eval_quasiquote(value: &Value) -> EvaluationResult<Value> {
@@ -336,6 +338,16 @@ impl Interpreter {
         intern_value_in_namespace(identifier, value, ns, &current_namespace)
     }
 
+    fn unintern_var(&mut self, identifier: &str) {
+        let current_namespace = self.current_namespace().to_string();
+
+        let ns = self
+            .namespaces
+            .get_mut(&current_namespace)
+            .expect("current namespace always resolves");
+        unintern_value_in_namespace(identifier, ns);
+    }
+
     // return a ref to some var in the current namespace
     fn resolve_var_in_current_namespace(&self, identifier: &str) -> EvaluationResult<Value> {
         let ns_desc = self.current_namespace();
@@ -382,7 +394,7 @@ impl Interpreter {
     // symbol -> namespace -> var -> value
     fn resolve_symbol(&self, identifier: &str, ns_opt: Option<&String>) -> EvaluationResult<Value> {
         match self.resolve_symbol_to_var(identifier, ns_opt)? {
-            v @ Value::Var(_) => Ok(var_into_inner(v)),
+            Value::Var(v) => Ok(var_impl_into_inner(&v)),
             other => Ok(other),
         }
     }
@@ -734,9 +746,21 @@ impl Interpreter {
                     if let Some(value_form) = rest.first() {
                         // allocate the var first, so e.g. `fn`s can
                         // capture them allowing for recursive calls
-                        let _ = self.intern_var(id, &Value::Nil);
-                        let value = self.evaluate(value_form)?;
-                        return Ok(self.intern_var(id, &value));
+                        let var = self.intern_var(id, &Value::Nil);
+                        match self.evaluate(value_form) {
+                            Ok(value) => {
+                                update_var(&var, &value);
+                                return Ok(var);
+                            }
+                            Err(e) => {
+                                self.unintern_var(id);
+                                let mut error = String::from("could not evaluate `def!`: ");
+                                error += &e.to_string();
+                                return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                    error,
+                                )));
+                            }
+                        }
                     }
                 }
             }
@@ -961,30 +985,26 @@ impl Interpreter {
     }
 
     fn eval_defmacro(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        if let Some(rest) = forms.drop_first() {
-            if let Some(Value::Symbol(id, None)) = rest.first() {
-                if let Some(rest) = rest.drop_first() {
-                    if let Some(value_form) = rest.first() {
-                        // allocate the var first, so e.g. `fn`s can
-                        // capture them allowing for recursive calls
-                        let _ = self.intern_var(id, &Value::Nil);
-                        match self.evaluate(value_form)? {
-                            Value::Fn(f) => {
-                                return Ok(self.intern_var(id, &Value::Macro(f)));
-                            }
-                            _ => {
-                                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                                    "could not evaluate `defmacro!`".to_string(),
-                                )));
-                            }
-                        }
-                    }
+        match self.eval_def(forms) {
+            Ok(Value::Var(v @ VarImpl { .. })) => match var_impl_into_inner(&v) {
+                Value::Fn(f) => {
+                    let var = Value::Var(v);
+                    update_var(&var, &Value::Macro(f));
+                    return Ok(var);
                 }
+                _ => {
+                    self.unintern_var(&v.identifier);
+                    let error = String::from("could not evaluate `defmacro!`: body must be `fn*`");
+                    return Err(EvaluationError::List(ListEvaluationError::Failure(error)));
+                }
+            },
+            Ok(_) => unreachable!(),
+            Err(e) => {
+                let mut error = String::from("could not evaluate `defmacro!`: ");
+                error += &e.to_string();
+                return Err(EvaluationError::List(ListEvaluationError::Failure(error)));
             }
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not evaluate `defmacro!`".to_string(),
-        )));
     }
 
     fn eval_macroexpand(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {

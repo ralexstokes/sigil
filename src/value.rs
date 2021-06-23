@@ -45,9 +45,11 @@ pub fn var_impl_into_inner(var: &VarImpl) -> Value {
     var.inner.borrow().clone()
 }
 
-pub fn var_into_inner(value: Value) -> Value {
-    match value {
-        Value::Var(v) => var_impl_into_inner(&v),
+pub fn update_var(var: &Value, value: &Value) {
+    match var {
+        Value::Var(v) => {
+            *v.inner.borrow_mut() = value.clone();
+        }
         _ => panic!("called with non Var value"),
     }
 }
@@ -106,7 +108,7 @@ pub struct FnImpl {
 pub struct VarImpl {
     pub inner: Rc<RefCell<Value>>,
     namespace: String,
-    identifier: String,
+    pub identifier: String,
 }
 
 type AtomImpl = Rc<RefCell<Value>>;
