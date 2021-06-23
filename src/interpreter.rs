@@ -591,60 +591,18 @@ impl Interpreter {
 
     fn apply_macro(
         &mut self,
-        FnImpl {
-            body,
-            arity,
-            level,
-            variadic,
-        }: &FnImpl,
+        m: &FnImpl,
         forms: &PersistentList<Value>,
     ) -> EvaluationResult<Value> {
-        if let Some(args) = forms.drop_first() {
-            let variadic = *variadic;
-            let arity = *arity;
-            let level = *level;
-            let correct_arity = if variadic {
-                args.len() >= arity
-            } else {
-                args.len() == arity
-            };
-            if !correct_arity {
-                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                    "could not apply macro: incorrect arity".to_string(),
-                )));
-            }
-            self.enter_scope();
-            let mut iter = args.iter().enumerate();
-            if arity > 0 {
-                while let Some((index, operand_form)) = iter.next() {
-                    let parameter = lambda_parameter_key(index, level);
-                    self.insert_value_in_current_scope(&parameter, operand_form.clone());
-                    if index == arity - 1 {
-                        break;
-                    }
-                }
-            }
-            if variadic {
-                let mut variadic_args = vec![];
-                for (_, elem) in iter {
-                    variadic_args.push(elem.clone());
-                }
-                let operand = Value::List(variadic_args.into_iter().collect());
-                let parameter = lambda_parameter_key(arity, level);
-                self.insert_value_in_current_scope(&parameter, operand);
-            }
-            let result = self.eval_list(body);
-            self.leave_scope();
-            match result? {
-                Value::List(forms) => {
-                    return self.macroexpand(&forms);
-                }
-                result => return Ok(result),
+        match self.apply_fn(m, forms, false) {
+            Ok(Value::List(forms)) => self.macroexpand(&forms),
+            Ok(result) => Ok(result),
+            Err(e) => {
+                let mut err = String::from("could not apply macro: ");
+                err += &e.to_string();
+                Err(EvaluationError::List(ListEvaluationError::Failure(err)))
             }
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not apply macro".to_string(),
-        )));
     }
 
     fn macroexpand(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
@@ -673,6 +631,7 @@ impl Interpreter {
             variadic,
         }: &FnImpl,
         args: &PersistentList<Value>,
+        should_evaluate: bool,
     ) -> EvaluationResult<Value> {
         if let Some(args) = args.drop_first() {
             let variadic = *variadic;
@@ -692,18 +651,24 @@ impl Interpreter {
             let mut iter = args.iter().enumerate();
             if arity > 0 {
                 while let Some((index, operand_form)) = iter.next() {
-                    match self.evaluate(operand_form) {
-                        Ok(operand) => {
-                            let parameter = lambda_parameter_key(index, level);
-                            self.insert_value_in_current_scope(&parameter, operand);
+                    let operand = if should_evaluate {
+                        match self.evaluate(operand_form) {
+                            Ok(operand) => operand,
+                            Err(e) => {
+                                self.leave_scope();
+                                let mut error = String::from("could not apply `fn*`: ");
+                                error += &e.to_string();
+                                return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                    error,
+                                )));
+                            }
                         }
-                        Err(e) => {
-                            self.leave_scope();
-                            let mut error = String::from("could not apply `fn*`: ");
-                            error += &e.to_string();
-                            return Err(EvaluationError::List(ListEvaluationError::Failure(error)));
-                        }
-                    }
+                    } else {
+                        operand_form.clone()
+                    };
+                    let parameter = lambda_parameter_key(index, level);
+                    self.insert_value_in_current_scope(&parameter, operand);
+
                     if index == arity - 1 {
                         break;
                     }
@@ -711,15 +676,29 @@ impl Interpreter {
             }
             if variadic {
                 let mut variadic_args = vec![];
-                for (_, elem) in iter {
-                    let elem = self.evaluate(elem)?;
+                for (_, elem_form) in iter {
+                    let elem = if should_evaluate {
+                        match self.evaluate(elem_form) {
+                            Ok(elem) => elem,
+                            Err(e) => {
+                                self.leave_scope();
+                                let mut error = String::from("could not apply `fn*`: ");
+                                error += &e.to_string();
+                                return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                    error,
+                                )));
+                            }
+                        }
+                    } else {
+                        elem_form.clone()
+                    };
                     variadic_args.push(elem);
                 }
                 let operand = Value::List(variadic_args.into_iter().collect());
                 let parameter = lambda_parameter_key(arity, level);
                 self.insert_value_in_current_scope(&parameter, operand);
             }
-            let result = self.evaluate(&Value::List(body.clone()));
+            let result = self.eval_list(body);
             self.leave_scope();
             return result;
         }
@@ -1126,12 +1105,12 @@ impl Interpreter {
                         }
                         Value::Symbol(s, None) if s == "try*" => return self.eval_try(forms),
                         // apply phase when operator is already evaluated:
-                        Value::Fn(f) => return self.apply_fn(f, &forms),
+                        Value::Fn(f) => return self.apply_fn(f, &forms, true),
                         Value::Primitive(native_fn) => {
                             return self.apply_primitive(native_fn, &forms)
                         }
                         _ => match self.evaluate(operator_form)? {
-                            Value::Fn(f) => return self.apply_fn(&f, &forms),
+                            Value::Fn(f) => return self.apply_fn(&f, &forms, true),
                             Value::Primitive(native_fn) => {
                                 return self.apply_primitive(&native_fn, &forms)
                             }
