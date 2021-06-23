@@ -991,9 +991,8 @@ impl Interpreter {
                         // capture them allowing for recursive calls
                         let _ = self.intern_var(id, &Value::Nil);
                         match self.evaluate(value_form)? {
-                            Value::Fn(lambda) => {
-                                let var = self.intern_var(id, &Value::Macro(lambda));
-                                return Ok(var);
+                            Value::Fn(f) => {
+                                return Ok(self.intern_var(id, &Value::Macro(f)));
                             }
                             _ => {
                                 return Err(EvaluationError::List(ListEvaluationError::Failure(
