@@ -18,7 +18,7 @@ pub fn list_with_values(values: impl IntoIterator<Item = Value>) -> Value {
 }
 
 pub fn vector_with_values(values: impl IntoIterator<Item = Value>) -> Value {
-    Value::Vector(PersistentVector::from_iter(values))
+    return Value::Vector(PersistentVector::from_iter(values));
 }
 
 pub fn map_with_values(values: impl IntoIterator<Item = (Value, Value)>) -> Value {
