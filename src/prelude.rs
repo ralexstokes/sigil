@@ -13,7 +13,8 @@ use std::fmt::Write;
 use std::fs;
 
 pub fn plus(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    args.iter()
+    return args
+        .iter()
         .try_fold(i64::default(), |acc, x| match *x {
             Value::Number(n) => acc.checked_add(n).ok_or_else(|| {
                 EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
@@ -24,7 +25,7 @@ pub fn plus(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
                 PrimitiveEvaluationError::Failure("plus only takes number arguments".to_string()),
             )),
         })
-        .map(Value::Number)
+        .map(Value::Number);
 }
 
 pub fn subtract(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
