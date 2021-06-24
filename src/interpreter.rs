@@ -874,6 +874,7 @@ impl Interpreter {
             "could not evaluate `loop*`".to_string(),
         )));
     }
+
     fn eval_recur(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
         if let Some(rest) = forms.drop_first() {
             let mut result = vec![];
