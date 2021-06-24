@@ -40,14 +40,6 @@ const SPECIAL_FORMS: &[&str] = &[
     "catch*",         // (catch* exc-symbol form*)
 ];
 
-pub type EvaluationResult<T> = Result<T, EvaluationError>;
-
-fn lambda_parameter_key(index: usize, level: usize) -> String {
-    let mut key = String::new();
-    let _ = write!(&mut key, ":system-lambda-%{}/{}", index, level);
-    key
-}
-
 #[derive(Debug, Error)]
 pub enum SymbolEvaluationError {
     #[error("var `{0}` not found in namespace `{1}`")]
@@ -98,70 +90,17 @@ impl From<ReaderError> for EvaluationError {
     }
 }
 
+pub type EvaluationResult<T> = Result<T, EvaluationError>;
+
 type Scope = HashMap<String, Value>;
+
 // map from identifier to Value::Var
 type Namespace = HashMap<String, Value>;
 
-#[derive(Debug)]
-pub struct Interpreter {
-    current_namespace: String,
-    namespaces: HashMap<String, Namespace>,
-
-    // stack of scopes
-    // contains at least one scope, the "default" scope
-    scopes: Vec<Scope>,
-}
-
-impl Default for Interpreter {
-    fn default() -> Self {
-        // build the "core" namespace
-        let mut default_namespace = Namespace::default();
-        for (symbol, value) in prelude::BINDINGS {
-            intern_value_in_namespace(
-                symbol,
-                value.clone(),
-                &mut default_namespace,
-                DEFAULT_NAMESPACE,
-            );
-        }
-
-        let mut default_namespaces = HashMap::new();
-        default_namespaces.insert(DEFAULT_NAMESPACE.to_string(), default_namespace);
-
-        // build the default scope, which resolves special forms to themselves
-        // so that they fall through to the interpreter's evaluation
-        let mut default_scope = Scope::new();
-        for form in SPECIAL_FORMS {
-            default_scope.insert(form.to_string(), Value::Symbol(form.to_string(), None));
-        }
-
-        let mut interpreter = Interpreter {
-            current_namespace: DEFAULT_NAMESPACE.to_string(),
-            namespaces: default_namespaces,
-            scopes: vec![default_scope],
-        };
-
-        // load the "prelude" source
-        for line in prelude::SOURCE.lines() {
-            let forms = read(line).expect("prelude source has no reader errors");
-            for form in forms.iter() {
-                let _ = interpreter
-                    .evaluate(form)
-                    .expect("prelude forms have no evaluation errors");
-            }
-        }
-
-        let mut core_boot_form_source = String::from("(load-file \"");
-        core_boot_form_source += DEFAULT_CORE_FILENAME;
-        core_boot_form_source += "\")";
-        let core_boot_result = read(&core_boot_form_source).expect("core boot is well-formed");
-        let core_boot_form = core_boot_result.get(0).expect("core boot is well-formed");
-        let _ = interpreter
-            .evaluate(&core_boot_form)
-            .expect("core boot is well-formed");
-
-        interpreter
-    }
+fn lambda_parameter_key(index: usize, level: usize) -> String {
+    let mut key = String::new();
+    let _ = write!(&mut key, ":system-lambda-%{}/{}", index, level);
+    key
 }
 
 // `scopes` from most specific to least specific
@@ -305,6 +244,68 @@ fn eval_quasiquote(value: &Value) -> EvaluationResult<Value> {
             Ok(list_with_values(args.into_iter()))
         }
         v => Ok(v.clone()),
+    }
+}
+
+#[derive(Debug)]
+pub struct Interpreter {
+    current_namespace: String,
+    namespaces: HashMap<String, Namespace>,
+
+    // stack of scopes
+    // contains at least one scope, the "default" scope
+    scopes: Vec<Scope>,
+}
+
+impl Default for Interpreter {
+    fn default() -> Self {
+        // build the "core" namespace
+        let mut default_namespace = Namespace::default();
+        for (symbol, value) in prelude::BINDINGS {
+            intern_value_in_namespace(
+                symbol,
+                value.clone(),
+                &mut default_namespace,
+                DEFAULT_NAMESPACE,
+            );
+        }
+
+        let mut default_namespaces = HashMap::new();
+        default_namespaces.insert(DEFAULT_NAMESPACE.to_string(), default_namespace);
+
+        // build the default scope, which resolves special forms to themselves
+        // so that they fall through to the interpreter's evaluation
+        let mut default_scope = Scope::new();
+        for form in SPECIAL_FORMS {
+            default_scope.insert(form.to_string(), Value::Symbol(form.to_string(), None));
+        }
+
+        let mut interpreter = Interpreter {
+            current_namespace: DEFAULT_NAMESPACE.to_string(),
+            namespaces: default_namespaces,
+            scopes: vec![default_scope],
+        };
+
+        // load the "prelude" source
+        for line in prelude::SOURCE.lines() {
+            let forms = read(line).expect("prelude source has no reader errors");
+            for form in forms.iter() {
+                let _ = interpreter
+                    .evaluate(form)
+                    .expect("prelude forms have no evaluation errors");
+            }
+        }
+
+        let mut core_boot_form_source = String::from("(load-file \"");
+        core_boot_form_source += DEFAULT_CORE_FILENAME;
+        core_boot_form_source += "\")";
+        let core_boot_result = read(&core_boot_form_source).expect("core boot is well-formed");
+        let core_boot_form = core_boot_result.get(0).expect("core boot is well-formed");
+        let _ = interpreter
+            .evaluate(&core_boot_form)
+            .expect("core boot is well-formed");
+
+        interpreter
     }
 }
 
