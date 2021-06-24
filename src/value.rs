@@ -45,10 +45,10 @@ pub fn var_impl_into_inner(var: &VarImpl) -> Value {
     var.inner.borrow().clone()
 }
 
-pub fn update_var(var: &Value, value: &Value) {
+pub fn update_var(var: &Value, value: Value) {
     match var {
         Value::Var(v) => {
-            *v.inner.borrow_mut() = value.clone();
+            *v.inner.borrow_mut() = value;
         }
         _ => panic!("called with non Var value"),
     }

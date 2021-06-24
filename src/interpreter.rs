@@ -116,8 +116,13 @@ impl Default for Interpreter {
     fn default() -> Self {
         // build the "core" namespace
         let mut default_namespace = Namespace::default();
-        for (symbol, value) in prelude::BINDINGS.iter() {
-            intern_value_in_namespace(symbol, value, &mut default_namespace, DEFAULT_NAMESPACE);
+        for (symbol, value) in prelude::BINDINGS {
+            intern_value_in_namespace(
+                symbol,
+                value.clone(),
+                &mut default_namespace,
+                DEFAULT_NAMESPACE,
+            );
         }
 
         let mut default_namespaces = HashMap::new();
@@ -181,7 +186,7 @@ fn get_var_in_namespace(var_desc: &str, namespace: &Namespace) -> Option<Value> 
 
 fn intern_value_in_namespace(
     var_desc: &str,
-    value: &Value,
+    value: Value,
     namespace: &mut Namespace,
     namespace_desc: &str,
 ) -> Value {
@@ -192,7 +197,7 @@ fn intern_value_in_namespace(
             var.clone()
         }
         None => {
-            let var = var_with_value(value.clone(), namespace_desc, var_desc);
+            let var = var_with_value(value, namespace_desc, var_desc);
             namespace.insert(var_desc.to_string(), var.clone());
             var
         }
@@ -306,7 +311,7 @@ fn eval_quasiquote(value: &Value) -> EvaluationResult<Value> {
 impl Interpreter {
     pub fn intern_args(&mut self, args: Args) {
         let form = args.map(Value::String).collect();
-        self.intern_var(COMMAND_LINE_ARGS_SYMBOL, &Value::List(form));
+        self.intern_var(COMMAND_LINE_ARGS_SYMBOL, Value::List(form));
     }
 
     pub fn command_line_arg(&mut self, n: usize) -> EvaluationResult<String> {
@@ -328,7 +333,7 @@ impl Interpreter {
         &self.current_namespace
     }
 
-    fn intern_var(&mut self, identifier: &str, value: &Value) -> Value {
+    fn intern_var(&mut self, identifier: &str, value: Value) -> Value {
         let current_namespace = self.current_namespace().to_string();
 
         let ns = self
@@ -746,10 +751,10 @@ impl Interpreter {
                     if let Some(value_form) = rest.first() {
                         // allocate the var first, so e.g. `fn`s can
                         // capture them allowing for recursive calls
-                        let var = self.intern_var(id, &Value::Nil);
+                        let var = self.intern_var(id, Value::Nil);
                         match self.evaluate(value_form) {
                             Ok(value) => {
-                                update_var(&var, &value);
+                                update_var(&var, value);
                                 return Ok(var);
                             }
                             Err(e) => {
@@ -990,7 +995,7 @@ impl Interpreter {
             Ok(Value::Var(v @ VarImpl { .. })) => match var_impl_into_inner(&v) {
                 Value::Fn(f) => {
                     let var = Value::Var(v);
-                    update_var(&var, &Value::Macro(f));
+                    update_var(&var, Value::Macro(f));
                     return Ok(var);
                 }
                 _ => {
