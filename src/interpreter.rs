@@ -629,7 +629,7 @@ impl Interpreter {
         Ok(Value::List(forms.clone()))
     }
 
-    fn apply_fn_inner(
+    pub fn apply_fn_inner(
         &mut self,
         body: &PersistentList<Value>,
         arity: usize,

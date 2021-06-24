@@ -4,13 +4,14 @@ use crate::interpreter::{
 use crate::reader::read;
 use crate::value::{
     atom_impl_into_inner, atom_with_value, exception, exception_into_thrown, list_with_values,
-    map_with_values, vector_with_values, Value,
+    map_with_values, vector_with_values, FnImpl, Value,
 };
 use itertools::join;
 use itertools::Itertools;
 use rpds::List as PersistentList;
 use std::fmt::Write;
 use std::fs;
+use std::iter::FromIterator;
 
 pub fn plus(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     args.iter()
@@ -424,13 +425,19 @@ pub fn swap_atom(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationRes
     }
     match &args[0] {
         Value::Atom(cell) => match &args[1] {
-            lambda @ Value::Fn(_) => {
+            Value::Fn(FnImpl {
+                body,
+                arity,
+                level,
+                variadic,
+            }) => {
                 let mut inner = cell.borrow_mut();
                 let original_value = inner.clone();
-                let mut elems = vec![lambda.clone(), original_value];
+                let mut elems = vec![original_value];
                 elems.extend_from_slice(&args[2..]);
-                let form = list_with_values(elems);
-                let new_value = interpreter.evaluate(&form)?;
+                let fn_args = PersistentList::from_iter(elems);
+                let new_value =
+                    interpreter.apply_fn_inner(body, *arity, *level, *variadic, fn_args, true)?;
                 *inner = new_value.clone();
                 Ok(new_value)
             }
@@ -466,7 +473,7 @@ pub fn cons(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             for elem in seq {
                 result.push(elem.clone());
             }
-            Ok(list_with_values(result.into_iter()))
+            Ok(list_with_values(result))
         }
         _ => Err(EvaluationError::List(ListEvaluationError::Failure(
             "incorrect argument".to_string(),
@@ -632,11 +639,44 @@ pub fn apply(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<
             "wrong arity".to_string(),
         )));
     }
-    let (last, prefix) = &args.split_last().expect("has enough elements");
-    let wrapped_prefix = list_with_values(prefix.iter().cloned());
-    let form = concat(interpreter, &[wrapped_prefix, (*last).clone()]).expect("can concat inputs");
-
-    interpreter.evaluate(&form)
+    let (last, prefix) = args.split_last().expect("has enough elements");
+    let (first, middle) = prefix.split_first().expect("has enough elements");
+    let fn_args = match last {
+        Value::List(elems) => {
+            let mut fn_args = Vec::with_capacity(middle.len() + elems.len());
+            for elem in middle.iter().chain(elems.iter()) {
+                fn_args.push(elem.clone())
+            }
+            fn_args
+        }
+        Value::Vector(elems) => {
+            let mut fn_args = Vec::with_capacity(middle.len() + elems.len());
+            for elem in middle.iter().chain(elems.iter()) {
+                fn_args.push(elem.clone())
+            }
+            fn_args
+        }
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )))
+        }
+    };
+    match &first {
+        Value::Fn(FnImpl {
+            body,
+            arity,
+            level,
+            variadic,
+        }) => {
+            let fn_args = PersistentList::from_iter(fn_args);
+            interpreter.apply_fn_inner(body, *arity, *level, *variadic, fn_args, false)
+        }
+        Value::Primitive(native_fn) => native_fn(interpreter, &fn_args),
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
+    }
 }
 
 pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
@@ -645,15 +685,7 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
             "wrong arity".to_string(),
         )));
     }
-    let f = match &args[0] {
-        f @ Value::Fn(_) | f @ Value::Primitive(_) => f,
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
-        }
-    };
-    let coll: Vec<_> = match &args[1] {
+    let fn_args: Vec<_> = match &args[1] {
         Value::List(elems) => elems.iter().collect(),
         Value::Vector(elems) => elems.iter().collect(),
         _ => {
@@ -662,17 +694,41 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
             )));
         }
     };
-    let mut results = vec![];
-    for elem in coll {
-        let mut body = PersistentList::new();
-        body.push_front_mut(elem.clone());
-        body.push_front_mut(f.clone());
-
-        let form = Value::List(body);
-        let result = interpreter.evaluate(&form)?;
-        results.push(result);
-    }
-    Ok(list_with_values(results.into_iter()))
+    let mut result = PersistentList::new();
+    match &args[0] {
+        Value::Fn(FnImpl {
+            body,
+            arity,
+            level,
+            variadic,
+        }) => {
+            for arg in fn_args.into_iter().rev() {
+                let mut wrapped_arg = PersistentList::new();
+                wrapped_arg.push_front_mut(arg.clone());
+                let mapped_arg = interpreter.apply_fn_inner(
+                    body,
+                    *arity,
+                    *level,
+                    *variadic,
+                    wrapped_arg,
+                    false,
+                )?;
+                result.push_front_mut(mapped_arg);
+            }
+        }
+        Value::Primitive(native_fn) => {
+            for arg in fn_args.into_iter().rev() {
+                let mapped_arg = native_fn(interpreter, &[arg.clone()])?;
+                result.push_front_mut(mapped_arg);
+            }
+        }
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )));
+        }
+    };
+    Ok(Value::List(result))
 }
 
 pub fn is_nil(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
@@ -903,7 +959,7 @@ pub fn to_keys(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         )));
     }
     match &args[0] {
-        Value::Map(map) => Ok(list_with_values(map.keys().cloned().collect::<Vec<_>>())),
+        Value::Map(map) => Ok(list_with_values(map.keys().cloned())),
         _ => Err(EvaluationError::List(ListEvaluationError::Failure(
             "incorrect argument".to_string(),
         ))),
@@ -917,7 +973,7 @@ pub fn to_vals(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         )));
     }
     match &args[0] {
-        Value::Map(map) => Ok(list_with_values(map.values().cloned().collect::<Vec<_>>())),
+        Value::Map(map) => Ok(list_with_values(map.values().cloned())),
         _ => Err(EvaluationError::List(ListEvaluationError::Failure(
             "incorrect argument".to_string(),
         ))),
