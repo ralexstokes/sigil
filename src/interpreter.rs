@@ -440,45 +440,35 @@ impl Interpreter {
                 match iter.next() {
                     Some(Value::Symbol(s, None)) if s == "let*" || s == "loop*" => {
                         analyzed_elems.push(Value::Symbol(s.to_string(), None));
-                        match iter.next() {
-                            Some(Value::Vector(bindings)) => {
-                                let mut scope = Scope::new();
-                                if bindings.len() % 2 != 0 {
-                                    return Err(EvaluationError::List(
-                                        ListEvaluationError::Failure(
-                                            "could not evaluate `let*`".to_string(),
-                                        ),
-                                    ));
-                                }
-                                let mut analyzed_bindings = PersistentVector::new();
-                                for (name, value) in bindings.iter().tuples() {
-                                    scope.insert(name.to_string(), name.clone());
-                                    let analyzed_value =
-                                        self.analyze_form_in_lambda(value, scopes)?;
-                                    analyzed_bindings.push_back_mut(name.clone());
-                                    analyzed_bindings.push_back_mut(analyzed_value);
-                                }
-                                analyzed_elems.push(Value::Vector(analyzed_bindings));
-                                scopes.push(scope);
+                        if let Some(Value::Vector(bindings)) = iter.next() {
+                            let mut scope = Scope::new();
+                            if bindings.len() % 2 != 0 {
+                                return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                    "could not evaluate `let*`".to_string(),
+                                )));
                             }
-                            _ => {}
+                            let mut analyzed_bindings = PersistentVector::new();
+                            for (name, value) in bindings.iter().tuples() {
+                                scope.insert(name.to_string(), name.clone());
+                                let analyzed_value = self.analyze_form_in_lambda(value, scopes)?;
+                                analyzed_bindings.push_back_mut(name.clone());
+                                analyzed_bindings.push_back_mut(analyzed_value);
+                            }
+                            analyzed_elems.push(Value::Vector(analyzed_bindings));
+                            scopes.push(scope);
                         }
                     }
-                    Some(Value::Symbol(s, None)) if s == "fn*" => match iter.next() {
-                        Some(Value::Vector(bindings)) => {
+                    Some(Value::Symbol(s, None)) if s == "fn*" => {
+                        if let Some(Value::Vector(bindings)) = iter.next() {
                             let rest = iter.cloned().collect();
                             return self.analyze_symbols_in_lambda(rest, bindings, scopes);
                         }
-                        _ => {}
-                    },
+                    }
                     Some(Value::Symbol(s, None)) if s == "catch*" || s == "quote" => {
-                        match iter.next() {
-                            Some(Value::Symbol(s, None)) => {
-                                let mut scope = Scope::new();
-                                scope.insert(s.to_string(), Value::Symbol(s.to_string(), None));
-                                scopes.push(scope);
-                            }
-                            _ => {}
+                        if let Some(Value::Symbol(s, None)) = iter.next() {
+                            let mut scope = Scope::new();
+                            scope.insert(s.to_string(), Value::Symbol(s.to_string(), None));
+                            scopes.push(scope);
                         }
                     }
                     _ => {}
@@ -707,7 +697,7 @@ impl Interpreter {
         }
         let result = self.eval_do_inner(body);
         self.leave_scope();
-        return result;
+        result
     }
 
     fn apply_fn(
@@ -724,9 +714,9 @@ impl Interpreter {
         if let Some(args) = args.drop_first() {
             return self.apply_fn_inner(body, *arity, *level, *variadic, args, should_evaluate);
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
+        Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not apply `fn*`".to_string(),
-        )));
+        )))
     }
 
     fn apply_primitive(
@@ -741,7 +731,7 @@ impl Interpreter {
                 operands.push(operand);
             }
         }
-        return native_fn(self, &operands);
+        native_fn(self, &operands)
     }
 
     fn eval_def(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -770,9 +760,9 @@ impl Interpreter {
                 }
             }
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
+        Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not evaluate `def!`".to_string(),
-        )));
+        )))
     }
 
     fn eval_var(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -785,9 +775,9 @@ impl Interpreter {
                 }
             }
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
+        Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not evaluate `var`".to_string(),
-        )));
+        )))
     }
 
     fn eval_let(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -819,9 +809,9 @@ impl Interpreter {
                 }
             }
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
+        Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not evaluate `let*`".to_string(),
-        )));
+        )))
     }
 
     fn eval_loop(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -875,9 +865,9 @@ impl Interpreter {
                 }
             }
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
+        Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not evaluate `loop*`".to_string(),
-        )));
+        )))
     }
 
     fn eval_recur(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -889,9 +879,9 @@ impl Interpreter {
             }
             return Ok(Value::Recur(result.into_iter().collect()));
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
+        Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not evaluate `recur`".to_string(),
-        )));
+        )))
     }
 
     fn eval_if(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -926,9 +916,9 @@ impl Interpreter {
                 }
             }
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
+        Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not evaluate `if`".to_string(),
-        )));
+        )))
     }
 
     fn eval_do_inner(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
@@ -946,9 +936,9 @@ impl Interpreter {
         if let Some(rest) = forms.drop_first() {
             return self.eval_do_inner(&rest);
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
+        Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not evaluate `do`".to_string(),
-        )));
+        )))
     }
 
     fn eval_fn(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -960,9 +950,9 @@ impl Interpreter {
                 }
             }
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
+        Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not evaluate `fn*`".to_string(),
-        )));
+        )))
     }
 
     fn eval_quote(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -973,9 +963,9 @@ impl Interpreter {
                 }
             }
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
+        Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not evaluate `quote`".to_string(),
-        )));
+        )))
     }
 
     fn eval_quasiquote(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -985,9 +975,9 @@ impl Interpreter {
                 return self.evaluate(&expansion);
             }
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
+        Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not evaluate `quasiquote`".to_string(),
-        )));
+        )))
     }
 
     fn eval_defmacro(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -996,33 +986,32 @@ impl Interpreter {
                 Value::Fn(f) => {
                     let var = Value::Var(v);
                     update_var(&var, Value::Macro(f));
-                    return Ok(var);
+                    Ok(var)
                 }
                 _ => {
                     self.unintern_var(&v.identifier);
                     let error = String::from("could not evaluate `defmacro!`: body must be `fn*`");
-                    return Err(EvaluationError::List(ListEvaluationError::Failure(error)));
+                    Err(EvaluationError::List(ListEvaluationError::Failure(error)))
                 }
             },
             Ok(_) => unreachable!(),
             Err(e) => {
                 let mut error = String::from("could not evaluate `defmacro!`: ");
                 error += &e.to_string();
-                return Err(EvaluationError::List(ListEvaluationError::Failure(error)));
+                Err(EvaluationError::List(ListEvaluationError::Failure(error)))
             }
         }
     }
 
     fn eval_macroexpand(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
         if let Some(rest) = forms.drop_first() {
-            match rest.first() {
-                Some(Value::List(value)) => return self.macroexpand(value),
-                _ => {}
+            if let Some(Value::List(value)) = rest.first() {
+                return self.macroexpand(value);
             }
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
+        Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not evaluate `macroexpand`".to_string(),
-        )));
+        )))
     }
 
     fn eval_try(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -1097,9 +1086,9 @@ impl Interpreter {
                 result => return Ok(result),
             }
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
+        Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not evaluate `try*`".to_string(),
-        )));
+        )))
     }
 
     fn eval_list(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
@@ -1147,10 +1136,10 @@ impl Interpreter {
                     }
                 }
                 // else, empty list
-                Ok(Value::List(forms.clone()))
+                Ok(Value::List(forms))
             }
             // macroexpand to value other than list, just evaluate
-            expansion => return self.evaluate(&expansion),
+            expansion => self.evaluate(&expansion),
         }
     }
 

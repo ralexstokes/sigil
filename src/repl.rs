@@ -62,7 +62,7 @@ impl Completer for EditorHelper {
             }
         }
         // advance until whitespace again...
-        while let Some((index, ch)) = iter.next() {
+        for (index, ch) in iter {
             target_index = Some(index);
             if ch.is_whitespace() {
                 break;
