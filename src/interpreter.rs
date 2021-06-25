@@ -1182,7 +1182,7 @@ impl Interpreter {
                 Ok(Value::Set(result))
             }
             Value::Var(v) => Ok(var_impl_into_inner(v)),
-            Value::Fn(_) => unreachable!(),
+            f @ Value::Fn(_) => Ok(f.clone()),
             Value::Primitive(_) => unreachable!(),
             Value::Recur(_) => unreachable!(),
             Value::Atom(_) => unreachable!(),
@@ -1283,6 +1283,12 @@ mod test {
             ("(do )", Nil),
             ("(do 1 2 3)", Number(3)),
             ("(do (do 1 2))", Number(2)),
+            ("(do (prn 101))", Nil),
+            ("(do (prn 101) 7)", Number(7)),
+            ("(do (prn 101) (prn 102) (+ 1 2))", Number(3)),
+            ("(do (def! a 6) 7 (+ a 8))", Number(14)),
+            ("(do (def! a 6) 7 (+ a 8) a)", Number(6)),
+            ("(def! DO (fn* [a] 7)) (DO 3)", Number(7)),
         ];
         run_eval_test(&test_cases);
     }
@@ -1377,6 +1383,9 @@ mod test {
     fn test_basic_fn() {
         let test_cases = vec![
             ("((fn* [a] (+ a 1)) 23)", Number(24)),
+            ("((fn* [a b] (+ a b)) 23 1)", Number(24)),
+            ("((fn* [] (+ 4 3)) )", Number(7)),
+            ("((fn* [f x] (f x)) (fn* [a] (+ 1 a)) 7)", Number(8)),
             ("((fn* [a] (+ a 1) 25) 23)", Number(25)),
             ("((fn* [a] (let* [b 2] (+ a b))) 23)", Number(25)),
             ("((fn* [a] (let* [a 2] (+ a a))) 23)", Number(4)),
@@ -1391,6 +1400,18 @@ mod test {
                 "(def! factorial (fn* [n] (if (< n 2) 1 (* n (factorial (- n 1)))))) (factorial 8)",
                 Number(40320),
             ),
+            (
+                "(def! fibo (fn* [N] (if (= N 0) 1 (if (= N 1) 1 (+ (fibo (- N 1)) (fibo (- N 2))))))) (fibo 1)",
+                Number(1),
+            ),
+            (
+                "(def! fibo (fn* [N] (if (= N 0) 1 (if (= N 1) 1 (+ (fibo (- N 1)) (fibo (- N 2))))))) (fibo 2)",
+                Number(2),
+            ),
+            (
+                "(def! fibo (fn* [N] (if (= N 0) 1 (if (= N 1) 1 (+ (fibo (- N 1)) (fibo (- N 2))))))) (fibo 4)",
+                Number(5),
+            ),
             ("(def! f (fn* [a] (+ a 1))) (f 23)", Number(24)),
             (
                 "(def! b 12) (def! f (fn* [a] (+ a b))) (def! b 22) (f 1)",
@@ -1399,6 +1420,10 @@ mod test {
             (
                 "(def! b 12) (def! f (fn* [a] ((fn* [] (+ a b))))) (def! b 22) (f 1)",
                 Number(23),
+            ),
+            (
+                "(def! gen-plus5 (fn* [] (fn* [b] (+ 5 b)))) (def! plus5 (gen-plus5)) (plus5 7)",
+                Number(12),
             ),
         ];
         run_eval_test(&test_cases);
