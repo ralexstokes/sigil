@@ -1291,6 +1291,15 @@ mod test {
                 var_with_value(Number(3), DEFAULT_NAMESPACE, "a"),
             ),
             ("(def! a 3) (+ a 1)", Number(4)),
+            ("(def! a (+ 1 7)) (+ a 1)", Number(9)),
+            (
+                "(def! some-num 3)",
+                var_with_value(Number(3), DEFAULT_NAMESPACE, "some-num"),
+            ),
+            (
+                "(def! SOME-NUM 4)",
+                var_with_value(Number(4), DEFAULT_NAMESPACE, "SOME-NUM"),
+            ),
         ];
         run_eval_test(&test_cases);
     }
@@ -1301,8 +1310,11 @@ mod test {
             ("(let* [] )", Nil),
             ("(let* [a 1] )", Nil),
             ("(let* [a 3] a)", Number(3)),
-            ("(let* [a 3] (+ a 5))", Number(8)),
+            ("(let* [b 3] (+ b 5))", Number(8)),
             ("(let* [a 3] (+ a (let* [c 5] c)))", Number(8)),
+            ("(let* [a (+ 1 2)] (+ a (let* [c 5] c)))", Number(8)),
+            ("(let* [a (+ 1 2)] (+ a (let* [a 5] a)))", Number(8)),
+            ("(let* [p (+ 2 3) q (+ 2 p)] (+ p q))", Number(12)),
             ("(let* [a 3] (+ a (let* [a 5] a)))", Number(8)),
             ("(let* [a 3 b a] (+ b 5))", Number(8)),
             (
@@ -1310,8 +1322,21 @@ mod test {
                 Number(46),
             ),
             ("(def! a 1) (let* [a 3] a)", Number(3)),
+            ("(def! a (let* [z 33] z)) a", Number(33)),
+            ("(def! a (let* [z 33] z)) (let* [a 3] a)", Number(3)),
+            ("(def! a (let* [z 33] z)) (let* [a 3] a) a", Number(33)),
             ("(def! a 1) (let* [a 3] a) a", Number(1)),
             ("(def! b 1) (let* [a 3] (+ a b))", Number(4)),
+            (
+                "(let* [a 5 b 6] [3 4 a [b 7] 8])",
+                vector_with_values(vec![
+                    Number(3),
+                    Number(4),
+                    Number(5),
+                    vector_with_values(vec![Number(6), Number(7)]),
+                    Number(8),
+                ]),
+            ),
         ];
         run_eval_test(&test_cases);
     }
