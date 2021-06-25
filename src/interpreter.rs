@@ -1231,6 +1231,9 @@ mod test {
                 ":foo/hi",
                 Keyword("hi".to_string(), Some("foo".to_string())),
             ),
+            ("()", List(PersistentList::new())),
+            ("[]", Vector(PersistentVector::new())),
+            ("{}", Map(PersistentMap::new())),
         ];
         run_eval_test(&test_cases);
     }
@@ -1256,6 +1259,20 @@ mod test {
             ("(/ 22 2 1 1 1)", Number(11)),
             ("(/ 22 2 1 1 1)", Number(11)),
             ("(+ 2 (* 3 4))", Number(14)),
+            ("(+ 5 (* 2 3))", Number(11)),
+            ("(- (+ 5 (* 2 3)) 3)", Number(8)),
+            ("(/ (- (+ 5 (* 2 3)) 3) 4)", Number(2)),
+            ("(/ (- (+ 515 (* 87 311)) 302) 27)", Number(1010)),
+            ("(* -3 6)", Number(-18)),
+            ("(/ (- (+ 515 (* -87 311)) 296) 27)", Number(-994)),
+            (
+                "[1 2 (+ 1 2)]",
+                vector_with_values(vec![Number(1), Number(2), Number(3)]),
+            ),
+            (
+                "{\"a\" (+ 7 8)}",
+                map_with_values(vec![(String("a".to_string()), Number(15))]),
+            ),
         ];
         run_eval_test(&test_cases);
     }
