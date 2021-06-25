@@ -187,6 +187,7 @@ pub fn count(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
     match &args[0] {
         Value::List(elems) => Ok(Value::Number(elems.len() as i64)),
+        Value::Nil => Ok(Value::Number(0)),
         _ => Err(EvaluationError::List(ListEvaluationError::Failure(
             "incorrect argument".to_string(),
         ))),
@@ -275,17 +276,7 @@ pub fn equal(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             "wrong arity".to_string(),
         )));
     }
-    match &args[0] {
-        Value::Number(a) => match &args[1] {
-            Value::Number(b) => Ok(Value::Bool(a == b)),
-            _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            ))),
-        },
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
-    }
+    Ok(Value::Bool(args[0] == args[1]))
 }
 
 pub fn read_string(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
