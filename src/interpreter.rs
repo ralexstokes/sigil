@@ -1356,254 +1356,6 @@ mod test {
     }
 
     #[test]
-    fn test_basic_prelude() {
-        let test_cases = vec![
-            (
-                "(list 1 2)",
-                list_with_values([Number(1), Number(2)].iter().map(|arg| arg.clone())),
-            ),
-            ("(list? (list 1))", Bool(true)),
-            ("(list? [1 2])", Bool(false)),
-            ("(empty? (list))", Bool(true)),
-            ("(empty? (list 1))", Bool(false)),
-            ("(count (list 44 42 41))", Number(3)),
-            ("(if (< 2 3) 12 13)", Number(12)),
-            ("(<= 12 12)", Bool(true)),
-            ("(<= 13 12)", Bool(false)),
-            ("(<= 12 13)", Bool(true)),
-            ("(>= 13 12)", Bool(true)),
-            ("(>= 13 13)", Bool(true)),
-            ("(>= 13 14)", Bool(false)),
-            ("(= 12 12)", Bool(true)),
-            ("(= 12 13)", Bool(false)),
-            (
-                "(read-string \"(+ 1 2)\")",
-                List(PersistentList::from_iter(vec![
-                    Symbol("+".to_string(), None),
-                    Number(1),
-                    Number(2),
-                ])),
-            ),
-            ("(eval (list + 1 2 3))", Number(6)),
-            ("(str \"hi\" 3 :foo)", String("hi3:foo".to_string())),
-            ("(str \"hi   \" 3 :foo)", String("hi   3:foo".to_string())),
-            (
-                "(cons 1 (list))",
-                list_with_values([Number(1)].iter().cloned()),
-            ),
-            (
-                "(cons 1 (list 2 3))",
-                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
-            ),
-            (
-                "(cons 1 [2 3])",
-                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
-            ),
-            (
-                "(cons (list 1) (list 2 3))",
-                list_with_values(
-                    [
-                        list_with_values([Number(1)].iter().cloned()),
-                        Number(2),
-                        Number(3),
-                    ]
-                    .iter()
-                    .cloned(),
-                ),
-            ),
-            ("(concat)", List(PersistentList::new())),
-            (
-                "(concat (list 1) (list 2 3))",
-                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
-            ),
-            (
-                "(concat (list 1) [3 3] (list 2 3))",
-                list_with_values(
-                    [Number(1), Number(3), Number(3), Number(2), Number(3)]
-                        .iter()
-                        .cloned(),
-                ),
-            ),
-            (
-                "(concat (list 1) (list 2 3) (list (list 4 5) 6))",
-                list_with_values(
-                    [
-                        Number(1),
-                        Number(2),
-                        Number(3),
-                        list_with_values([Number(4), Number(5)].iter().cloned()),
-                        Number(6),
-                    ]
-                    .iter()
-                    .cloned(),
-                ),
-            ),
-            (
-                "(vec '(1 2 3))",
-                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
-            ),
-            (
-                "(vec [1 2 3])",
-                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
-            ),
-            ("(vec nil)", vector_with_values([].iter().cloned())),
-            ("(nth [1 2 3] 2)", Number(3)),
-            ("(nth '(1 2 3) 1)", Number(2)),
-            ("(first '(1 2 3))", Number(1)),
-            ("(first '())", Nil),
-            ("(first [1 2 3])", Number(1)),
-            ("(first [])", Nil),
-            ("(first nil)", Nil),
-            (
-                "(rest '(1 2 3))",
-                list_with_values([Number(2), Number(3)].iter().cloned()),
-            ),
-            ("(rest '())", List(PersistentList::new())),
-            (
-                "(rest [1 2 3])",
-                list_with_values([Number(2), Number(3)].iter().cloned()),
-            ),
-            ("(rest [])", List(PersistentList::new())),
-            ("(rest nil)", List(PersistentList::new())),
-            ("(apply str [1 2 3])", String("123".to_string())),
-            ("(apply str '(1 2 3))", String("123".to_string())),
-            ("(apply str 0 1 2 '(1 2 3))", String("012123".to_string())),
-            (
-                "(def! inc (fn* [a] (+ a 1))) (map inc [1 2 3])",
-                list_with_values([Number(2), Number(3), Number(4)].iter().cloned()),
-            ),
-            (
-                "(def! inc (fn* [a] (+ a 1))) (map inc '(1 2 3))",
-                list_with_values([Number(2), Number(3), Number(4)].iter().cloned()),
-            ),
-            ("(nil? nil)", Bool(true)),
-            ("(nil? true)", Bool(false)),
-            ("(nil? false)", Bool(false)),
-            ("(nil? [1 2 3])", Bool(false)),
-            ("(true? true)", Bool(true)),
-            ("(true? nil)", Bool(false)),
-            ("(true? false)", Bool(false)),
-            ("(true? [1 2 3])", Bool(false)),
-            ("(false? false)", Bool(true)),
-            ("(false? nil)", Bool(false)),
-            ("(false? true)", Bool(false)),
-            ("(false? [1 2 3])", Bool(false)),
-            ("(symbol? 'a)", Bool(true)),
-            ("(symbol? 'foo/a)", Bool(true)),
-            ("(symbol? :foo/a)", Bool(false)),
-            ("(symbol? :a)", Bool(false)),
-            ("(symbol? false)", Bool(false)),
-            ("(symbol? true)", Bool(false)),
-            ("(symbol? nil)", Bool(false)),
-            ("(symbol? [1 2 3])", Bool(false)),
-            ("(symbol \"hi\")", Symbol("hi".to_string(), None)),
-            ("(keyword \"hi\")", Keyword("hi".to_string(), None)),
-            ("(keyword? :a)", Bool(true)),
-            ("(keyword? false)", Bool(false)),
-            ("(vector)", Vector(PersistentVector::new())),
-            (
-                "(vector 1)",
-                vector_with_values([Number(1)].iter().cloned()),
-            ),
-            (
-                "(vector 1 2 3)",
-                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
-            ),
-            ("(vector? [1 2])", Bool(true)),
-            ("(vector? :hi)", Bool(false)),
-            ("(sequential? '(1 2))", Bool(true)),
-            ("(sequential? [1 2])", Bool(true)),
-            ("(sequential? :hi)", Bool(false)),
-            ("(hash-map)", Map(PersistentMap::new())),
-            (
-                "(hash-map :a 2)",
-                map_with_values(
-                    [(Keyword("a".to_string(), None), Number(2))]
-                        .iter()
-                        .cloned(),
-                ),
-            ),
-            ("(map? {:a 1 :b 2})", Bool(true)),
-            ("(map? [1 2])", Bool(false)),
-            (
-                "(assoc {} :a 1)",
-                map_with_values(
-                    [(Keyword("a".to_string(), None), Number(1))]
-                        .iter()
-                        .cloned(),
-                ),
-            ),
-            (
-                "(assoc {} :a 1 :b 3)",
-                map_with_values(
-                    [
-                        (Keyword("a".to_string(), None), Number(1)),
-                        (Keyword("b".to_string(), None), Number(3)),
-                    ]
-                    .iter()
-                    .cloned(),
-                ),
-            ),
-            (
-                "(assoc {:a 1} :b 3)",
-                map_with_values(
-                    [
-                        (Keyword("a".to_string(), None), Number(1)),
-                        (Keyword("b".to_string(), None), Number(3)),
-                    ]
-                    .iter()
-                    .cloned(),
-                ),
-            ),
-            ("(dissoc {})", map_with_values([].iter().cloned())),
-            ("(dissoc {} :a)", map_with_values([].iter().cloned())),
-            (
-                "(dissoc {:a 1 :b 3} :a)",
-                map_with_values(
-                    [(Keyword("b".to_string(), None), Number(3))]
-                        .iter()
-                        .cloned(),
-                ),
-            ),
-            (
-                "(dissoc {:a 1 :b 3} :a :b :c)",
-                map_with_values([].iter().cloned()),
-            ),
-            ("(get {:a 1} :a)", Number(1)),
-            ("(get {:a 1} :b)", Nil),
-            ("(contains? {:a 1} :b)", Bool(false)),
-            ("(contains? {:a 1} :a)", Bool(true)),
-            ("(keys {})", list_with_values([].iter().cloned())),
-            // (
-            //     "(keys {:a 1 :b 2 :c 3})",
-            //     list_with_values(
-            //         [
-            //             Keyword("a".to_string(), None),
-            //             Keyword("b".to_string(), None),
-            //             Keyword("c".to_string(), None),
-            //         ]
-            //         .iter()
-            //         .cloned(),
-            //     ),
-            // ),
-            ("(vals {})", list_with_values([].iter().cloned())),
-            // (
-            //     "(vals {:a 1 :b 2 :c 3})",
-            //     list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
-            // ),
-            ("(last '(1 2 3))", Number(3)),
-            ("(last [1 2 3])", Number(3)),
-            ("(last '())", Nil),
-            ("(last [])", Nil),
-            ("(not [])", Bool(false)),
-            ("(not nil)", Bool(true)),
-            ("(not false)", Bool(true)),
-            ("(not 1)", Bool(false)),
-        ];
-        run_eval_test(&test_cases);
-    }
-
-    #[test]
     fn test_basic_fn() {
         let test_cases = vec![
             ("((fn* [a] (+ a 1)) 23)", Number(24)),
@@ -1855,6 +1607,254 @@ mod test {
                 "(def! f (fn* [a b & rest] (apply + a b rest))) (f 1 2 3 4)",
                 Number(10),
             ),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_basic_prelude() {
+        let test_cases = vec![
+            (
+                "(list 1 2)",
+                list_with_values([Number(1), Number(2)].iter().map(|arg| arg.clone())),
+            ),
+            ("(list? (list 1))", Bool(true)),
+            ("(list? [1 2])", Bool(false)),
+            ("(empty? (list))", Bool(true)),
+            ("(empty? (list 1))", Bool(false)),
+            ("(count (list 44 42 41))", Number(3)),
+            ("(if (< 2 3) 12 13)", Number(12)),
+            ("(<= 12 12)", Bool(true)),
+            ("(<= 13 12)", Bool(false)),
+            ("(<= 12 13)", Bool(true)),
+            ("(>= 13 12)", Bool(true)),
+            ("(>= 13 13)", Bool(true)),
+            ("(>= 13 14)", Bool(false)),
+            ("(= 12 12)", Bool(true)),
+            ("(= 12 13)", Bool(false)),
+            (
+                "(read-string \"(+ 1 2)\")",
+                List(PersistentList::from_iter(vec![
+                    Symbol("+".to_string(), None),
+                    Number(1),
+                    Number(2),
+                ])),
+            ),
+            ("(eval (list + 1 2 3))", Number(6)),
+            ("(str \"hi\" 3 :foo)", String("hi3:foo".to_string())),
+            ("(str \"hi   \" 3 :foo)", String("hi   3:foo".to_string())),
+            (
+                "(cons 1 (list))",
+                list_with_values([Number(1)].iter().cloned()),
+            ),
+            (
+                "(cons 1 (list 2 3))",
+                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(cons 1 [2 3])",
+                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(cons (list 1) (list 2 3))",
+                list_with_values(
+                    [
+                        list_with_values([Number(1)].iter().cloned()),
+                        Number(2),
+                        Number(3),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
+            ("(concat)", List(PersistentList::new())),
+            (
+                "(concat (list 1) (list 2 3))",
+                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(concat (list 1) [3 3] (list 2 3))",
+                list_with_values(
+                    [Number(1), Number(3), Number(3), Number(2), Number(3)]
+                        .iter()
+                        .cloned(),
+                ),
+            ),
+            (
+                "(concat (list 1) (list 2 3) (list (list 4 5) 6))",
+                list_with_values(
+                    [
+                        Number(1),
+                        Number(2),
+                        Number(3),
+                        list_with_values([Number(4), Number(5)].iter().cloned()),
+                        Number(6),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
+            (
+                "(vec '(1 2 3))",
+                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(vec [1 2 3])",
+                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            ("(vec nil)", vector_with_values([].iter().cloned())),
+            ("(nth [1 2 3] 2)", Number(3)),
+            ("(nth '(1 2 3) 1)", Number(2)),
+            ("(first '(1 2 3))", Number(1)),
+            ("(first '())", Nil),
+            ("(first [1 2 3])", Number(1)),
+            ("(first [])", Nil),
+            ("(first nil)", Nil),
+            (
+                "(rest '(1 2 3))",
+                list_with_values([Number(2), Number(3)].iter().cloned()),
+            ),
+            ("(rest '())", List(PersistentList::new())),
+            (
+                "(rest [1 2 3])",
+                list_with_values([Number(2), Number(3)].iter().cloned()),
+            ),
+            ("(rest [])", List(PersistentList::new())),
+            ("(rest nil)", List(PersistentList::new())),
+            ("(apply str [1 2 3])", String("123".to_string())),
+            ("(apply str '(1 2 3))", String("123".to_string())),
+            ("(apply str 0 1 2 '(1 2 3))", String("012123".to_string())),
+            (
+                "(def! inc (fn* [a] (+ a 1))) (map inc [1 2 3])",
+                list_with_values([Number(2), Number(3), Number(4)].iter().cloned()),
+            ),
+            (
+                "(def! inc (fn* [a] (+ a 1))) (map inc '(1 2 3))",
+                list_with_values([Number(2), Number(3), Number(4)].iter().cloned()),
+            ),
+            ("(nil? nil)", Bool(true)),
+            ("(nil? true)", Bool(false)),
+            ("(nil? false)", Bool(false)),
+            ("(nil? [1 2 3])", Bool(false)),
+            ("(true? true)", Bool(true)),
+            ("(true? nil)", Bool(false)),
+            ("(true? false)", Bool(false)),
+            ("(true? [1 2 3])", Bool(false)),
+            ("(false? false)", Bool(true)),
+            ("(false? nil)", Bool(false)),
+            ("(false? true)", Bool(false)),
+            ("(false? [1 2 3])", Bool(false)),
+            ("(symbol? 'a)", Bool(true)),
+            ("(symbol? 'foo/a)", Bool(true)),
+            ("(symbol? :foo/a)", Bool(false)),
+            ("(symbol? :a)", Bool(false)),
+            ("(symbol? false)", Bool(false)),
+            ("(symbol? true)", Bool(false)),
+            ("(symbol? nil)", Bool(false)),
+            ("(symbol? [1 2 3])", Bool(false)),
+            ("(symbol \"hi\")", Symbol("hi".to_string(), None)),
+            ("(keyword \"hi\")", Keyword("hi".to_string(), None)),
+            ("(keyword? :a)", Bool(true)),
+            ("(keyword? false)", Bool(false)),
+            ("(vector)", Vector(PersistentVector::new())),
+            (
+                "(vector 1)",
+                vector_with_values([Number(1)].iter().cloned()),
+            ),
+            (
+                "(vector 1 2 3)",
+                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            ("(vector? [1 2])", Bool(true)),
+            ("(vector? :hi)", Bool(false)),
+            ("(sequential? '(1 2))", Bool(true)),
+            ("(sequential? [1 2])", Bool(true)),
+            ("(sequential? :hi)", Bool(false)),
+            ("(hash-map)", Map(PersistentMap::new())),
+            (
+                "(hash-map :a 2)",
+                map_with_values(
+                    [(Keyword("a".to_string(), None), Number(2))]
+                        .iter()
+                        .cloned(),
+                ),
+            ),
+            ("(map? {:a 1 :b 2})", Bool(true)),
+            ("(map? [1 2])", Bool(false)),
+            (
+                "(assoc {} :a 1)",
+                map_with_values(
+                    [(Keyword("a".to_string(), None), Number(1))]
+                        .iter()
+                        .cloned(),
+                ),
+            ),
+            (
+                "(assoc {} :a 1 :b 3)",
+                map_with_values(
+                    [
+                        (Keyword("a".to_string(), None), Number(1)),
+                        (Keyword("b".to_string(), None), Number(3)),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
+            (
+                "(assoc {:a 1} :b 3)",
+                map_with_values(
+                    [
+                        (Keyword("a".to_string(), None), Number(1)),
+                        (Keyword("b".to_string(), None), Number(3)),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
+            ("(dissoc {})", map_with_values([].iter().cloned())),
+            ("(dissoc {} :a)", map_with_values([].iter().cloned())),
+            (
+                "(dissoc {:a 1 :b 3} :a)",
+                map_with_values(
+                    [(Keyword("b".to_string(), None), Number(3))]
+                        .iter()
+                        .cloned(),
+                ),
+            ),
+            (
+                "(dissoc {:a 1 :b 3} :a :b :c)",
+                map_with_values([].iter().cloned()),
+            ),
+            ("(get {:a 1} :a)", Number(1)),
+            ("(get {:a 1} :b)", Nil),
+            ("(contains? {:a 1} :b)", Bool(false)),
+            ("(contains? {:a 1} :a)", Bool(true)),
+            ("(keys {})", list_with_values([].iter().cloned())),
+            // (
+            //     "(keys {:a 1 :b 2 :c 3})",
+            //     list_with_values(
+            //         [
+            //             Keyword("a".to_string(), None),
+            //             Keyword("b".to_string(), None),
+            //             Keyword("c".to_string(), None),
+            //         ]
+            //         .iter()
+            //         .cloned(),
+            //     ),
+            // ),
+            ("(vals {})", list_with_values([].iter().cloned())),
+            // (
+            //     "(vals {:a 1 :b 2 :c 3})",
+            //     list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            // ),
+            ("(last '(1 2 3))", Number(3)),
+            ("(last [1 2 3])", Number(3)),
+            ("(last '())", Nil),
+            ("(last [])", Nil),
+            ("(not [])", Bool(false)),
+            ("(not nil)", Bool(true)),
+            ("(not false)", Bool(true)),
+            ("(not 1)", Bool(false)),
         ];
         run_eval_test(&test_cases);
     }
