@@ -1279,7 +1279,11 @@ mod test {
 
     #[test]
     fn test_basic_do() {
-        let test_cases = vec![("(do )", Nil), ("(do 1 2 3)", Number(3))];
+        let test_cases = vec![
+            ("(do )", Nil),
+            ("(do 1 2 3)", Number(3)),
+            ("(do (do 1 2))", Number(2)),
+        ];
         run_eval_test(&test_cases);
     }
 
