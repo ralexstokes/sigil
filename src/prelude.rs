@@ -356,7 +356,7 @@ pub fn eval(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<V
         )));
     }
 
-    interpreter.evaluate(&args[0])
+    interpreter.evaluate_in_global_scope(&args[0])
 }
 
 pub fn to_str(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {

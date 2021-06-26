@@ -305,16 +305,30 @@ impl Default for Interpreter {
             .evaluate(&core_boot_form)
             .expect("core boot is well-formed");
 
+        let mut command_line_args_form_source = String::from("(def! ");
+        command_line_args_form_source += COMMAND_LINE_ARGS_SYMBOL;
+        command_line_args_form_source += " '())";
+        let command_line_args_def_result =
+            read(&command_line_args_form_source).expect("environment boot is well-formed");
+        let command_line_args_def_form = command_line_args_def_result
+            .get(0)
+            .expect("environment boot is well-formed");
+        let _ = interpreter
+            .evaluate(&command_line_args_def_form)
+            .expect("environment boot is well-formed");
+
         interpreter
     }
 }
 
 impl Interpreter {
+    /// Store `args` in the var referenced by `COMMAND_LINE_ARGS_SYMBOL`.
     pub fn intern_args(&mut self, args: Args) {
         let form = args.map(Value::String).collect();
         self.intern_var(COMMAND_LINE_ARGS_SYMBOL, Value::List(form));
     }
 
+    /// Read the interned command line argument at position `n` in the collection.
     pub fn command_line_arg(&mut self, n: usize) -> EvaluationResult<String> {
         match self.resolve_symbol(COMMAND_LINE_ARGS_SYMBOL, None)? {
             Value::List(args) => match args.iter().nth(n) {
@@ -326,7 +340,7 @@ impl Interpreter {
                     InterpreterError::MissingCommandLineArg(n, args.len()),
                 )),
             },
-            _ => panic!("programmer error to not intern command line args as a list"),
+            _ => panic!("error to not intern command line args as a list"),
         }
     }
 
@@ -630,6 +644,8 @@ impl Interpreter {
         Ok(Value::List(forms.clone()))
     }
 
+    /// Apply the given `Fn` to the supplied `args`.
+    /// Exposed for various `prelude` functions.
     pub fn apply_fn_inner(
         &mut self,
         body: &PersistentList<Value>,
@@ -1144,6 +1160,7 @@ impl Interpreter {
         }
     }
 
+    /// Evaluate the `form` according to the semantics of the language.
     pub fn evaluate(&mut self, form: &Value) -> EvaluationResult<Value> {
         match form {
             Value::Nil => Ok(Value::Nil),
@@ -1185,10 +1202,20 @@ impl Interpreter {
             f @ Value::Fn(_) => Ok(f.clone()),
             Value::Primitive(_) => unreachable!(),
             Value::Recur(_) => unreachable!(),
-            Value::Atom(_) => unreachable!(),
+            a @ Value::Atom(_) => Ok(a.clone()),
             Value::Macro(_) => unreachable!(),
             Value::Exception(_) => unreachable!(),
         }
+    }
+
+    /// Evaluate `form` in the global scope of the interpreter.
+    /// This method is exposed for the `eval` primitive which
+    /// has these semantics.
+    pub fn evaluate_in_global_scope(&mut self, form: &Value) -> EvaluationResult<Value> {
+        let mut child_scopes: Vec<_> = self.scopes.drain(1..).collect();
+        let result = self.evaluate(form);
+        self.scopes.append(&mut child_scopes);
+        result
     }
 }
 
@@ -1492,10 +1519,12 @@ mod test {
             ("(atom 5)", atom_with_value(Number(5))),
             ("(atom? (atom 5))", Bool(true)),
             ("(atom? nil)", Bool(false)),
+            ("(atom? 1)", Bool(false)),
             ("(def! a (atom 5)) (deref a)", Number(5)),
             ("(def! a (atom 5)) @a", Number(5)),
             ("(def! a (atom (fn* [a] (+ a 1)))) (@a 4)", Number(5)),
             ("(def! a (atom 5)) (reset! a 10)", Number(10)),
+            ("(def! a (atom 5)) (reset! a 10) @a", Number(10)),
             (
                 "(def! a (atom 5)) (def! inc (fn* [x] (+ x 1))) (swap! a inc)",
                 Number(6),
@@ -1512,6 +1541,14 @@ mod test {
             (
                 "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (reset! a 10) (deref a)",
                 Number(10),
+            ),
+            (
+                "(def! a (atom 7)) (def! f (fn* [] (swap! a inc))) (f) (f)",
+                Number(9),
+            ),
+            (
+                "(def! g (let* [a (atom 0)] (fn* [] (swap! a inc)))) (def! a (atom 1)) (g) (g) (g)",
+                Number(3),
             ),
         ];
         run_eval_test(&test_cases);
@@ -1692,6 +1729,15 @@ mod test {
     }
 
     #[test]
+    fn test_basic_interpreter() {
+        let test_cases = vec![
+            ("(list? *command-line-args*)", Bool(true)),
+            ("*command-line-args*", list_with_values(vec![])),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
     fn test_basic_prelude() {
         let test_cases = vec![
             ("(list)", list_with_values(vec![])),
@@ -1798,9 +1844,26 @@ mod test {
             ),
             ("(= nil (read-string \"nil\"))", Bool(true)),
             ("(read-string \"7 ;; comment\")", Number(7)),
+            ("(read-string \"7;;!\")", Number(7)),
+            ("(read-string \"7;;#\")", Number(7)),
+            ("(read-string \"7;;$\")", Number(7)),
+            ("(read-string \"7;;%\")", Number(7)),
+            ("(read-string \"7;;'\")", Number(7)),
+            ("(read-string \"7;;\\\\\")", Number(7)),
+            ("(read-string \"7;;////////\")", Number(7)),
+            ("(read-string \"7;;`\")", Number(7)),
+            ("(read-string \"7;; &()*+,-./:;<=>?@[]^_{|}~\")", Number(7)),
             ("(read-string \";; comment\")", Nil),
             ("(eval (list + 1 2 3))", Number(6)),
             ("(eval (read-string \"(+ 2 3)\"))", Number(5)),
+            (
+                "(def! a 1) (let* [a 12] (eval (read-string \"a\")))",
+                Number(1),
+            ),
+            (
+                "(let* [b 12] (do (eval (read-string \"(def! aa 7)\")) aa))",
+                Number(7),
+            ),
             ("(str)", String("".to_string())),
             ("(str \"\")", String("".to_string())),
             ("(str \"hi\" 3 :foo)", String("hi3:foo".to_string())),
