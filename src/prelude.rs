@@ -299,12 +299,13 @@ pub fn read_string(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Valu
     match &args[0] {
         Value::String(s) => {
             let mut forms = read(s)?;
-            if forms.len() != 1 {
-                return Err(EvaluationError::List(ListEvaluationError::Failure(
+            match forms.len() {
+                0 => Ok(Value::Nil),
+                1 => Ok(forms.pop().unwrap()),
+                _ => Err(EvaluationError::List(ListEvaluationError::Failure(
                     "`read-string` only reads one form".to_string(),
-                )));
+                ))),
             }
-            Ok(forms.pop().unwrap())
         }
         _ => Err(EvaluationError::List(ListEvaluationError::Failure(
             "incorrect argument".to_string(),
