@@ -1202,19 +1202,43 @@ mod test {
     use Value::*;
 
     fn run_eval_test(test_cases: &[(&str, Value)]) {
+        let mut has_err = false;
         for (input, expected) in test_cases {
+            let forms = match read(input) {
+                Ok(forms) => forms,
+                Err(e) => {
+                    has_err = true;
+                    println!("failure: reading `{}` failed: {}", input, e);
+                    continue;
+                }
+            };
             let mut interpreter = Interpreter::default();
-            // dbg!(&input);
-            let forms = read(input).unwrap();
             let mut final_result: Option<Value> = None;
-            for form in forms.iter() {
-                // dbg!(&form);
-                let result = interpreter.evaluate(form).unwrap();
-                // dbg!(&result);
-                final_result = Some(result);
+            for form in &forms {
+                match interpreter.evaluate(form) {
+                    Ok(result) => {
+                        final_result = Some(result);
+                    }
+                    Err(e) => {
+                        has_err = true;
+                        println!(
+                            "failure: evaluating `{}` should give `{}` but errored: {}",
+                            input, expected, e
+                        );
+                    }
+                }
             }
-            assert_eq!(final_result.unwrap(), *expected)
+            if let Some(final_result) = final_result {
+                if final_result != *expected {
+                    has_err = true;
+                    println!(
+                        "failure: evaluating `{}` should give `{}` but got: {}",
+                        input, expected, final_result
+                    );
+                }
+            }
         }
+        assert!(!has_err);
     }
 
     #[test]
@@ -1226,6 +1250,12 @@ mod test {
             ("1337", Number(1337)),
             ("-1337", Number(-1337)),
             ("\"hi\"", String("hi".to_string())),
+            (r#""""#, String("".to_string())),
+            ("\"abc\"", String("abc".to_string())),
+            ("\"abc   def\"", String("abc   def".to_string())),
+            ("\"abc\\ndef\\nghi\"", String("abc\\ndef\\nghi".to_string())),
+            ("\"abc\\def\\ghi\"", String("abc\\def\\ghi".to_string())),
+            ("\"\\\\n\"", String("\\\\n".to_string())),
             (":hi", Keyword("hi".to_string(), None)),
             (
                 ":foo/hi",
@@ -1375,6 +1405,8 @@ mod test {
             ("(let* [b nil] (if b 2 3))", Number(3)),
             ("(if (> (count (list 1 2 3)) 3) 89 78)", Number(78)),
             ("(if (>= (count (list 1 2 3)) 3) 89 78)", Number(89)),
+            ("(if \"\" 7 8)", Number(7)),
+            ("(if [] 7 8)", Number(7)),
         ];
         run_eval_test(&test_cases);
     }
@@ -1639,8 +1671,13 @@ mod test {
             ("((fn* [& rest] (last rest)) 5 6 7)", Number(7)),
             ("((fn* [& rest] (nth rest 1)) 5 6 7)", Number(6)),
             ("((fn* [& rest] (count rest)))", Number(0)),
+            ("((fn* [& rest] (count rest)) 1)", Number(1)),
             ("((fn* [& rest] (count rest)) 1 2 3)", Number(3)),
+            ("((fn* [& rest] (list? rest)) 1 2 3)", Bool(true)),
+            ("((fn* [& rest] (list? rest)))", Bool(true)),
             ("((fn* [a & rest] (count rest)) 1 2 3)", Number(2)),
+            ("((fn* [a & rest] (count rest)) 3)", Number(0)),
+            ("((fn* [a & rest] (list? rest)) 3)", Bool(true)),
             ("((fn* [a b & rest] (apply + a b rest)) 1 2 3)", Number(6)),
             (
                 "(def! f (fn* [a & rest] (count rest))) (f 1 2 3)",
@@ -1667,9 +1704,19 @@ mod test {
             ("(list? [1 2])", Bool(false)),
             ("(empty? (list))", Bool(true)),
             ("(empty? (list 1))", Bool(false)),
-            ("(count (list 44 42 41))", Number(3)),
-            ("(count (list))", Number(0)),
+            ("(empty? [1 2 3])", Bool(false)),
+            ("(empty? [])", Bool(true)),
             ("(count nil)", Number(0)),
+            ("(count \"hi\")", Number(2)),
+            ("(count \"\")", Number(0)),
+            ("(count (list))", Number(0)),
+            ("(count (list 44 42 41))", Number(3)),
+            ("(count [])", Number(0)),
+            ("(count [1 2 3])", Number(3)),
+            ("(count {})", Number(0)),
+            ("(count {:a 1 :b 2})", Number(2)),
+            ("(count #{})", Number(0)),
+            ("(count #{:a 1 :b 2})", Number(4)),
             ("(if (< 2 3) 12 13)", Number(12)),
             ("(> 13 12)", Bool(true)),
             ("(> 13 13)", Bool(false)),
@@ -1704,6 +1751,34 @@ mod test {
             ("(= 2 (+ 1 1))", Bool(true)),
             ("(= nil (+ 1 1))", Bool(false)),
             ("(= nil nil)", Bool(true)),
+            ("(= \"\" \"\")", Bool(true)),
+            ("(= \"abc\" \"abc\")", Bool(true)),
+            ("(= \"\" \"abc\")", Bool(false)),
+            ("(= \"abc\" \"\")", Bool(false)),
+            ("(= \"abc\" \"def\")", Bool(false)),
+            ("(= \"abc\" \"ABC\")", Bool(false)),
+            ("(= (list) \"\")", Bool(false)),
+            ("(= \"\" (list))", Bool(false)),
+            ("(= :abc :abc)", Bool(true)),
+            ("(= :abc :def)", Bool(false)),
+            ("(= :abc \":abc\")", Bool(false)),
+            ("(= (list :abc) (list :abc))", Bool(true)),
+            ("(= [] (list))", Bool(true)),
+            ("(= [7 8] [7 8])", Bool(true)),
+            ("(= [:abc] [:abc])", Bool(true)),
+            ("(= (list 1 2) [1 2])", Bool(true)),
+            ("(= (list 1) [])", Bool(false)),
+            ("(= [] (list 1))", Bool(false)),
+            ("(= [] [1])", Bool(false)),
+            ("(= 0 [])", Bool(false)),
+            ("(= [] 0)", Bool(false)),
+            ("(= [] \"\")", Bool(false)),
+            ("(= \"\" [])", Bool(false)),
+            ("(= [(list)] (list []))", Bool(true)),
+            (
+                "(= [1 2 (list 3 4 [5 6])] (list 1 2 [3 4 (list 5 6)]))",
+                Bool(true),
+            ),
             (
                 "(read-string \"(+ 1 2)\")",
                 List(PersistentList::from_iter(vec![
@@ -1713,8 +1788,11 @@ mod test {
                 ])),
             ),
             ("(eval (list + 1 2 3))", Number(6)),
+            ("(str)", String("".to_string())),
+            ("(str \"\")", String("".to_string())),
             ("(str \"hi\" 3 :foo)", String("hi3:foo".to_string())),
             ("(str \"hi   \" 3 :foo)", String("hi   3:foo".to_string())),
+            ("(str [])", String("[]".to_string())),
             (
                 "(cons 1 (list))",
                 list_with_values([Number(1)].iter().cloned()),
@@ -1925,8 +2003,12 @@ mod test {
             ("(last [])", Nil),
             ("(not [])", Bool(false)),
             ("(not nil)", Bool(true)),
+            ("(not true)", Bool(false)),
             ("(not false)", Bool(true)),
             ("(not 1)", Bool(false)),
+            ("(not 0)", Bool(false)),
+            ("(not \"a\")", Bool(false)),
+            ("(not \"\")", Bool(false)),
         ];
         run_eval_test(&test_cases);
     }

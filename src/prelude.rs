@@ -174,8 +174,15 @@ pub fn is_empty(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> 
         )));
     }
     match &args[0] {
+        Value::Nil => Ok(Value::Bool(true)),
+        Value::String(s) => Ok(Value::Bool(s.is_empty())),
         Value::List(elems) => Ok(Value::Bool(elems.is_empty())),
-        _ => Ok(Value::Bool(false)),
+        Value::Vector(elems) => Ok(Value::Bool(elems.is_empty())),
+        Value::Map(elems) => Ok(Value::Bool(elems.is_empty())),
+        Value::Set(elems) => Ok(Value::Bool(elems.is_empty())),
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
     }
 }
 
@@ -186,8 +193,12 @@ pub fn count(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         )));
     }
     match &args[0] {
-        Value::List(elems) => Ok(Value::Number(elems.len() as i64)),
         Value::Nil => Ok(Value::Number(0)),
+        Value::String(s) => Ok(Value::Number(s.len() as i64)),
+        Value::List(elems) => Ok(Value::Number(elems.len() as i64)),
+        Value::Vector(elems) => Ok(Value::Number(elems.len() as i64)),
+        Value::Map(elems) => Ok(Value::Number(elems.size() as i64)),
+        Value::Set(elems) => Ok(Value::Number(elems.size() as i64)),
         _ => Err(EvaluationError::List(ListEvaluationError::Failure(
             "incorrect argument".to_string(),
         ))),

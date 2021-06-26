@@ -187,10 +187,24 @@ impl PartialEq for Value {
             },
             List(ref x) => match other {
                 List(ref y) => x == y,
+                Vector(ref y) => {
+                    if x.len() == y.len() {
+                        x.iter().zip(y.iter()).map(|(a, b)| a == b).all(|x| x)
+                    } else {
+                        false
+                    }
+                }
                 _ => false,
             },
             Vector(ref x) => match other {
                 Vector(ref y) => x == y,
+                List(ref y) => {
+                    if x.len() == y.len() {
+                        x.iter().zip(y.iter()).map(|(a, b)| a == b).all(|x| x)
+                    } else {
+                        false
+                    }
+                }
                 _ => false,
             },
             Map(ref x) => match other {
