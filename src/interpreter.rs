@@ -1933,6 +1933,77 @@ mod test {
     }
 
     #[test]
+    fn test_basic_macros() {
+        let test_cases = vec![
+            ("(defmacro! one (fn* [] 1)) (one)", Number(1)),
+            ("(defmacro! two (fn* [] 2)) (two)", Number(2)),
+            ("(defmacro! unless (fn* [pred a b] `(if ~pred ~b ~a))) (unless false 7 8)", Number(7)),
+            ("(defmacro! unless (fn* [pred a b] `(if ~pred ~b ~a))) (unless true 7 8)", Number(8)),
+            ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (unless false 7 8)", Number(7)),
+            ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (unless true 7 8)", Number(8)),
+            ("(defmacro! one (fn* [] 1)) (macroexpand (one))", Number(1)),
+            ("(defmacro! unless (fn* [pred a b] `(if ~pred ~b ~a))) (macroexpand (unless PRED A B))",
+                read("(if PRED B A)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some")
+            ),
+            ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (macroexpand (unless PRED A B))",
+                read("(if (not PRED) A B)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some")
+            ),
+            ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (macroexpand (unless 2 3 4))",
+                read("(if (not 2) 3 4)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some")
+            ),
+            ("(defmacro! identity (fn* [x] x)) (let* [a 123] (macroexpand (identity a)))",
+                read("a")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some")
+            ),
+            ("(defmacro! identity (fn* [x] x)) (let* [a 123] (identity a))",
+                Number(123),
+            ),
+            ("(macroexpand (cond))", Nil),
+            ("(cond)", Nil),
+            ("(macroexpand (cond X Y))",
+                read("(if X Y (cond))")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some")
+            ),
+            ("(cond true 7)", Number(7)),
+            ("(cond true 7 true 8)", Number(7)),
+            ("(cond false 7)", Nil),
+            ("(cond false 7 true 8)", Number(8)),
+            ("(cond false 7 false 8 :else 9)", Number(9)),
+            ("(cond false 7 (= 2 2) 8 :else 9)", Number(8)),
+            ("(cond false 7 false 8 false 9)", Nil),
+            ("(let* [x (cond false :no true :yes)] x)", Keyword("yes".to_string(), None)),
+            ("(macroexpand (cond X Y Z T))",
+                read("(if X Y (cond Z T))")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some")
+            ),
+            ("(def! x 2) (defmacro! a (fn* [] x)) (a)", Number(2)),
+            ("(def! x 2) (defmacro! a (fn* [] x)) (let* [x 3] (a))", Number(2)),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
     fn test_basic_try_catch() {
         let exc = exception(
             "test",
@@ -2335,16 +2406,22 @@ mod test {
                 vector_with_values([Number(1)].iter().cloned()),
             ),
             ("(nth [1 2 3] 2)", Number(3)),
+            ("(nth [1] 0)", Number(1)),
+            ("(nth [1 2 nil] 2)", Nil),
             ("(nth '(1 2 3) 1)", Number(2)),
+            ("(nth '(1 2 3) 0)", Number(1)),
+            ("(nth '(1 2 nil) 2)", Nil),
             ("(first '(1 2 3))", Number(1)),
             ("(first '())", Nil),
             ("(first [1 2 3])", Number(1)),
+            ("(first [10])", Number(10)),
             ("(first [])", Nil),
             ("(first nil)", Nil),
             (
                 "(rest '(1 2 3))",
                 list_with_values([Number(2), Number(3)].iter().cloned()),
             ),
+            ("(rest '(1))", list_with_values(vec![])),
             ("(rest '())", List(PersistentList::new())),
             (
                 "(rest [1 2 3])",
@@ -2352,6 +2429,15 @@ mod test {
             ),
             ("(rest [])", List(PersistentList::new())),
             ("(rest nil)", List(PersistentList::new())),
+            ("(rest [10])", List(PersistentList::new())),
+            (
+                "(rest [10 11 12])",
+                list_with_values(vec![Number(11), Number(12)]),
+            ),
+            (
+                "(rest (cons 10 [11 12]))",
+                list_with_values(vec![Number(11), Number(12)]),
+            ),
             ("(apply str [1 2 3])", String("123".to_string())),
             ("(apply str '(1 2 3))", String("123".to_string())),
             ("(apply str 0 1 2 '(1 2 3))", String("012123".to_string())),
@@ -2490,6 +2576,8 @@ mod test {
             ("(not 0)", Bool(false)),
             ("(not \"a\")", Bool(false)),
             ("(not \"\")", Bool(false)),
+            ("(not (= 1 1))", Bool(false)),
+            ("(not (= 1 2))", Bool(true)),
         ];
         run_eval_test(&test_cases);
     }
