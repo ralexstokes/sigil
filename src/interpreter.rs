@@ -147,99 +147,94 @@ fn unintern_value_in_namespace(identifier: &str, namespace: &mut Namespace) {
     let _ = namespace.remove(identifier);
 }
 
-fn eval_quasiquote(value: &Value) -> EvaluationResult<Value> {
-    match value {
-        Value::List(elems) => {
-            if let Some(first) = elems.first() {
-                match first {
-                    Value::Symbol(s, None) if s == "unquote" => {
-                        if let Some(rest) = elems.drop_first() {
-                            if let Some(argument) = rest.first() {
-                                return Ok(argument.clone());
+fn eval_quasiquote_list_inner<'a>(
+    elems: impl Iterator<Item = &'a Value>,
+) -> EvaluationResult<Value> {
+    let mut result = Value::List(PersistentList::new());
+    for form in elems {
+        match form {
+            Value::List(inner) => {
+                if let Some(first_inner) = inner.first() {
+                    match first_inner {
+                        Value::Symbol(s, None) if s == "splice-unquote" => {
+                            if let Some(rest) = inner.drop_first() {
+                                if let Some(second) = rest.first() {
+                                    result = list_with_values(vec![
+                                        Value::Symbol(
+                                            "concat".to_string(),
+                                            Some("core".to_string()),
+                                        ),
+                                        second.clone(),
+                                        result,
+                                    ]);
+                                }
+                            } else {
+                                return Err(EvaluationError::List(
+                                    ListEvaluationError::QuasiquoteError(
+                                        "type error to `splice-unquote`".to_string(),
+                                    ),
+                                ));
                             }
                         }
-                        return Err(EvaluationError::List(ListEvaluationError::QuasiquoteError(
-                            "type error to `unquote`".to_string(),
-                        )));
-                    }
-                    _ => {
-                        let mut result = Value::List(PersistentList::new());
-                        for form in elems.reverse().iter() {
-                            match form {
-                                Value::List(inner) => {
-                                    if let Some(first_inner) = inner.first() {
-                                        match first_inner {
-                                            Value::Symbol(s, None) if s == "splice-unquote" => {
-                                                if let Some(rest) = inner.drop_first() {
-                                                    if let Some(second) = rest.first() {
-                                                        result = list_with_values(
-                                                            [
-                                                                Value::Symbol(
-                                                                    "concat".to_string(),
-                                                                    None,
-                                                                ),
-                                                                second.clone(),
-                                                                result,
-                                                            ]
-                                                            .iter()
-                                                            .cloned(),
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                            _ => {
-                                                result = list_with_values(
-                                                    [
-                                                        Value::Symbol(
-                                                            "cons".to_string(),
-                                                            Some("core".to_string()),
-                                                        ),
-                                                        eval_quasiquote(form)?,
-                                                        result,
-                                                    ]
-                                                    .iter()
-                                                    .cloned(),
-                                                );
-                                            }
-                                        }
-                                    } else {
-                                        result = list_with_values(
-                                            [
-                                                Value::Symbol(
-                                                    "cons".to_string(),
-                                                    Some("core".to_string()),
-                                                ),
-                                                Value::List(PersistentList::new()),
-                                                result,
-                                            ]
-                                            .iter()
-                                            .cloned(),
-                                        );
-                                    }
-                                }
-                                form => {
-                                    result = list_with_values(
-                                        [
-                                            Value::Symbol(
-                                                "cons".to_string(),
-                                                Some("core".to_string()),
-                                            ),
-                                            eval_quasiquote(form)?,
-                                            result,
-                                        ]
-                                        .iter()
-                                        .cloned(),
-                                    );
-                                }
-                            }
+                        _ => {
+                            result = list_with_values(vec![
+                                Value::Symbol("cons".to_string(), Some("core".to_string())),
+                                eval_quasiquote(form)?,
+                                result,
+                            ]);
                         }
-                        return Ok(result);
                     }
+                } else {
+                    result = list_with_values(vec![
+                        Value::Symbol("cons".to_string(), Some("core".to_string())),
+                        Value::List(PersistentList::new()),
+                        result,
+                    ]);
                 }
             }
-            Ok(Value::List(elems.clone()))
+            form => {
+                result = list_with_values(vec![
+                    Value::Symbol("cons".to_string(), Some("core".to_string())),
+                    eval_quasiquote(form)?,
+                    result,
+                ]);
+            }
         }
-        elem @ Value::Map(_) | elem @ Value::Symbol(_, _) => {
+    }
+    Ok(result)
+}
+
+fn eval_quasiquote_list(elems: &PersistentList<Value>) -> EvaluationResult<Value> {
+    if let Some(first) = elems.first() {
+        match first {
+            Value::Symbol(s, None) if s == "unquote" => {
+                if let Some(rest) = elems.drop_first() {
+                    if let Some(argument) = rest.first() {
+                        return Ok(argument.clone());
+                    }
+                }
+                return Err(EvaluationError::List(ListEvaluationError::QuasiquoteError(
+                    "type error to `unquote`".to_string(),
+                )));
+            }
+            _ => return eval_quasiquote_list_inner(elems.reverse().iter()),
+        }
+    }
+    Ok(Value::List(PersistentList::new()))
+}
+
+fn eval_quasiquote_vector(elems: &PersistentVector<Value>) -> EvaluationResult<Value> {
+    Ok(list_with_values(vec![
+        Value::Symbol("vec".to_string(), Some("core".to_string())),
+        eval_quasiquote_list_inner(elems.iter().rev())?,
+    ]))
+}
+
+fn eval_quasiquote(value: &Value) -> EvaluationResult<Value> {
+    match value {
+        Value::List(elems) => eval_quasiquote_list(elems),
+        Value::Vector(elems) => eval_quasiquote_vector(elems),
+        elem @ Value::Map(_) | elem @ Value::Symbol(..) => {
             let args = vec![Value::Symbol("quote".to_string(), None), elem.clone()];
             Ok(list_with_values(args.into_iter()))
         }
@@ -1590,6 +1585,17 @@ mod test {
     #[test]
     fn test_basic_quasiquote() {
         let test_cases = vec![
+            ("(quasiquote nil)", Nil),
+            ("(quasiquote ())", list_with_values(vec![])),
+            ("(quasiquote 7)", Number(7)),
+            ("(quasiquote a)", Symbol("a".to_string(), None)),
+            (
+                "(quasiquote {:a b})",
+                map_with_values(vec![(
+                    Keyword("a".to_string(), None),
+                    Symbol("b".to_string(), None),
+                )]),
+            ),
             (
                 "(def! lst '(b c)) `(a lst d)",
                 read("(a lst d)")
@@ -1598,6 +1604,106 @@ mod test {
                     .nth(0)
                     .expect("some"),
             ),
+            (
+                "`(1 2 (3 4))",
+                read("(1 2 (3 4))")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`(nil)",
+                read("(nil)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`(1 ())",
+                read("(1 ())")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`(() 1)",
+                read("(() 1)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`(2 () 1)",
+                read("(2 () 1)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`(())",
+                read("(())")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`(f () g (h) i (j k) l)",
+                read("(f () g (h) i (j k) l)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            ("`~7", Number(7)),
+            ("(def! a 8) `a", Symbol("a".to_string(), None)),
+            ("(def! a 8) `~a", Number(8)),
+            (
+                "`(1 a 3)",
+                read("(1 a 3)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! a 8) `(1 ~a 3)",
+                read("(1 8 3)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! b '(1 :b :d)) `(1 b 3)",
+                read("(1 b 3)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! b '(1 :b :d)) `(1 ~b 3)",
+                read("(1 (1 :b :d) 3)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`(~1 ~2)",
+                read("(1 2)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            ("(let* [x 0] `~x)", Number(0)),
             (
                 "(def! lst '(b c)) `(a ~lst d)",
                 read("(a (b c) d)")
@@ -1609,6 +1715,214 @@ mod test {
             (
                 "(def! lst '(b c)) `(a ~@lst d)",
                 read("(a b c d)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! lst '(b c)) `(a ~@lst)",
+                read("(a b c)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! lst '(b c)) `(~@lst 2)",
+                read("(b c 2)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! lst '(b c)) `(~@lst ~@lst)",
+                read("(b c b c)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "((fn* [q] (quasiquote ((unquote q) (quote (unquote q))))) (quote (fn* [q] (quasiquote ((unquote q) (quote (unquote q)))))))",
+                read("((fn* [q] (quasiquote ((unquote q) (quote (unquote q))))) (quote (fn* [q] (quasiquote ((unquote q) (quote (unquote q)))))))")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`[]",
+                read("[]")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`[[]]",
+                read("[[]]")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`[()]",
+                read("[()]")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`([])",
+                read("([])")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! a 8) `[1 a 3]",
+                read("[1 a 3]")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`[a [] b [c] d [e f] g]",
+                read("[a [] b [c] d [e f] g]")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! a 8) `[~a]",
+                read("[8]")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! a 8) `[(~a)]",
+                read("[(8)]")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! a 8) `([~a])",
+                read("([8])")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! a 8) `[a ~a a]",
+                read("[a 8 a]")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! a 8) `([a ~a a])",
+                read("([a 8 a])")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! a 8) `[(a ~a a)]",
+                read("[(a 8 a)]")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! c '(1 :b :d)) `[~@c]",
+                read("[1 :b :d]")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! c '(1 :b :d)) `[(~@c)]",
+                read("[(1 :b :d)]")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! c '(1 :b :d)) `([~@c])",
+                read("([1 :b :d])")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! c '(1 :b :d)) `[1 ~@c 3]",
+                read("[1 1 :b :d 3]")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! c '(1 :b :d)) `([1 ~@c 3])",
+                read("([1 1 :b :d 3])")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "(def! c '(1 :b :d)) `[(1 ~@c 3)]",
+                read("[(1 1 :b :d 3)]")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`(0 unquote)",
+                read("(0 unquote)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`(0 splice-unquote)",
+                read("(0 splice-unquote)")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`[unquote 0]",
+                read("[unquote 0]")
+                    .expect("example is correct")
+                    .into_iter()
+                    .nth(0)
+                    .expect("some"),
+            ),
+            (
+                "`[splice-unquote 0]",
+                read("[splice-unquote 0]")
                     .expect("example is correct")
                     .into_iter()
                     .nth(0)
@@ -1821,6 +2135,13 @@ mod test {
             ("(= [] \"\")", Bool(false)),
             ("(= \"\" [])", Bool(false)),
             ("(= [(list)] (list []))", Bool(true)),
+            ("(= 'abc 'abc)", Bool(true)),
+            ("(= 'abc 'abdc)", Bool(false)),
+            ("(= 'abc \"abc\")", Bool(false)),
+            ("(= \"abc\" 'abc)", Bool(false)),
+            ("(= \"abc\" (str 'abc))", Bool(true)),
+            ("(= 'abc nil)", Bool(false)),
+            ("(= nil 'abc)", Bool(false)),
             (
                 "(= [1 2 (list 3 4 [5 6])] (list 1 2 [3 4 (list 5 6)]))",
                 Bool(true),
@@ -1873,6 +2194,11 @@ mod test {
                 "(cons 1 (list))",
                 list_with_values([Number(1)].iter().cloned()),
             ),
+            ("(cons 1 [])", list_with_values([Number(1)].iter().cloned())),
+            (
+                "(cons 1 (list 2))",
+                list_with_values([Number(1), Number(2)].iter().cloned()),
+            ),
             (
                 "(cons 1 (list 2 3))",
                 list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
@@ -1880,6 +2206,22 @@ mod test {
             (
                 "(cons 1 [2 3])",
                 list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(cons [1] [2 3])",
+                list_with_values(
+                    [vector_with_values(vec![Number(1)]), Number(2), Number(3)]
+                        .iter()
+                        .cloned(),
+                ),
+            ),
+            (
+                "(def! a [2 3]) (cons 1 a)",
+                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(def! a [2 3]) (cons 1 a) a",
+                vector_with_values(vec![Number(2), Number(3)]),
             ),
             (
                 "(cons (list 1) (list 2 3))",
@@ -1894,6 +2236,13 @@ mod test {
                 ),
             ),
             ("(concat)", List(PersistentList::new())),
+            ("(concat (concat))", List(PersistentList::new())),
+            ("(concat (list) (list))", List(PersistentList::new())),
+            ("(= () (concat))", Bool(true)),
+            (
+                "(concat (list 1 2))",
+                list_with_values([Number(1), Number(2)].iter().cloned()),
+            ),
             (
                 "(concat (list 1) (list 2 3))",
                 list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
@@ -1904,6 +2253,21 @@ mod test {
                     [Number(1), Number(3), Number(3), Number(2), Number(3)]
                         .iter()
                         .cloned(),
+                ),
+            ),
+            (
+                "(concat [1 2] '(3 4) [5 6])",
+                list_with_values(
+                    [
+                        Number(1),
+                        Number(2),
+                        Number(3),
+                        Number(4),
+                        Number(5),
+                        Number(6),
+                    ]
+                    .iter()
+                    .cloned(),
                 ),
             ),
             (
@@ -1921,6 +2285,33 @@ mod test {
                 ),
             ),
             (
+                "(def! a (list 1 2)) (def! b (list 3 4)) (concat a b (list 5 6))",
+                list_with_values(
+                    [
+                        Number(1),
+                        Number(2),
+                        Number(3),
+                        Number(4),
+                        Number(5),
+                        Number(6),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
+            (
+                "(def! a (list 1 2)) (def! b (list 3 4)) (concat a b (list 5 6)) a",
+                list_with_values([Number(1), Number(2)].iter().cloned()),
+            ),
+            (
+                "(def! a (list 1 2)) (def! b (list 3 4)) (concat a b (list 5 6)) b",
+                list_with_values([Number(3), Number(4)].iter().cloned()),
+            ),
+            (
+                "(concat [1 2])",
+                list_with_values([Number(1), Number(2)].iter().cloned()),
+            ),
+            (
                 "(vec '(1 2 3))",
                 vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
             ),
@@ -1929,6 +2320,20 @@ mod test {
                 vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
             ),
             ("(vec nil)", vector_with_values([].iter().cloned())),
+            ("(vec '())", vector_with_values([].iter().cloned())),
+            ("(vec [])", vector_with_values([].iter().cloned())),
+            (
+                "(def! a '(1 2)) (vec a)",
+                vector_with_values([Number(1), Number(2)].iter().cloned()),
+            ),
+            (
+                "(def! a '(1 2)) (vec a) a",
+                list_with_values([Number(1), Number(2)].iter().cloned()),
+            ),
+            (
+                "(vec '(1))",
+                vector_with_values([Number(1)].iter().cloned()),
+            ),
             ("(nth [1 2 3] 2)", Number(3)),
             ("(nth '(1 2 3) 1)", Number(2)),
             ("(first '(1 2 3))", Number(1)),
