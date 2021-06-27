@@ -901,7 +901,7 @@ pub fn to_set(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         )),
         Value::List(coll) => Ok(set_with_values(coll.iter().cloned())),
         Value::Vector(coll) => Ok(set_with_values(coll.iter().cloned())),
-        Value::Map(coll) => Ok(set_with_values(coll.into_iter().map(|(k, v)| {
+        Value::Map(coll) => Ok(set_with_values(coll.iter().map(|(k, v)| {
             let mut inner = PersistentVector::new();
             inner.push_back_mut(k.clone());
             inner.push_back_mut(v.clone());
