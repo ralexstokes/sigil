@@ -2792,6 +2792,19 @@ mod test {
                 "(conj #{1 2} 1 3 2 2 2 2 1)",
                 set_with_values(vec![Number(1), Number(2), Number(3)]),
             ),
+            ("(macro? nil)", Bool(false)),
+            ("(macro? true)", Bool(false)),
+            ("(macro? false)", Bool(false)),
+            ("(macro? [1 2 3])", Bool(false)),
+            ("(macro? 1)", Bool(false)),
+            ("(macro? -1)", Bool(false)),
+            ("(macro? :hi)", Bool(false)),
+            ("(macro? \"hi\")", Bool(false)),
+            ("(macro? string?)", Bool(false)),
+            ("(macro? {})", Bool(false)),
+            ("(macro? (fn* [a] a))", Bool(false)),
+            ("(def! foo (fn* [a] a)) (macro? foo)", Bool(false)),
+            ("(defmacro! foo (fn* [a] a)) (macro? foo)", Bool(true)),
         ];
         run_eval_test(&test_cases);
     }

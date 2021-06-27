@@ -1178,6 +1178,18 @@ pub fn conj(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
+pub fn is_macro(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::Macro(..) => Ok(Value::Bool(true)),
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
 // `SOURCE` bootstraps the procedure `load-file` so the
 // interpreter can proceed to load further forms from source code.
 pub const SOURCE: &str = r#"
@@ -1247,4 +1259,5 @@ pub const BINDINGS: &[(&str, Value)] = &[
     ("number?", Value::Primitive(is_number)),
     ("fn?", Value::Primitive(is_fn)),
     ("conj", Value::Primitive(conj)),
+    ("macro?", Value::Primitive(is_macro)),
 ];
