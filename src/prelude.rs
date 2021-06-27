@@ -4,11 +4,13 @@ use crate::interpreter::{
 use crate::reader::read;
 use crate::value::{
     atom_impl_into_inner, atom_with_value, exception, exception_into_thrown, list_with_values,
-    map_with_values, vector_with_values, FnImpl, Value,
+    map_with_values, set_with_values, vector_with_values, FnImpl, Value,
 };
 use itertools::join;
 use itertools::Itertools;
+use rpds::HashTrieSet as PersistentSet;
 use rpds::List as PersistentList;
+use rpds::Vector as PersistentVector;
 use std::fmt::Write;
 use std::fs;
 use std::iter::FromIterator;
@@ -628,12 +630,25 @@ pub fn throw(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             "wrong arity".to_string(),
         )));
     }
-    match &args[0] {
-        e @ Value::Exception(_) => Ok(exception_into_thrown(e)),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
-    }
+    let exc = match &args[0] {
+        n @ Value::Nil => exception("", n),
+        b @ Value::Bool(_) => exception("", b),
+        n @ Value::Number(_) => exception("", n),
+        s @ Value::String(_) => exception("", s),
+        k @ Value::Keyword(..) => exception("", k),
+        s @ Value::Symbol(..) => exception("", s),
+        coll @ Value::List(_) => exception("", coll),
+        coll @ Value::Vector(_) => exception("", coll),
+        coll @ Value::Map(_) => exception("", coll),
+        coll @ Value::Set(_) => exception("", coll),
+        e @ Value::Exception(_) => e.clone(),
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )))
+        }
+    };
+    Ok(exception_into_thrown(&exc))
 }
 
 pub fn apply(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
@@ -872,6 +887,44 @@ pub fn is_map(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
+pub fn to_set(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::Nil => Ok(Value::Set(PersistentSet::new())),
+        Value::String(s) => Ok(set_with_values(
+            s.chars().map(|c| Value::String(c.to_string())),
+        )),
+        Value::List(coll) => Ok(set_with_values(coll.iter().cloned())),
+        Value::Vector(coll) => Ok(set_with_values(coll.iter().cloned())),
+        Value::Map(coll) => Ok(set_with_values(coll.into_iter().map(|(k, v)| {
+            let mut inner = PersistentVector::new();
+            inner.push_back_mut(k.clone());
+            inner.push_back_mut(v.clone());
+            Value::Vector(inner)
+        }))),
+        s @ Value::Set(..) => Ok(s.clone()),
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
+    }
+}
+
+pub fn is_set(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::Set(..) => Ok(Value::Bool(true)),
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
 pub fn assoc(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() < 3 {
         return Err(EvaluationError::List(ListEvaluationError::Failure(
@@ -924,6 +977,7 @@ pub fn get(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         )));
     }
     match &args[0] {
+        Value::Nil => Ok(Value::Nil),
         Value::Map(map) => {
             let result = if let Some(val) = map.get(&args[1]) {
                 val.clone()
@@ -961,12 +1015,21 @@ pub fn to_keys(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             "wrong arity".to_string(),
         )));
     }
-    match &args[0] {
-        Value::Map(map) => Ok(list_with_values(map.keys().cloned())),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
-    }
+    let result = match &args[0] {
+        Value::Map(map) => {
+            if map.is_empty() {
+                Value::Nil
+            } else {
+                list_with_values(map.keys().cloned())
+            }
+        }
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )))
+        }
+    };
+    Ok(result)
 }
 
 pub fn to_vals(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
@@ -975,12 +1038,21 @@ pub fn to_vals(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             "wrong arity".to_string(),
         )));
     }
-    match &args[0] {
-        Value::Map(map) => Ok(list_with_values(map.values().cloned())),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
-    }
+    let result = match &args[0] {
+        Value::Map(map) => {
+            if map.is_empty() {
+                Value::Nil
+            } else {
+                list_with_values(map.values().cloned())
+            }
+        }
+        _ => {
+            return Err(EvaluationError::List(ListEvaluationError::Failure(
+                "incorrect argument".to_string(),
+            )))
+        }
+    };
+    Ok(result)
 }
 
 pub fn last(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
@@ -1067,6 +1139,8 @@ pub const BINDINGS: &[(&str, Value)] = &[
     ("sequential?", Value::Primitive(is_sequential)),
     ("hash-map", Value::Primitive(to_map)),
     ("map?", Value::Primitive(is_map)),
+    ("set", Value::Primitive(to_set)),
+    ("set?", Value::Primitive(is_set)),
     ("assoc", Value::Primitive(assoc)),
     ("dissoc", Value::Primitive(dissoc)),
     ("get", Value::Primitive(get)),

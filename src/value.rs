@@ -639,7 +639,11 @@ impl Value {
             Atom(v) => write!(&mut f, "(atom {})", *v.borrow()),
             Macro(_) => write!(&mut f, "<macro>"),
             Exception(ExceptionImpl { message, data, .. }) => {
-                write!(&mut f, "exception: {}, {}", message, data)
+                if message.is_empty() {
+                    write!(&mut f, "exception: {}", data)
+                } else {
+                    write!(&mut f, "exception: {}, {}", message, data)
+                }
             }
         };
 
