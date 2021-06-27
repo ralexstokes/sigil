@@ -14,6 +14,7 @@ use rpds::Vector as PersistentVector;
 use std::fmt::Write;
 use std::fs;
 use std::iter::FromIterator;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn plus(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     args.iter()
@@ -1190,6 +1191,47 @@ pub fn is_macro(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> 
     }
 }
 
+pub fn time_in_millis(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if !args.is_empty() {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    let duration = SystemTime::now().duration_since(UNIX_EPOCH)?;
+    Ok(Value::Number(duration.as_millis() as i64))
+}
+
+pub fn to_seq(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::Nil => Ok(Value::Nil),
+        Value::String(s) if s.is_empty() => Ok(Value::Nil),
+        Value::String(s) => Ok(list_with_values(
+            s.chars().map(|c| Value::String(c.to_string())),
+        )),
+        Value::List(coll) if coll.is_empty() => Ok(Value::Nil),
+        l @ Value::List(..) => Ok(l.clone()),
+        Value::Vector(coll) if coll.is_empty() => Ok(Value::Nil),
+        Value::Vector(coll) => Ok(list_with_values(coll.iter().cloned())),
+        Value::Map(coll) if coll.is_empty() => Ok(Value::Nil),
+        Value::Map(coll) => Ok(list_with_values(coll.iter().map(|(k, v)| {
+            let mut inner = PersistentVector::new();
+            inner.push_back_mut(k.clone());
+            inner.push_back_mut(v.clone());
+            Value::Vector(inner)
+        }))),
+        Value::Set(coll) if coll.is_empty() => Ok(Value::Nil),
+        Value::Set(coll) => Ok(list_with_values(coll.iter().cloned())),
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
+    }
+}
+
 // `SOURCE` bootstraps the procedure `load-file` so the
 // interpreter can proceed to load further forms from source code.
 pub const SOURCE: &str = r#"
@@ -1260,4 +1302,6 @@ pub const BINDINGS: &[(&str, Value)] = &[
     ("fn?", Value::Primitive(is_fn)),
     ("conj", Value::Primitive(conj)),
     ("macro?", Value::Primitive(is_macro)),
+    ("time-ms", Value::Primitive(time_in_millis)),
+    ("seq", Value::Primitive(to_seq)),
 ];

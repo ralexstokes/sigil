@@ -16,6 +16,7 @@ use std::default::Default;
 use std::env::Args;
 use std::fmt::Write;
 use std::iter::FromIterator;
+use std::time::SystemTimeError;
 use thiserror::Error;
 
 const COMMAND_LINE_ARGS_SYMBOL: &str = "*command-line-args*";
@@ -68,6 +69,8 @@ pub enum InterpreterError {
     MissingCommandLineArg(usize, usize),
     #[error("namespace {0} not found")]
     MissingNamespace(String),
+    #[error("system time error: {0}")]
+    SystemTimeError(SystemTimeError),
 }
 
 #[derive(Debug, Error)]
@@ -79,14 +82,14 @@ pub enum EvaluationError {
     #[error("primitive error: {0}")]
     Primitive(PrimitiveEvaluationError),
     #[error("reader error: {0}")]
-    ReaderError(ReaderError),
+    ReaderError(#[from] ReaderError),
     #[error("interpreter error: {0}")]
     Interpreter(InterpreterError),
 }
 
-impl From<ReaderError> for EvaluationError {
-    fn from(error: ReaderError) -> Self {
-        Self::ReaderError(error)
+impl From<SystemTimeError> for EvaluationError {
+    fn from(error: SystemTimeError) -> Self {
+        Self::Interpreter(InterpreterError::SystemTimeError(error))
     }
 }
 
@@ -2805,6 +2808,25 @@ mod test {
             ("(macro? (fn* [a] a))", Bool(false)),
             ("(def! foo (fn* [a] a)) (macro? foo)", Bool(false)),
             ("(defmacro! foo (fn* [a] a)) (macro? foo)", Bool(true)),
+            ("(number? (time-ms))", Bool(true)),
+            ("(seq nil)", Nil),
+            ("(seq \"\")", Nil),
+            (
+                "(seq \"ab\")",
+                list_with_values(vec![String("a".to_string()), String("b".to_string())]),
+            ),
+            ("(apply str (seq \"ab\"))", String("ab".to_string())),
+            ("(seq '())", Nil),
+            ("(seq '(1 2))", list_with_values(vec![Number(1), Number(2)])),
+            ("(seq [])", Nil),
+            ("(seq [1 2])", list_with_values(vec![Number(1), Number(2)])),
+            ("(seq {})", Nil),
+            (
+                "(seq {1 2})",
+                list_with_values(vec![vector_with_values(vec![Number(1), Number(2)])]),
+            ),
+            ("(seq #{})", Nil),
+            ("(= (set '(1 2)) (set (seq #{1 2})))", Bool(true)),
         ];
         run_eval_test(&test_cases);
     }
