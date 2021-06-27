@@ -1120,6 +1120,64 @@ pub fn is_fn(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
+pub fn conj(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() < 2 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::Nil => Ok(list_with_values(args[1..].iter().cloned())),
+        Value::List(seq) => {
+            let mut inner = seq.clone();
+            for elem in &args[1..] {
+                inner.push_front_mut(elem.clone());
+            }
+            Ok(Value::List(inner))
+        }
+        Value::Vector(seq) => {
+            let mut inner = seq.clone();
+            for elem in &args[1..] {
+                inner.push_back_mut(elem.clone());
+            }
+            Ok(Value::Vector(inner))
+        }
+        Value::Map(seq) => {
+            let mut inner = seq.clone();
+            for elem in &args[1..] {
+                match elem {
+                    Value::Vector(kv) if kv.len() == 2 => {
+                        let k = &kv[0];
+                        let v = &kv[1];
+                        inner.insert_mut(k.clone(), v.clone());
+                    }
+                    Value::Map(elems) => {
+                        for (k, v) in elems {
+                            inner.insert_mut(k.clone(), v.clone());
+                        }
+                    }
+                    _ => {
+                        return Err(EvaluationError::List(ListEvaluationError::Failure(
+                            "incorrect argument".to_string(),
+                        )))
+                    }
+                }
+            }
+            Ok(Value::Map(inner))
+        }
+        Value::Set(seq) => {
+            let mut inner = seq.clone();
+            for elem in &args[1..] {
+                inner.insert_mut(elem.clone());
+            }
+            Ok(Value::Set(inner))
+        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
+    }
+}
+
 // `SOURCE` bootstraps the procedure `load-file` so the
 // interpreter can proceed to load further forms from source code.
 pub const SOURCE: &str = r#"
@@ -1188,4 +1246,5 @@ pub const BINDINGS: &[(&str, Value)] = &[
     ("string?", Value::Primitive(is_string)),
     ("number?", Value::Primitive(is_number)),
     ("fn?", Value::Primitive(is_fn)),
+    ("conj", Value::Primitive(conj)),
 ];

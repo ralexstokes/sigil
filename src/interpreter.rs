@@ -2755,6 +2755,43 @@ mod test {
             ("(fn? (fn* [a] a))", Bool(true)),
             ("(def! foo (fn* [a] a)) (fn? foo)", Bool(true)),
             ("(defmacro! foo (fn* [a] a)) (fn? foo)", Bool(true)),
+            (
+                "(conj [1 2 3] 4)",
+                vector_with_values(vec![Number(1), Number(2), Number(3), Number(4)]),
+            ),
+            (
+                "(conj [1 2 3] 4 5)",
+                vector_with_values(vec![Number(1), Number(2), Number(3), Number(4), Number(5)]),
+            ),
+            (
+                "(conj '(1 2 3) 4 5)",
+                list_with_values(vec![Number(5), Number(4), Number(1), Number(2), Number(3)]),
+            ),
+            (
+                "(conj [3] [4 5])",
+                vector_with_values(vec![
+                    Number(3),
+                    vector_with_values(vec![Number(4), Number(5)]),
+                ]),
+            ),
+            (
+                "(conj {:c :d} [1 2] {:a :b :c :e})",
+                map_with_values(vec![
+                    (
+                        Keyword("c".to_string(), None),
+                        Keyword("e".to_string(), None),
+                    ),
+                    (
+                        Keyword("a".to_string(), None),
+                        Keyword("b".to_string(), None),
+                    ),
+                    (Number(1), Number(2)),
+                ]),
+            ),
+            (
+                "(conj #{1 2} 1 3 2 2 2 2 1)",
+                set_with_values(vec![Number(1), Number(2), Number(3)]),
+            ),
         ];
         run_eval_test(&test_cases);
     }
