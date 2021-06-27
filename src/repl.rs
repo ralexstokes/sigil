@@ -133,10 +133,7 @@ impl StdRepl {
                     for form in forms.iter() {
                         match self.interpreter.evaluate(form) {
                             Ok(result) => {
-                                let mut line = String::new();
-                                write!(line, "{}", result)?;
-                                editor.add_history_entry(line.as_str());
-                                println!("{}", line);
+                                println!("{}", result.to_readable_string());
                             }
                             Err(e) => {
                                 println!("{}", e);
