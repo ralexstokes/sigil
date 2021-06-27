@@ -474,11 +474,12 @@ pub fn cons(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     match &args[1] {
         Value::List(seq) => Ok(Value::List(seq.push_front(args[0].clone()))),
         Value::Vector(seq) => {
-            let mut result = vec![args[0].clone()];
-            for elem in seq {
-                result.push(elem.clone());
+            let mut inner = PersistentList::new();
+            for elem in seq.iter().rev() {
+                inner.push_front_mut(elem.clone());
             }
-            Ok(list_with_values(result))
+            inner.push_front_mut(args[0].clone());
+            Ok(Value::List(inner))
         }
         _ => Err(EvaluationError::List(ListEvaluationError::Failure(
             "incorrect argument".to_string(),
