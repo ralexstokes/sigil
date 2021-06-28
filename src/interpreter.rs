@@ -754,16 +754,35 @@ impl Interpreter {
             if let Some(Value::Symbol(id, None)) = rest.first() {
                 if let Some(rest) = rest.drop_first() {
                     if let Some(value_form) = rest.first() {
-                        // allocate the var first, so e.g. `fn`s can
-                        // capture them allowing for recursive calls
-                        let var = self.intern_var(id, Value::Nil);
+                        // need to only adjust var if this `def!` is successful
+                        // also optimistically allocate in the interpreter so that
+                        // the def body can capture references to itself (e.g. for recursive fn)
+                        //
+                        // to address this:
+                        // get the existing var, or intern a sentinel value if it is missing
+                        let (var, var_already_exists) =
+                            match self.resolve_var_in_current_namespace(id) {
+                                Ok(v @ Value::Var(..)) => (v, true),
+                                Err(EvaluationError::Symbol(
+                                    SymbolEvaluationError::MissingVar(..),
+                                )) => (self.intern_var(id, Value::Nil), false),
+                                e @ Err(_) => return e,
+                                _ => unreachable!(),
+                            };
                         match self.evaluate(value_form) {
                             Ok(value) => {
+                                // and if the evaluation is ok, unconditionally update the var
                                 update_var(&var, value);
                                 return Ok(var);
                             }
                             Err(e) => {
-                                self.unintern_var(id);
+                                // and if the evaluation is not ok,
+                                if !var_already_exists {
+                                    // and the var did not already exist, unintern the sentinel allocation
+                                    self.unintern_var(id);
+                                }
+                                // (if the var did already exist, then simply leave alone)
+
                                 let mut error = String::from("could not evaluate `def!`: ");
                                 error += &e.to_string();
                                 return Err(EvaluationError::List(ListEvaluationError::Failure(
@@ -1009,12 +1028,12 @@ impl Interpreter {
                     Err(EvaluationError::List(ListEvaluationError::Failure(error)))
                 }
             },
-            Ok(_) => unreachable!(),
             Err(e) => {
                 let mut error = String::from("could not evaluate `defmacro!`: ");
                 error += &e.to_string();
                 Err(EvaluationError::List(ListEvaluationError::Failure(error)))
             }
+            _ => unreachable!(),
         }
     }
 
