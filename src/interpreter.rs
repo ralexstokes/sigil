@@ -102,7 +102,7 @@ type Namespace = HashMap<String, Value>;
 
 fn lambda_parameter_key(index: usize, level: usize) -> String {
     let mut key = String::new();
-    let _ = write!(&mut key, ":system-lambda-%{}/{}", index, level);
+    let _ = write!(&mut key, ":system-fn-%{}/{}", index, level);
     key
 }
 
