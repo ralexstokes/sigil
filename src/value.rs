@@ -1,11 +1,12 @@
 use crate::interpreter::{EvaluationResult, Interpreter};
-use itertools::{join, sorted};
+use itertools::{join, sorted, Itertools};
 use rpds::{
     HashTrieMap as PersistentMap, HashTrieSet as PersistentSet, List as PersistentList,
     Vector as PersistentVector,
 };
 use std::cell::RefCell;
 use std::cmp::{Eq, Ord, Ordering, PartialEq};
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Write;
 use std::hash::{Hash, Hasher};
@@ -104,6 +105,55 @@ pub struct FnImpl {
     pub variadic: bool,
 }
 
+#[derive(Debug, Clone, Eq)]
+pub struct FnWithCapturesImpl {
+    pub f: FnImpl,
+    pub captures: HashMap<String, Option<Value>>,
+}
+
+impl PartialOrd for FnWithCapturesImpl {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FnWithCapturesImpl {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.f.cmp(&other.f) {
+            Ordering::Equal => {
+                let sorted_pairs = self.captures.iter().sorted();
+                let other_sorted_pairs = other.captures.iter().sorted();
+                sorted_pairs.cmp(other_sorted_pairs)
+            }
+            other => other,
+        }
+    }
+}
+
+impl PartialEq for FnWithCapturesImpl {
+    fn eq(&self, other: &Self) -> bool {
+        if self.f != other.f {
+            return false;
+        }
+
+        self.captures
+            .iter()
+            .sorted()
+            .zip(other.captures.iter().sorted())
+            .all(|((a, b), (c, d))| a == c && b == d)
+    }
+}
+
+impl Hash for FnWithCapturesImpl {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.f.hash(state);
+        self.captures.iter().sorted().for_each(|(k, v)| {
+            k.hash(state);
+            v.hash(state);
+        });
+    }
+}
+
 #[derive(Clone)]
 pub struct VarImpl {
     pub inner: Rc<RefCell<Value>>,
@@ -151,6 +201,7 @@ pub enum Value {
     Map(PersistentMap<Value, Value>),
     Set(PersistentSet<Value>),
     Fn(FnImpl),
+    FnWithCaptures(FnWithCapturesImpl),
     Primitive(NativeFn),
     Var(VarImpl),
     Recur(PersistentVector<Value>),
@@ -217,6 +268,10 @@ impl PartialEq for Value {
             },
             Fn(ref x) => match other {
                 Fn(ref y) => x == y,
+                _ => false,
+            },
+            FnWithCaptures(ref x) => match other {
+                FnWithCaptures(ref y) => x == y,
                 _ => false,
             },
             Primitive(x) => match other {
@@ -358,7 +413,7 @@ impl Ord for Value {
                 Fn(ref y) => x.cmp(y),
                 _ => Ordering::Less,
             },
-            Primitive(x) => match other {
+            FnWithCaptures(ref x) => match other {
                 Nil
                 | Bool(_)
                 | Number(_)
@@ -370,6 +425,22 @@ impl Ord for Value {
                 | Map(_)
                 | Set(_)
                 | Fn(_) => Ordering::Greater,
+                FnWithCaptures(ref y) => x.cmp(y),
+                _ => Ordering::Less,
+            },
+            Primitive(x) => match other {
+                Nil
+                | Bool(_)
+                | Number(_)
+                | String(_)
+                | Keyword(_, _)
+                | Symbol(_, _)
+                | List(_)
+                | Vector(_)
+                | Map(_)
+                | Set(_)
+                | Fn(_)
+                | FnWithCaptures(_) => Ordering::Greater,
                 Primitive(y) => {
                     let x_ptr = x as *const NativeFn;
                     let x_identifier = x_ptr as usize;
@@ -395,6 +466,7 @@ impl Ord for Value {
                 | Map(_)
                 | Set(_)
                 | Fn(_)
+                | FnWithCaptures(_)
                 | Primitive(_) => Ordering::Greater,
                 Var(VarImpl {
                     namespace: namespace_y,
@@ -415,6 +487,7 @@ impl Ord for Value {
                 | Map(_)
                 | Set(_)
                 | Fn(_)
+                | FnWithCaptures(_)
                 | Primitive(_)
                 | Var(_) => Ordering::Greater,
                 Recur(ref y) => x.cmp(y),
@@ -432,6 +505,7 @@ impl Ord for Value {
                 | Map(_)
                 | Set(_)
                 | Fn(_)
+                | FnWithCaptures(_)
                 | Primitive(_)
                 | Var(_)
                 | Recur(_) => Ordering::Greater,
@@ -450,6 +524,7 @@ impl Ord for Value {
                 | Map(_)
                 | Set(_)
                 | Fn(_)
+                | FnWithCaptures(_)
                 | Primitive(_)
                 | Var(_)
                 | Recur(_)
@@ -469,6 +544,7 @@ impl Ord for Value {
                 | Map(_)
                 | Set(_)
                 | Fn(_)
+                | FnWithCaptures(_)
                 | Primitive(_)
                 | Var(_)
                 | Recur(_)
@@ -511,6 +587,7 @@ impl Hash for Value {
                 sorted(s).for_each(|elem| elem.hash(state));
             }
             Fn(lambda) => lambda.hash(state),
+            FnWithCaptures(lambda) => lambda.hash(state),
             Primitive(f) => {
                 let ptr = f as *const NativeFn;
                 let identifier = ptr as usize;
@@ -570,6 +647,7 @@ impl fmt::Debug for Value {
             }
             Set(elems) => write!(f, "#{{{}}}", join(elems, " ")),
             Fn(_) => write!(f, "<fn*>"),
+            FnWithCaptures(..) => write!(f, "<fn* +captures>",),
             Primitive(_) => write!(f, "<native function>"),
             Var(VarImpl {
                 namespace,
@@ -629,6 +707,7 @@ impl Value {
             }
             Set(elems) => write!(&mut f, "#{{{}}}", join(elems, " ")),
             Fn(_) => write!(&mut f, "<fn*>"),
+            FnWithCaptures(..) => write!(&mut f, "<fn* +captures>",),
             Primitive(_) => write!(&mut f, "<native function>"),
             Var(VarImpl {
                 namespace,
