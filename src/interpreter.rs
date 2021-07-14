@@ -724,18 +724,29 @@ impl Interpreter {
 
     fn apply_macro(
         &mut self,
-        m: &FnImpl,
+        FnImpl {
+            body,
+            arity,
+            level,
+            variadic,
+        }: &FnImpl,
         forms: &PersistentList<Value>,
     ) -> EvaluationResult<Value> {
-        match self.apply_fn(m, forms, false) {
-            Ok(Value::List(forms)) => self.macroexpand(&forms),
-            Ok(result) => Ok(result),
-            Err(e) => {
-                let mut err = String::from("could not apply macro: ");
-                err += &e.to_string();
-                Err(EvaluationError::List(ListEvaluationError::Failure(err)))
-            }
+        if let Some(forms) = forms.drop_first() {
+            let result = match self.apply_fn_inner(body, *arity, *level, *variadic, forms, false) {
+                Ok(Value::List(forms)) => self.macroexpand(&forms),
+                Ok(result) => Ok(result),
+                Err(e) => {
+                    let mut err = String::from("could not apply macro: ");
+                    err += &e.to_string();
+                    Err(EvaluationError::List(ListEvaluationError::Failure(err)))
+                }
+            };
+            return result;
         }
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "could not apply macro".to_string(),
+        )));
     }
 
     fn macroexpand(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
@@ -851,10 +862,9 @@ impl Interpreter {
             variadic,
         }: &FnImpl,
         args: &PersistentList<Value>,
-        should_evaluate: bool,
     ) -> EvaluationResult<Value> {
         if let Some(args) = args.drop_first() {
-            return self.apply_fn_inner(body, *arity, *level, *variadic, args, should_evaluate);
+            return self.apply_fn_inner(body, *arity, *level, *variadic, args, true);
         }
         Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not apply `fn*`".to_string(),
@@ -1326,15 +1336,15 @@ impl Interpreter {
                         }
                         Value::Symbol(s, None) if s == "try*" => return self.eval_try(forms),
                         // apply phase when operator is already evaluated:
-                        Value::Fn(f) => return self.apply_fn(f, &forms, true),
+                        Value::Fn(f) => return self.apply_fn(f, &forms),
                         Value::FnWithCaptures(FnWithCapturesImpl { f, .. }) => {
-                            return self.apply_fn(f, &forms, true)
+                            return self.apply_fn(f, &forms)
                         }
                         Value::Primitive(native_fn) => {
                             return self.apply_primitive(native_fn, &forms)
                         }
                         _ => match self.evaluate(operator_form)? {
-                            Value::Fn(f) => return self.apply_fn(&f, &forms, true),
+                            Value::Fn(f) => return self.apply_fn(&f, &forms),
                             Value::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
                                 self.enter_scope();
                                 for (capture, value) in captures {
@@ -1346,7 +1356,7 @@ impl Interpreter {
                                         ));
                                     }
                                 }
-                                let result = self.apply_fn(&f, &forms, true);
+                                let result = self.apply_fn(&f, &forms);
                                 self.leave_scope();
                                 return result;
                             }
