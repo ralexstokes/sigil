@@ -79,11 +79,27 @@ pub enum InterpreterError {
 }
 
 #[derive(Debug, Error)]
+pub enum SyntaxError {
+    #[error("bindings in `let` form must be pairs of names and values")]
+    BindingsInLetMustBePaired(PersistentVector<Value>),
+    #[error("expected further forms when parsing data")]
+    MissingForms,
+    #[error("expected vector of lexical bindings instead of {0}")]
+    LexicalBindingsMustBeVector(Value),
+    #[error("names in `let` form must not be namespaced like {0}")]
+    NamesInLetMustNotBeNamespaced(Value),
+    #[error("names in `let` form must be symbols unlike {0}")]
+    NamesInLetMustBeSymbols(Value),
+}
+
+#[derive(Debug, Error)]
 pub enum EvaluationError {
     #[error("symbol error: {0}")]
     Symbol(SymbolEvaluationError),
     #[error("list error: {0}")]
     List(ListEvaluationError),
+    #[error("syntax error: {0}")]
+    Syntax(#[from] SyntaxError),
     #[error("primitive error: {0}")]
     Primitive(PrimitiveEvaluationError),
     #[error("reader error: {0}")]
@@ -253,6 +269,55 @@ fn eval_quasiquote(value: &Value) -> EvaluationResult<Value> {
         }
         v => Ok(v.clone()),
     }
+}
+
+struct LetForm<'a> {
+    bindings: Vec<(&'a String, &'a Value)>,
+    body: PersistentList<Value>,
+}
+
+fn parse_let_bindings(bindings_form: &Value) -> EvaluationResult<Vec<(&String, &Value)>> {
+    match bindings_form {
+        Value::Vector(bindings) => {
+            let bindings_count = bindings.len();
+            if bindings_count % 2 == 0 {
+                let mut validated_bindings = Vec::with_capacity(bindings_count);
+                for (name, value_form) in bindings.iter().tuples() {
+                    match name {
+                        Value::Symbol(s, None) => {
+                            validated_bindings.push((s, value_form));
+                        }
+                        s @ Value::Symbol(_, Some(_)) => {
+                            return Err(SyntaxError::NamesInLetMustNotBeNamespaced(s.clone()).into())
+                        }
+                        other => {
+                            return Err(SyntaxError::NamesInLetMustBeSymbols(other.clone()).into());
+                        }
+                    }
+                }
+                Ok(validated_bindings)
+            } else {
+                return Err(SyntaxError::BindingsInLetMustBePaired(bindings.clone()).into());
+            }
+        }
+        other => return Err(SyntaxError::LexicalBindingsMustBeVector(other.clone()).into()),
+    }
+}
+
+fn parse_let(forms: &PersistentList<Value>) -> EvaluationResult<LetForm> {
+    let bindings_form = forms
+        .first()
+        .ok_or_else(|| -> EvaluationError { SyntaxError::MissingForms.into() })?;
+    let body = forms
+        .drop_first()
+        .ok_or_else(|| -> EvaluationError { SyntaxError::MissingForms.into() })?;
+    let bindings = parse_let_bindings(bindings_form)?;
+    Ok(LetForm { bindings, body })
+}
+
+fn analyze_let(let_forms: &PersistentList<Value>) -> EvaluationResult<LetForm> {
+    let let_form = parse_let(&let_forms)?;
+    Ok(let_form)
 }
 
 #[derive(Debug)]
@@ -946,37 +1011,23 @@ impl Interpreter {
     }
 
     fn eval_let(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        if let Some(rest) = forms.drop_first() {
-            if let Some(Value::Vector(elems)) = rest.first() {
-                if elems.len() % 2 == 0 {
-                    if let Some(body) = rest.drop_first() {
-                        self.enter_scope();
-                        for (name, value_form) in elems.iter().tuples() {
-                            match name {
-                                Value::Symbol(s, None) => {
-                                    let value = self.evaluate(value_form)?;
-                                    self.insert_value_in_current_scope(s, value)
-                                }
-                                _ => {
-                                    self.leave_scope();
-                                    return Err(EvaluationError::List(
-                                        ListEvaluationError::Failure(
-                                            "could not evaluate `let*`".to_string(),
-                                        ),
-                                    ));
-                                }
-                            }
-                        }
-                        let result = self.eval_do_inner(&body);
-                        self.leave_scope();
-                        return result;
-                    }
+        let let_forms = forms
+            .drop_first()
+            .ok_or_else(|| -> EvaluationError { SyntaxError::MissingForms.into() })?;
+        let LetForm { bindings, body } = analyze_let(&let_forms)?;
+        self.enter_scope();
+        for (name, value_form) in bindings {
+            match self.evaluate(value_form) {
+                Ok(value) => self.insert_value_in_current_scope(name, value),
+                e @ Err(_) => {
+                    self.leave_scope();
+                    return e;
                 }
             }
         }
-        Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not evaluate `let*`".to_string(),
-        )))
+        let result = self.eval_do_inner(&body);
+        self.leave_scope();
+        return result;
     }
 
     fn eval_loop(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
