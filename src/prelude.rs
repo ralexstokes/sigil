@@ -1,5 +1,6 @@
 use crate::interpreter::{
-    EvaluationError, EvaluationResult, Interpreter, ListEvaluationError, PrimitiveEvaluationError,
+    EvaluationError, EvaluationResult, Interpreter, InterpreterError, ListEvaluationError,
+    PrimitiveEvaluationError,
 };
 use crate::reader::read;
 use crate::value::{
@@ -1197,7 +1198,9 @@ pub fn time_in_millis(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<V
             "wrong arity".to_string(),
         )));
     }
-    let duration = SystemTime::now().duration_since(UNIX_EPOCH)?;
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| -> EvaluationError { InterpreterError::SystemTimeError(err).into() })?;
     Ok(Value::Number(duration.as_millis() as i64))
 }
 

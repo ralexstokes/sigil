@@ -75,7 +75,7 @@ pub enum InterpreterError {
     #[error("namespace {0} not found")]
     MissingNamespace(String),
     #[error("system time error: {0}")]
-    SystemTimeError(SystemTimeError),
+    SystemTimeError(#[from] SystemTimeError),
 }
 
 #[derive(Debug, Error)]
@@ -89,13 +89,7 @@ pub enum EvaluationError {
     #[error("reader error: {0}")]
     ReaderError(#[from] ReaderError),
     #[error("interpreter error: {0}")]
-    Interpreter(InterpreterError),
-}
-
-impl From<SystemTimeError> for EvaluationError {
-    fn from(error: SystemTimeError) -> Self {
-        Self::Interpreter(InterpreterError::SystemTimeError(error))
-    }
+    Interpreter(#[from] InterpreterError),
 }
 
 pub type EvaluationResult<T> = Result<T, EvaluationError>;
