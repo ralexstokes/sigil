@@ -803,9 +803,9 @@ impl Interpreter {
             };
             return result;
         }
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
+        Err(EvaluationError::List(ListEvaluationError::Failure(
             "could not apply macro".to_string(),
-        )));
+        )))
     }
 
     fn macroexpand(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
