@@ -17,6 +17,7 @@ use std::default::Default;
 use std::env::Args;
 use std::fmt::Write;
 use std::iter::FromIterator;
+use std::iter::IntoIterator;
 use std::time::SystemTimeError;
 use thiserror::Error;
 
@@ -271,12 +272,101 @@ fn eval_quasiquote(value: &Value) -> EvaluationResult<Value> {
     }
 }
 
+type BindingRef<'a> = (&'a String, &'a Value);
+
+struct LetBindings<'a> {
+    bindings: Vec<BindingRef<'a>>,
+}
+
+fn resolve_forward_declarations_in_let_form<'a>(
+    forward_declarations: &mut Vec<&'a String>,
+    names: &HashSet<&String>,
+    value: &'a Value,
+) {
+    match value {
+        Value::Symbol(s, None) if names.contains(s) => {
+            forward_declarations.push(s);
+        }
+        Value::List(elems) => {
+            for elem in elems {
+                resolve_forward_declarations_in_let_form(forward_declarations, names, elem);
+            }
+        }
+        Value::Vector(elems) => {
+            for elem in elems {
+                resolve_forward_declarations_in_let_form(forward_declarations, names, elem);
+            }
+        }
+        Value::Map(elems) => {
+            for (k, v) in elems {
+                resolve_forward_declarations_in_let_form(forward_declarations, names, k);
+                resolve_forward_declarations_in_let_form(forward_declarations, names, v);
+            }
+        }
+        Value::Set(elems) => {
+            for elem in elems {
+                resolve_forward_declarations_in_let_form(forward_declarations, names, elem);
+            }
+        }
+        Value::Fn(FnImpl { body, .. }) => {
+            for form in body {
+                resolve_forward_declarations_in_let_form(forward_declarations, names, form);
+            }
+        }
+        Value::FnWithCaptures(FnWithCapturesImpl {
+            f: FnImpl { body, .. },
+            ..
+        }) => {
+            for form in body {
+                resolve_forward_declarations_in_let_form(forward_declarations, names, form);
+            }
+        }
+        // these variants cannot capture
+        // local names in let bindings
+        Value::Nil
+        | Value::Bool(_)
+        | Value::Number(_)
+        | Value::String(_)
+        | Value::Keyword(_, _)
+        | Value::Symbol(..)
+        | Value::Primitive(_)
+        | Value::Var(..)
+        | Value::Recur(_)
+        | Value::Atom(_)
+        | Value::Exception(_)
+        | Value::Macro(_) => {}
+    }
+}
+
+impl<'a> LetBindings<'a> {
+    fn resolve_forward_declarations(&self) -> Vec<&String> {
+        let names: HashSet<_> = self.bindings.iter().map(|(name, _)| *name).collect();
+
+        let mut forward_declarations = vec![];
+        for value in self.bindings.iter().map(|(_, value)| value) {
+            resolve_forward_declarations_in_let_form(&mut forward_declarations, &names, *value)
+        }
+        forward_declarations
+    }
+}
+
+impl<'a> IntoIterator for LetBindings<'a> {
+    // type Item = &'a BindingRef<'a>;
+    // type IntoIter = std::slice::Iter<'a, Self::Item>;
+    type Item = BindingRef<'a>;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.bindings.into_iter()
+    }
+}
+
 struct LetForm<'a> {
-    bindings: Vec<(&'a String, &'a Value)>,
+    bindings: LetBindings<'a>,
     body: PersistentList<Value>,
 }
 
-fn parse_let_bindings(bindings_form: &Value) -> EvaluationResult<Vec<(&String, &Value)>> {
+fn parse_let_bindings(bindings_form: &Value) -> EvaluationResult<LetBindings> {
     match bindings_form {
         Value::Vector(bindings) => {
             let bindings_count = bindings.len();
@@ -295,12 +385,14 @@ fn parse_let_bindings(bindings_form: &Value) -> EvaluationResult<Vec<(&String, &
                         }
                     }
                 }
-                Ok(validated_bindings)
+                Ok(LetBindings {
+                    bindings: validated_bindings,
+                })
             } else {
-                return Err(SyntaxError::BindingsInLetMustBePaired(bindings.clone()).into());
+                Err(SyntaxError::BindingsInLetMustBePaired(bindings.clone()).into())
             }
         }
-        other => return Err(SyntaxError::LexicalBindingsMustBeVector(other.clone()).into()),
+        other => Err(SyntaxError::LexicalBindingsMustBeVector(other.clone()).into()),
     }
 }
 
@@ -1016,9 +1108,21 @@ impl Interpreter {
             .ok_or_else(|| -> EvaluationError { SyntaxError::MissingForms.into() })?;
         let LetForm { bindings, body } = analyze_let(&let_forms)?;
         self.enter_scope();
-        for (name, value_form) in bindings {
+        for forward_identifier in bindings.resolve_forward_declarations() {
+            let var = var_with_value(Value::Nil, "", forward_identifier);
+            self.insert_value_in_current_scope(forward_identifier, var);
+        }
+        for (identifier, value_form) in bindings {
             match self.evaluate(value_form) {
-                Ok(value) => self.insert_value_in_current_scope(name, value),
+                Ok(value) => {
+                    if let Some(var @ Value::Var(..)) =
+                        resolve_symbol_in_scopes(self.scopes.iter().rev(), identifier)
+                    {
+                        update_var(var, value);
+                    } else {
+                        self.insert_value_in_current_scope(identifier, value);
+                    }
+                }
                 e @ Err(_) => {
                     self.leave_scope();
                     return e;
@@ -1027,7 +1131,7 @@ impl Interpreter {
         }
         let result = self.eval_do_inner(&body);
         self.leave_scope();
-        return result;
+        result
     }
 
     fn eval_loop(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -1669,6 +1773,14 @@ mod test {
                     vector_with_values(vec![Number(6), Number(7)]),
                     Number(8),
                 ]),
+            ),
+            (
+                "(let* [cst (fn* [n] (if (= n 0) :success (cst (- n 1))))] (cst 1))",
+                Keyword("success".to_string(), None),
+            ),
+            (
+                "(let* [f (fn* [n] (if (= n 0) :success (g (- n 1)))) g (fn* [n] (f n))] (f 2))",
+                Keyword("success".to_string(), None),
             ),
         ];
         run_eval_test(&test_cases);
