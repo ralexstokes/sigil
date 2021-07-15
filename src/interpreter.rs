@@ -351,8 +351,6 @@ impl<'a> LetBindings<'a> {
 }
 
 impl<'a> IntoIterator for LetBindings<'a> {
-    // type Item = &'a BindingRef<'a>;
-    // type IntoIter = std::slice::Iter<'a, Self::Item>;
     type Item = BindingRef<'a>;
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
