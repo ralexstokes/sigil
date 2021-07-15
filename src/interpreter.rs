@@ -632,18 +632,65 @@ impl Interpreter {
                 let scopes_len = scopes.len();
                 let mut analyzed_elems = vec![];
                 match iter.next() {
-                    Some(Value::Symbol(s, None)) if s == "let*" || s == "loop*" => {
+                    Some(Value::Symbol(s, None)) if s == "let*" => {
                         analyzed_elems.push(Value::Symbol(s.to_string(), None));
                         if let Some(Value::Vector(bindings)) = iter.next() {
-                            let mut scope = Scope::new();
                             if bindings.len() % 2 != 0 {
                                 return Err(EvaluationError::List(ListEvaluationError::Failure(
-                                    "could not evaluate `let*`".to_string(),
+                                    "could not analyze `let*`".to_string(),
                                 )));
                             }
+                            let mut scope = Scope::new();
                             let mut analyzed_bindings = PersistentVector::new();
+                            for (name, _) in bindings.iter().tuples() {
+                                match name {
+                                    Value::Symbol(s, None) => {
+                                        scope.insert(s.clone(), Value::Symbol(s.clone(), None));
+                                    }
+                                    _ => {
+                                        return Err(EvaluationError::List(
+                                            ListEvaluationError::Failure(
+                                                "could not analyze `let*`".to_string(),
+                                            ),
+                                        ));
+                                    }
+                                }
+                            }
+                            scopes.push(scope);
                             for (name, value) in bindings.iter().tuples() {
-                                scope.insert(name.to_string(), name.clone());
+                                let analyzed_value =
+                                    self.analyze_form_in_lambda(value, scopes, captures, level)?;
+                                analyzed_bindings.push_back_mut(name.clone());
+                                analyzed_bindings.push_back_mut(analyzed_value);
+                            }
+                            analyzed_elems.push(Value::Vector(analyzed_bindings));
+                        }
+                    }
+                    Some(Value::Symbol(s, None)) if s == "loop*" => {
+                        analyzed_elems.push(Value::Symbol(s.to_string(), None));
+                        if let Some(Value::Vector(bindings)) = iter.next() {
+                            if bindings.len() % 2 != 0 {
+                                return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                    "could not analyze `loop*`".to_string(),
+                                )));
+                            }
+                            let mut scope = Scope::new();
+                            let mut analyzed_bindings = PersistentVector::new();
+                            for (name, _) in bindings.iter().tuples() {
+                                match name {
+                                    Value::Symbol(s, None) => {
+                                        scope.insert(s.clone(), Value::Symbol(s.clone(), None));
+                                    }
+                                    _ => {
+                                        return Err(EvaluationError::List(
+                                            ListEvaluationError::Failure(
+                                                "could not analyze `loop*`".to_string(),
+                                            ),
+                                        ));
+                                    }
+                                }
+                            }
+                            for (name, value) in bindings.iter().tuples() {
                                 let analyzed_value =
                                     self.analyze_form_in_lambda(value, scopes, captures, level)?;
                                 analyzed_bindings.push_back_mut(name.clone());
@@ -1778,6 +1825,10 @@ mod test {
             ),
             (
                 "(let* [f (fn* [n] (if (= n 0) :success (g (- n 1)))) g (fn* [n] (f n))] (f 2))",
+                Keyword("success".to_string(), None),
+            ),
+            (
+                "(defn f [] (let* [cst (fn* [n] (if (= n 0) :success (cst (- n 1))))] (cst 10))) (f)",
                 Keyword("success".to_string(), None),
             ),
         ];
