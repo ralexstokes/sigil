@@ -151,7 +151,18 @@ pub fn pr(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     Ok(Value::Nil)
 }
 
+pub fn pr_str(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    let mut buffer = String::new();
+    let _ = write!(&mut buffer, "{}", join(args, " ")).expect("can write to string");
+    Ok(Value::String(buffer))
+}
+
 pub fn prn(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    println!("{}", join(args, " "));
+    Ok(Value::Nil)
+}
+
+pub fn println(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     println!("{}", join(args, " "));
     Ok(Value::Nil)
 }
@@ -1292,7 +1303,9 @@ pub const BINDINGS: &[(&str, Value)] = &[
     ("*", Value::Primitive(multiply)),
     ("/", Value::Primitive(divide)),
     ("pr", Value::Primitive(pr)),
+    ("pr-str", Value::Primitive(pr_str)),
     ("prn", Value::Primitive(prn)),
+    ("println", Value::Primitive(println)),
     ("list", Value::Primitive(list)),
     ("list?", Value::Primitive(is_list)),
     ("empty?", Value::Primitive(is_empty)),
