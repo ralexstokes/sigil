@@ -9,6 +9,8 @@
   (if (> (count xs) 0) (list 'if (first xs) (if (> (count xs) 1) (nth xs 1) (throw "odd number of forms to cond")) (cons 'cond (rest (rest xs))))))
 (defmacro defn [fn-name fn-args & body]
   `(def! ~fn-name (fn* ~fn-args ~@body)))
+(defmacro declare [& names]
+  `(do ~@(map (fn* [name] (list 'def name nil)) names)))
 
 (defn inc [x] (+ x 1))
 (defn dec [x] (- x 1))
