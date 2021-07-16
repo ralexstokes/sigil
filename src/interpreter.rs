@@ -12,19 +12,22 @@ use rpds::{
 };
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::convert::From;
+use std::convert::{AsRef, From};
 use std::default::Default;
 use std::env::Args;
 use std::fmt::Write;
 use std::io;
 use std::iter::FromIterator;
 use std::iter::IntoIterator;
+use std::path::Path;
 use std::time::SystemTimeError;
 use thiserror::Error;
 
+const LOAD_FILE_SOURCE: &str =
+    r#"(def! load-file (fn* [f] (eval (read-string (str "(do " (slurp f) " nil)")))))"#;
 const COMMAND_LINE_ARGS_SYMBOL: &str = "*command-line-args*";
 const DEFAULT_NAMESPACE: &str = "core";
-const DEFAULT_CORE_FILENAME: &str = "src/core.sigil";
+const DEFAULT_CORE_FILE_PATH: &str = "src/core.sigil";
 const SPECIAL_FORMS: &[&str] = &[
     "def!",           // (def! symbol form)
     "var",            // (var symbol)
@@ -413,6 +416,70 @@ fn analyze_let(let_forms: &PersistentList<Value>) -> EvaluationResult<LetForm> {
     Ok(let_form)
 }
 
+fn evaluate_from_string(interpreter: &mut Interpreter, source: &str) {
+    let forms = read(source).expect("source is well-defined");
+    for form in &forms {
+        let _ = interpreter.evaluate(form).expect("source is well-formed");
+    }
+}
+
+pub struct InterpreterBuilder<P: AsRef<Path>> {
+    // determines presence of `load-file` fn in the Interpreter
+    with_load_file_fn: bool,
+    // points to a source file for the "core" namespace
+    core_file_path: Option<P>,
+}
+
+impl Default for InterpreterBuilder<&'static str> {
+    fn default() -> Self {
+        let mut builder = InterpreterBuilder::new();
+        builder.core_file_path = Some(DEFAULT_CORE_FILE_PATH);
+        builder
+    }
+}
+
+impl<P: AsRef<Path>> InterpreterBuilder<P> {
+    pub fn new() -> Self {
+        InterpreterBuilder {
+            with_load_file_fn: false,
+            core_file_path: None,
+        }
+    }
+
+    pub fn with_load_file_fn(&mut self, with_fn: bool) -> &mut InterpreterBuilder<P> {
+        self.with_load_file_fn = with_fn;
+        self
+    }
+
+    pub fn with_core_file_path(&mut self, core_file_path: P) -> &mut InterpreterBuilder<P> {
+        self.core_file_path = Some(core_file_path);
+        self
+    }
+
+    pub fn build(self) -> Interpreter {
+        let mut interpreter = Interpreter::default();
+
+        let should_eval_load_file = self.with_load_file_fn || self.core_file_path.is_some();
+        if should_eval_load_file {
+            evaluate_from_string(&mut interpreter, LOAD_FILE_SOURCE);
+        }
+
+        if let Some(core_file_path) = self.core_file_path {
+            // load the "core" source
+            let mut buffer = String::new();
+            let _ = write!(
+                &mut buffer,
+                "(load-file \"{}\")",
+                core_file_path.as_ref().display()
+            )
+            .expect("can write to string");
+            evaluate_from_string(&mut interpreter, &buffer);
+        }
+
+        interpreter
+    }
+}
+
 #[derive(Debug)]
 pub struct Interpreter {
     current_namespace: String,
@@ -425,7 +492,7 @@ pub struct Interpreter {
 
 impl Default for Interpreter {
     fn default() -> Self {
-        // build the "core" namespace
+        // build the "core" namespace containing the "prelude" bindings
         let mut default_namespace = Namespace::default();
         for (symbol, value) in prelude::BINDINGS {
             intern_value_in_namespace(
@@ -452,36 +519,11 @@ impl Default for Interpreter {
             scopes: vec![default_scope],
         };
 
-        // load the "prelude" source
-        for line in prelude::SOURCE.lines() {
-            let forms = read(line).expect("prelude source has no reader errors");
-            for form in forms.iter() {
-                let _ = interpreter
-                    .evaluate(form)
-                    .expect("prelude forms have no evaluation errors");
-            }
-        }
-
-        let mut core_boot_form_source = String::from("(load-file \"");
-        core_boot_form_source += DEFAULT_CORE_FILENAME;
-        core_boot_form_source += "\")";
-        let core_boot_result = read(&core_boot_form_source).expect("core boot is well-formed");
-        let core_boot_form = core_boot_result.get(0).expect("core boot is well-formed");
-        let _ = interpreter
-            .evaluate(&core_boot_form)
-            .expect("core boot is well-formed");
-
-        let mut command_line_args_form_source = String::from("(def! ");
-        command_line_args_form_source += COMMAND_LINE_ARGS_SYMBOL;
-        command_line_args_form_source += " '())";
-        let command_line_args_def_result =
-            read(&command_line_args_form_source).expect("environment boot is well-formed");
-        let command_line_args_def_form = command_line_args_def_result
-            .get(0)
-            .expect("environment boot is well-formed");
-        let _ = interpreter
-            .evaluate(&command_line_args_def_form)
-            .expect("environment boot is well-formed");
+        let mut buffer = String::new();
+        let _ = write!(&mut buffer, "(def! {} '())", COMMAND_LINE_ARGS_SYMBOL)
+            .expect("can write to string");
+        evaluate_from_string(&mut interpreter, &buffer);
+        buffer.clear();
 
         interpreter
     }
@@ -1657,7 +1699,8 @@ mod test {
                     continue;
                 }
             };
-            let mut interpreter = Interpreter::default();
+
+            let mut interpreter = InterpreterBuilder::default().build();
             let mut final_result: Option<Value> = None;
             for form in &forms {
                 match interpreter.evaluate(form) {

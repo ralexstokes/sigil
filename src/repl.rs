@@ -1,4 +1,4 @@
-use crate::interpreter::Interpreter;
+use crate::interpreter::{Interpreter, InterpreterBuilder};
 use crate::reader::read;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
@@ -12,18 +12,19 @@ use std::env::Args;
 use std::error::Error;
 use std::fmt::Write;
 use std::fs;
+use std::path::Path;
 
-pub struct StdRepl {
+const DEFAULT_HISTORY_PATH: &str = ".sigil.history";
+
+pub struct StdRepl<'a> {
     interpreter: Interpreter,
-    history_path: String,
+    history_path: &'a str,
 }
 
-impl Default for StdRepl {
+impl<'a> Default for StdRepl<'a> {
     fn default() -> Self {
-        Self {
-            interpreter: Interpreter::default(),
-            history_path: "sigil.history".to_string(),
-        }
+        let interpreter = InterpreterBuilder::default().build();
+        Self::with_interpreter(interpreter)
     }
 }
 
@@ -84,9 +85,16 @@ impl Completer for EditorHelper {
     }
 }
 
-impl StdRepl {
-    pub fn new() -> Self {
-        Self::default()
+impl<'a> StdRepl<'a> {
+    pub fn new(interpreter: Interpreter, history_path: &'a str) -> Self {
+        Self {
+            interpreter,
+            history_path,
+        }
+    }
+
+    pub fn with_interpreter(interpreter: Interpreter) -> Self {
+        Self::new(interpreter, DEFAULT_HISTORY_PATH)
     }
 
     pub fn with_command_line_args(mut self, args: Args) -> Self {
@@ -94,14 +102,11 @@ impl StdRepl {
         self
     }
 
-    pub fn run_file_from_args(&mut self) -> Result<(), Box<dyn Error>> {
-        let path = self.interpreter.command_line_arg(1)?;
+    pub fn run_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
         let contents = fs::read_to_string(path)?;
-        for line in contents.lines() {
-            let forms = read(&line)?;
-            for form in forms.iter() {
-                self.interpreter.evaluate(form)?;
-            }
+        let forms = read(&contents)?;
+        for form in forms.iter() {
+            self.interpreter.evaluate(form)?;
         }
         Ok(())
     }

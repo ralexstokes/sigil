@@ -1286,14 +1286,6 @@ pub fn with_meta(_: &mut Interpreter, _args: &[Value]) -> EvaluationResult<Value
     Ok(Value::Nil)
 }
 
-// `SOURCE` bootstraps the procedure `load-file` so the
-// interpreter can proceed to load further forms from source code.
-pub const SOURCE: &str = r#"
-(defmacro! defmacro (fn* [macro-name macro-args & body] `(defmacro! ~macro-name (fn* ~macro-args ~@body))))
-(defmacro defn [fn-name fn-args & body] `(def! ~fn-name (fn* ~fn-args ~@body)))
-(defn load-file [f] (eval (read-string (str "(do " (slurp f) " nil)"))))
-"#;
-
 pub const BINDINGS: &[(&str, Value)] = &[
     ("+", Value::Primitive(plus)),
     ("-", Value::Primitive(subtract)),

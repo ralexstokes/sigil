@@ -3,7 +3,6 @@ name = "sigil"
 version = "0.1.0"
 authors = ["Alex Stokes <r.alex.stokes@gmail.com>"]
 edition = "2018"
-default-run = "main"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -14,3 +13,6 @@ itertools = "0.10.0"
 rustyline = "8.0.0"
 rustyline-derive = "0.4.0"
 rpds = "0.9.0"
+
+[dev-dependencies]
+clap = "3.0.0-beta.2"
