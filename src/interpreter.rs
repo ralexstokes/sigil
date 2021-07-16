@@ -16,6 +16,7 @@ use std::convert::From;
 use std::default::Default;
 use std::env::Args;
 use std::fmt::Write;
+use std::io;
 use std::iter::FromIterator;
 use std::iter::IntoIterator;
 use std::time::SystemTimeError;
@@ -77,6 +78,8 @@ pub enum InterpreterError {
     MissingNamespace(String),
     #[error("system time error: {0}")]
     SystemTimeError(#[from] SystemTimeError),
+    #[error("io error: {0}")]
+    IOError(#[from] io::Error),
 }
 
 #[derive(Debug, Error)]

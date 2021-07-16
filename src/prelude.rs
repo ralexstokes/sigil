@@ -13,9 +13,10 @@ use rpds::HashTrieSet as PersistentSet;
 use rpds::List as PersistentList;
 use rpds::Vector as PersistentVector;
 use std::fmt::Write;
-use std::fs;
+use std::io::{BufRead, Write as IOWrite};
 use std::iter::FromIterator;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{fs, io};
 
 pub fn plus(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     args.iter()
@@ -1235,6 +1236,49 @@ pub fn to_seq(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
+pub fn readline(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::List(ListEvaluationError::Failure(
+            "wrong arity".to_string(),
+        )));
+    }
+    match &args[0] {
+        Value::String(s) => {
+            let stdout = io::stdout();
+            let stdin = io::stdin();
+            let mut stdout = stdout.lock();
+            let mut stdin = stdin.lock();
+
+            stdout
+                .write(s.as_bytes())
+                .map_err(|err| -> EvaluationError { InterpreterError::IOError(err).into() })?;
+
+            stdout
+                .flush()
+                .map_err(|err| -> EvaluationError { InterpreterError::IOError(err).into() })?;
+
+            let mut input = String::new();
+            let count = stdin
+                .read_line(&mut input)
+                .map_err(|err| -> EvaluationError { InterpreterError::IOError(err).into() })?;
+            if count == 0 {
+                stdout
+                    .write("\n".as_bytes())
+                    .map_err(|err| -> EvaluationError { InterpreterError::IOError(err).into() })?;
+                Ok(Value::Nil)
+            } else {
+                if input.ends_with("\n") {
+                    input.pop();
+                }
+                Ok(Value::String(input))
+            }
+        }
+        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
+            "incorrect argument".to_string(),
+        ))),
+    }
+}
+
 // `SOURCE` bootstraps the procedure `load-file` so the
 // interpreter can proceed to load further forms from source code.
 pub const SOURCE: &str = r#"
@@ -1307,4 +1351,5 @@ pub const BINDINGS: &[(&str, Value)] = &[
     ("macro?", Value::Primitive(is_macro)),
     ("time-ms", Value::Primitive(time_in_millis)),
     ("seq", Value::Primitive(to_seq)),
+    ("readline", Value::Primitive(readline)),
 ];
