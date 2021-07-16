@@ -1279,6 +1279,14 @@ pub fn readline(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> 
     }
 }
 
+pub fn to_meta(_: &mut Interpreter, _args: &[Value]) -> EvaluationResult<Value> {
+    Ok(Value::Nil)
+}
+
+pub fn with_meta(_: &mut Interpreter, _args: &[Value]) -> EvaluationResult<Value> {
+    Ok(Value::Nil)
+}
+
 // `SOURCE` bootstraps the procedure `load-file` so the
 // interpreter can proceed to load further forms from source code.
 pub const SOURCE: &str = r#"
@@ -1352,4 +1360,6 @@ pub const BINDINGS: &[(&str, Value)] = &[
     ("time-ms", Value::Primitive(time_in_millis)),
     ("seq", Value::Primitive(to_seq)),
     ("readline", Value::Primitive(readline)),
+    ("meta", Value::Primitive(to_meta)),
+    ("with-meta", Value::Primitive(with_meta)),
 ];
