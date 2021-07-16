@@ -2454,6 +2454,7 @@ mod test {
             ),
             ("(def! x 2) (defmacro! a (fn* [] x)) (a)", Number(2)),
             ("(def! x 2) (defmacro! a (fn* [] x)) (let* [x 3] (a))", Number(2)),
+            ("(def! f (fn* [x] (number? x))) (defmacro! m f) [(f (+ 1 1)) (m (+ 1 1))]", vector_with_values(vec![Bool(true), Bool(false)])),
         ];
         run_eval_test(&test_cases);
     }
@@ -3201,6 +3202,31 @@ mod test {
             ("(fn? (fn* [a] a))", Bool(true)),
             ("(def! foo (fn* [a] a)) (fn? foo)", Bool(true)),
             ("(defmacro! foo (fn* [a] a)) (fn? foo)", Bool(true)),
+            ("(conj (list) 1)", list_with_values(vec![Number(1)])),
+            (
+                "(conj (list 1) 2)",
+                list_with_values(vec![Number(2), Number(1)]),
+            ),
+            (
+                "(conj (list 1 2) 3)",
+                list_with_values(vec![Number(3), Number(1), Number(2)]),
+            ),
+            (
+                "(conj (list 2 3) 4 5 6)",
+                list_with_values(vec![Number(6), Number(5), Number(4), Number(2), Number(3)]),
+            ),
+            (
+                "(conj (list 1) (list 2 3))",
+                list_with_values(vec![
+                    list_with_values(vec![Number(2), Number(3)]),
+                    Number(1),
+                ]),
+            ),
+            ("(conj [] 1)", vector_with_values(vec![Number(1)])),
+            (
+                "(conj [1] 2)",
+                vector_with_values(vec![Number(1), Number(2)]),
+            ),
             (
                 "(conj [1 2 3] 4)",
                 vector_with_values(vec![Number(1), Number(2), Number(3), Number(4)]),
