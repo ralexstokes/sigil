@@ -1262,12 +1262,11 @@ pub fn readline(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> 
                 .read_line(&mut input)
                 .map_err(|err| -> EvaluationError { InterpreterError::IOError(err).into() })?;
             if count == 0 {
-                stdout
-                    .write("\n".as_bytes())
+                writeln!(stdout)
                     .map_err(|err| -> EvaluationError { InterpreterError::IOError(err).into() })?;
                 Ok(Value::Nil)
             } else {
-                if input.ends_with("\n") {
+                if input.ends_with('\n') {
                     input.pop();
                 }
                 Ok(Value::String(input))
