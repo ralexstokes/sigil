@@ -967,7 +967,7 @@ impl Interpreter {
 
     /// Apply the given `Fn` to the supplied `args`.
     /// Exposed for various `prelude` functions.
-    pub fn apply_fn_inner(
+    pub(crate) fn apply_fn_inner(
         &mut self,
         body: &PersistentList<Value>,
         arity: usize,
@@ -1628,7 +1628,7 @@ impl Interpreter {
     /// Evaluate `form` in the global scope of the interpreter.
     /// This method is exposed for the `eval` primitive which
     /// has these semantics.
-    pub fn evaluate_in_global_scope(&mut self, form: &Value) -> EvaluationResult<Value> {
+    pub(crate) fn evaluate_in_global_scope(&mut self, form: &Value) -> EvaluationResult<Value> {
         let mut child_scopes: Vec<_> = self.scopes.drain(1..).collect();
         let result = self.evaluate(form);
         self.scopes.append(&mut child_scopes);
