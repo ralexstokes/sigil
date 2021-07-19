@@ -5,7 +5,7 @@ use crate::interpreter::{
 use crate::reader::read;
 use crate::value::{
     atom_impl_into_inner, atom_with_value, exception, exception_into_thrown, list_with_values,
-    map_with_values, set_with_values, vector_with_values, FnImpl, Value,
+    map_with_values, set_with_values, var_impl_into_inner, vector_with_values, FnImpl, Value,
 };
 use itertools::join;
 use itertools::Itertools;
@@ -412,6 +412,7 @@ pub fn deref(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
     match &args[0] {
         Value::Atom(inner) => Ok(atom_impl_into_inner(inner)),
+        Value::Var(inner) => Ok(var_impl_into_inner(inner)),
         _ => Err(EvaluationError::List(ListEvaluationError::Failure(
             "incorrect argument".to_string(),
         ))),
