@@ -617,6 +617,69 @@ impl fmt::Debug for Value {
         use Value::*;
 
         match self {
+            Nil => write!(f, "Nil"),
+            Bool(ref b) => write!(f, "Bool({:?})", b),
+            Number(ref n) => write!(f, "Number({:?})", n),
+            String(ref s) => write!(f, "String({:?})", s),
+            Keyword(ref id, ref ns_opt) => {
+                write!(f, "Keyword(\"")?;
+                if let Some(ns) = ns_opt {
+                    write!(f, "{}/", ns)?;
+                }
+                write!(f, "{}\")", id)
+            }
+            Symbol(ref id, ref ns_opt) => {
+                write!(f, "Symbol(\"")?;
+                if let Some(ns) = ns_opt {
+                    write!(f, "{}/", ns)?;
+                }
+                write!(f, "{}\")", id)
+            }
+            List(elems) => write!(f, "List({:?})", elems.iter().format(", ")),
+            Vector(elems) => write!(f, "Vector({:?})", elems.iter().format(", ")),
+            Map(elems) => {
+                let mut inner = vec![];
+                for (k, v) in elems {
+                    let mut buffer = std::string::String::new();
+                    write!(buffer, "{:?} {:?}", k, v)?;
+                    inner.push(buffer);
+                }
+                write!(f, "Map({:?})", inner.iter().format(", "))
+            }
+            Set(elems) => write!(f, "Set({:?})", elems.iter().format(", ")),
+            Fn(_) => write!(f, "Fn(..)"),
+            FnWithCaptures(..) => write!(f, "FnWithCaptures(..)",),
+            Primitive(_) => write!(f, "Primitive(..)"),
+            Var(VarImpl {
+                namespace,
+                identifier,
+                inner,
+            }) => write!(
+                f,
+                "Var({:?}/{:?}, {:?})",
+                namespace,
+                identifier,
+                inner.borrow()
+            ),
+            Recur(elems) => write!(f, "Recur({:?})", elems.iter().format(" ")),
+            Atom(v) => write!(f, "Atom({:?})", *v.borrow()),
+            Macro(_) => write!(f, "Macro(..)"),
+            Exception(ExceptionImpl {
+                message,
+                data,
+                thrown,
+            }) => {
+                write!(f, "Exception({:?}, {:?}, {:?})", message, data, thrown)
+            }
+        }
+    }
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use Value::*;
+
+        match self {
             Nil => write!(f, "nil"),
             Bool(ref b) => write!(f, "{}", b),
             Number(ref n) => write!(f, "{}", n),
@@ -661,12 +724,6 @@ impl fmt::Debug for Value {
                 write!(f, "exception: {}, {}", message, data)
             }
         }
-    }
-}
-
-impl fmt::Display for Value {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
     }
 }
 
