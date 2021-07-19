@@ -36,8 +36,8 @@ fn parse_identifier_and_optional_namespace(
     symbolic: &str,
 ) -> Result<(String, Option<String>), ReaderError> {
     if let Some((ns, identifier)) = symbolic.split_once('/') {
-        if ns == "" {
-            if identifier == "" {
+        if ns.is_empty() {
+            if identifier.is_empty() {
                 return Ok(("/".to_string(), None));
             }
             return Err(ReaderError::MissingNamespace);
@@ -76,7 +76,7 @@ fn find_string_close(stream: &mut Stream) -> Result<usize, ReaderError> {
             '\\' => {
                 let (_, next_ch) = stream.next().ok_or(ReaderError::ExpectedMoreInput)?;
                 if next_ch == '"' {
-                    find_string_close(stream)?;
+                    continue;
                 }
             }
             _ => {}
