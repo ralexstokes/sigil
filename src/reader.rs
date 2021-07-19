@@ -32,20 +32,28 @@ fn is_symbolic(input: char) -> bool {
     }
 }
 
-fn parse_identifier_and_optional_namespace(symbolic: &str) -> (String, Option<String>) {
+fn parse_identifier_and_optional_namespace(
+    symbolic: &str,
+) -> Result<(String, Option<String>), ReaderError> {
     if let Some((ns, identifier)) = symbolic.split_once('/') {
-        (identifier.to_string(), Some(ns.to_string()))
+        if ns == "" {
+            if identifier == "" {
+                return Ok(("/".to_string(), None));
+            }
+            return Err(ReaderError::MissingNamespace);
+        }
+        Ok((identifier.to_string(), Some(ns.to_string())))
     } else {
-        (symbolic.to_string(), None)
+        Ok((symbolic.to_string(), None))
     }
 }
 
 fn parse_symbolic_with_namespace(symbolic: &str) -> Result<Value, ReaderError> {
     if let Some(symbolic) = symbolic.strip_prefix(':') {
-        let (identifier, ns_opt) = parse_identifier_and_optional_namespace(symbolic);
+        let (identifier, ns_opt) = parse_identifier_and_optional_namespace(symbolic)?;
         Ok(Value::Keyword(identifier, ns_opt))
     } else {
-        let (identifier, ns_opt) = parse_identifier_and_optional_namespace(symbolic);
+        let (identifier, ns_opt) = parse_identifier_and_optional_namespace(symbolic)?;
         Ok(Value::Symbol(identifier, ns_opt))
     }
 }
@@ -290,26 +298,9 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
-    fn disambiguate_slash(&mut self, stream: &mut Stream) -> Result<(), ReaderError> {
-        stream.next().expect("from peek");
-        if let Some((_, next)) = stream.peek() {
-            if is_token(*next) {
-                return Err(ReaderError::MissingNamespace);
-            } else {
-                let value = Value::Symbol('/'.to_string(), None);
-                self.forms.push(value);
-            }
-        } else {
-            let value = Value::Symbol('/'.to_string(), None);
-            self.forms.push(value);
-        }
-        Ok(())
-    }
-
     fn read_atom(&mut self, first_char: char, stream: &mut Stream) -> Result<(), ReaderError> {
         match first_char {
             ch if ch == '-' => self.disambiguate_dash(stream),
-            ch if ch == '/' => self.disambiguate_slash(stream),
             ch if is_numeric(ch) => self.read_number(stream),
             ch if is_symbolic(ch) => self.read_symbolic(stream),
             ch => {
