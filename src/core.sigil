@@ -12,6 +12,9 @@
 (defmacro declare [& names]
   `(do ~@(map (fn* [name] (list 'def name nil)) names)))
 
-(defn inc [x] (+ x 1))
-(defn dec [x] (- x 1))
-(defn not [x] (if x false true))
+(defn inc [x]
+  (+ x 1))
+(defn dec [x]
+  (- x 1))
+(defn not [x]
+  (if x false true))
