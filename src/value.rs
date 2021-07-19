@@ -683,7 +683,7 @@ impl fmt::Display for Value {
             Nil => write!(f, "nil"),
             Bool(ref b) => write!(f, "{}", b),
             Number(ref n) => write!(f, "{}", n),
-            String(ref s) => write!(f, "\"{}\"", s),
+            String(ref s) => write!(f, "{}", s),
             Keyword(ref id, ref ns_opt) => {
                 write!(f, ":")?;
                 if let Some(ns) = ns_opt {
@@ -727,59 +727,96 @@ impl fmt::Display for Value {
     }
 }
 
+fn unescape_string(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut iter = input.chars().peekable();
+    while let Some(ch) = iter.peek() {
+        let ch = *ch;
+        match ch {
+            '\\' => {
+                result.push('\\');
+                result.push('\\');
+                iter.next().expect("from peek");
+            }
+            '\n' => {
+                result.push('\\');
+                result.push('n');
+                iter.next().expect("from peek");
+            }
+            '\"' => {
+                result.push('\\');
+                result.push('"');
+                iter.next().expect("from peek");
+            }
+            ch => {
+                result.push(ch);
+                iter.next().expect("from peek");
+            }
+        };
+    }
+    result
+}
+
 impl Value {
     pub fn to_readable_string(&self) -> String {
-        use Value::*;
-
-        let mut f = std::string::String::new();
+        let mut f = String::new();
 
         let _ = match self {
-            Nil => write!(&mut f, "nil"),
-            Bool(ref b) => write!(&mut f, "{}", b),
-            Number(ref n) => write!(&mut f, "{}", n),
-            String(ref s) => write!(&mut f, "{}", s),
-            Keyword(ref id, ref ns_opt) => {
-                let _ = write!(&mut f, ":");
-                if let Some(ns) = ns_opt {
-                    let _ = write!(&mut f, "{}/", ns);
-                }
-                write!(&mut f, "{}", id)
+            Value::List(elems) => {
+                write!(
+                    &mut f,
+                    "({})",
+                    elems.iter().map(|elem| elem.to_readable_string()).join(" ")
+                )
+                .expect("can write to string");
             }
-            Symbol(ref id, ref ns_opt) => {
-                if let Some(ns) = ns_opt {
-                    let _ = write!(&mut f, "{}/", ns);
-                }
-                write!(&mut f, "{}", id)
+            Value::Vector(elems) => {
+                write!(
+                    &mut f,
+                    "[{}]",
+                    elems.iter().map(|elem| elem.to_readable_string()).join(" ")
+                )
+                .expect("can write to string");
             }
-            List(elems) => write!(&mut f, "({})", join(elems, " ")),
-            Vector(elems) => write!(&mut f, "[{}]", join(elems, " ")),
-            Map(elems) => {
+            Value::Map(elems) => {
                 let mut inner = vec![];
                 for (k, v) in elems {
-                    let mut buffer = std::string::String::new();
-                    let _ = write!(buffer, "{} {}", k, v);
+                    let mut buffer = String::new();
+                    write!(
+                        buffer,
+                        "{} {}",
+                        k.to_readable_string(),
+                        v.to_readable_string()
+                    )
+                    .expect("can write to string");
                     inner.push(buffer);
                 }
-                write!(&mut f, "{{{}}}", join(inner, ", "))
+                write!(&mut f, "{{{}}}", inner.iter().format(", ")).expect("can write to string");
             }
-            Set(elems) => write!(&mut f, "#{{{}}}", join(elems, " ")),
-            Fn(_) => write!(&mut f, "<fn*>"),
-            FnWithCaptures(..) => write!(&mut f, "<fn* +captures>",),
-            Primitive(_) => write!(&mut f, "<native function>"),
-            Var(VarImpl {
-                namespace,
-                identifier,
-                ..
-            }) => write!(f, "#'{}/{}", namespace, identifier),
-            Recur(elems) => write!(&mut f, "[{}]", join(elems, " ")),
-            Atom(v) => write!(&mut f, "(atom {})", *v.borrow()),
-            Macro(_) => write!(&mut f, "<macro>"),
-            Exception(ExceptionImpl { message, data, .. }) => {
-                if message.is_empty() {
-                    write!(&mut f, "exception: {}", data)
-                } else {
-                    write!(&mut f, "exception: {}, {}", message, data)
-                }
+            Value::Set(elems) => write!(
+                &mut f,
+                "#{{{}}}",
+                elems
+                    .iter()
+                    .map(|elem| elem.to_readable_string())
+                    .format(" ")
+            )
+            .expect("can write to string"),
+            Value::String(s) => {
+                let unescaped_string = unescape_string(s);
+                write!(&mut f, "\"{}\"", unescaped_string).expect("can write to string");
+            }
+            Value::Atom(v) => write!(&mut f, "(atom {})", v.borrow().to_readable_string())
+                .expect("can write to string"),
+            Value::Exception(ExceptionImpl { message, data, .. }) => write!(
+                &mut f,
+                "exception: {}, {}",
+                message,
+                data.to_readable_string()
+            )
+            .expect("can write to string"),
+            other => {
+                write!(&mut f, "{}", other).expect("can write to string");
             }
         };
 

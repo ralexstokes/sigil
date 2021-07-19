@@ -85,6 +85,41 @@ fn find_string_close(stream: &mut Stream) -> Result<usize, ReaderError> {
     Err(ReaderError::UnbalancedString)
 }
 
+fn apply_string_escapes(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut iter = input.chars().peekable();
+    while let Some(ch) = iter.next() {
+        match ch {
+            '\\' => {
+                if let Some(next) = iter.peek() {
+                    let next = *next;
+                    match next {
+                        '\\' => {
+                            result.push('\\');
+                            iter.next().expect("from peek");
+                        }
+                        'n' => {
+                            result.push('\n');
+                            iter.next().expect("from peek");
+                        }
+                        '"' => {
+                            result.push('"');
+                            iter.next().expect("from peek");
+                        }
+                        _ => {
+                            result.push(ch);
+                        }
+                    };
+                } else {
+                    result.push(ch);
+                }
+            }
+            ch => result.push(ch),
+        }
+    }
+    result
+}
+
 type Stream<'a> = Peekable<CharIndices<'a>>;
 
 #[derive(Debug)]
@@ -249,7 +284,8 @@ impl<'a> Reader<'a> {
         let end = find_string_close(stream)?;
         // start at character after first '"'
         let source = &self.input[start + 1..end];
-        self.forms.push(Value::String(source.to_string()));
+        let escaped_string = apply_string_escapes(source);
+        self.forms.push(Value::String(escaped_string));
         Ok(())
     }
 
@@ -569,13 +605,9 @@ mod tests {
                 "foo/baz bar true",
             ),
             ("\"\"", vec![String("".into())], "\"\""),
+            (r#""\"""#, vec![String("\"".into())], "\"\\\"\""),
             ("\"hi\"", vec![String("hi".into())], "\"hi\""),
-            ("\"\\\\\"", vec![String("\\\\".into())], "\"\\\\\""),
-            (
-                "\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"",
-                vec![String("\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\".into())],
-                "\"\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"",
-            ),
+            ("\" \\\\ \"", vec![String(" \\ ".into())], "\" \\\\ \""),
             ("\"&\"", vec![String("&".into())], "\"&\""),
             ("\"'\"", vec![String("'".into())], "\"'\""),
             ("\"(\"", vec![String("(".into())], "\"(\""),
@@ -601,7 +633,7 @@ mod tests {
             ("\"}\"", vec![String("}".into())], "\"}\""),
             ("\"~\"", vec![String("~".into())], "\"~\""),
             ("\"!\"", vec![String("!".into())], "\"!\""),
-            ("\"\\n\"", vec![String("\\n".into())], "\"\\n\""),
+            ("\"\\n\"", vec![String("\n".into())], "\"\\n\""),
             ("\"#\"", vec![String("#".into())], "\"#\""),
             ("\"$\"", vec![String("$".into())], "\"$\""),
             ("\"%\"", vec![String("%".into())], "\"%\""),
@@ -992,7 +1024,10 @@ mod tests {
                 Ok(result) => {
                     assert_eq!(result, expected_read);
                     if expected_print != "" {
-                        let print = result.iter().join(" ");
+                        let print = result
+                            .iter()
+                            .map(|elem| elem.to_readable_string())
+                            .join(" ");
                         assert_eq!(print, expected_print);
                     }
                 }

@@ -1741,9 +1741,9 @@ mod test {
             (r#""""#, String("".to_string())),
             ("\"abc\"", String("abc".to_string())),
             ("\"abc   def\"", String("abc   def".to_string())),
-            ("\"abc\\ndef\\nghi\"", String("abc\\ndef\\nghi".to_string())),
+            ("\"abc\\ndef\\nghi\"", String("abc\ndef\nghi".to_string())),
             ("\"abc\\def\\ghi\"", String("abc\\def\\ghi".to_string())),
-            ("\"\\\\n\"", String("\\\\n".to_string())),
+            ("\" \\\\n \"", String(" \\n ".to_string())),
             (":hi", Keyword("hi".to_string(), None)),
             (
                 ":foo/hi",
@@ -2801,6 +2801,27 @@ mod test {
             ("(str \"hi\" 3 :foo)", String("hi3:foo".to_string())),
             ("(str \"hi   \" 3 :foo)", String("hi   3:foo".to_string())),
             ("(str [])", String("[]".to_string())),
+            ("(str [\"hi\"])", String("[\"hi\"]".to_string())),
+            (
+                "(str \"A\" {:abc \"val\"} \"Z\")",
+                String("A{:abc \"val\"}Z".to_string()),
+            ),
+            (
+                "(str true \".\" false \".\" nil \".\" :keyw \".\" 'symb)",
+                String("true.false.nil.:keyw.symb".to_string()),
+            ),
+            (
+                "(str true \".\" false \".\" nil \".\" :keyw \".\" 'symb)",
+                String("true.false.nil.:keyw.symb".to_string()),
+            ),
+            (
+                "(pr-str \"A\" {:abc \"val\"} \"Z\")",
+                String("\"A\" {:abc \"val\"} \"Z\"".to_string()),
+            ),
+            (
+                "(pr-str true \".\" false \".\" nil \".\" :keyw \".\" 'symb)",
+                String("true \".\" false \".\" nil \".\" :keyw \".\" symb".to_string()),
+            ),
             (
                 "(cons 1 (list))",
                 list_with_values([Number(1)].iter().cloned()),

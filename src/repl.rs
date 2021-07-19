@@ -138,7 +138,7 @@ impl<'a> StdRepl<'a> {
                     for form in forms.iter() {
                         match self.interpreter.evaluate(form) {
                             Ok(result) => {
-                                println!("{}", result);
+                                println!("{}", result.to_readable_string());
                             }
                             Err(e) => {
                                 println!("error: {}", e);

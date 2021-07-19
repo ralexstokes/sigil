@@ -7,7 +7,6 @@ use crate::value::{
     atom_impl_into_inner, atom_with_value, exception, exception_into_thrown, list_with_values,
     map_with_values, set_with_values, var_impl_into_inner, vector_with_values, FnImpl, Value,
 };
-use itertools::join;
 use itertools::Itertools;
 use rpds::HashTrieSet as PersistentSet;
 use rpds::List as PersistentList;
@@ -147,24 +146,38 @@ pub fn divide(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 }
 
 pub fn pr(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    print!("{}", join(args, " "));
+    let result = args.iter().map(|arg| arg.to_readable_string()).join(" ");
+    print!("{}", result);
+    io::stdout().flush().unwrap();
+    Ok(Value::Nil)
+}
+
+pub fn prn(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    let result = args.iter().map(|arg| arg.to_readable_string()).join(" ");
+    println!("{}", result);
     Ok(Value::Nil)
 }
 
 pub fn pr_str(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    let mut buffer = String::new();
-    let _ = write!(&mut buffer, "{}", join(args, " ")).expect("can write to string");
-    Ok(Value::String(buffer))
+    let result = args.iter().map(|arg| arg.to_readable_string()).join(" ");
+    Ok(Value::String(result))
 }
 
-pub fn prn(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    println!("{}", join(args, " "));
+pub fn print_(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    print!("{}", args.iter().format(" "));
+    io::stdout().flush().unwrap();
     Ok(Value::Nil)
 }
 
 pub fn println(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    println!("{}", join(args, " "));
+    println!("{}", args.iter().format(" "));
     Ok(Value::Nil)
+}
+
+pub fn print_str(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    let mut result = String::new();
+    write!(&mut result, "{}", args.iter().format(" ")).expect("can write to string");
+    Ok(Value::String(result))
 }
 
 pub fn list(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
@@ -376,9 +389,17 @@ pub fn eval(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<V
 }
 
 pub fn to_str(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() == 1 && matches!(&args[0], Value::Nil) {
+        return Ok(Value::String("".to_string()));
+    }
     let mut result = String::new();
     for arg in args {
-        let _ = write!(&mut result, "{}", arg.to_readable_string());
+        match arg {
+            Value::String(s) => {
+                write!(result, "{}", s).expect("can write to string");
+            }
+            _ => write!(result, "{}", arg.to_readable_string()).expect("can write to string"),
+        }
     }
     Ok(Value::String(result))
 }
@@ -1304,9 +1325,11 @@ pub const BINDINGS: &[(&str, Value)] = &[
     ("*", Value::Primitive(multiply)),
     ("/", Value::Primitive(divide)),
     ("pr", Value::Primitive(pr)),
-    ("pr-str", Value::Primitive(pr_str)),
     ("prn", Value::Primitive(prn)),
+    ("pr-str", Value::Primitive(pr_str)),
+    ("print", Value::Primitive(print_)),
     ("println", Value::Primitive(println)),
+    ("print-str", Value::Primitive(print_str)),
     ("list", Value::Primitive(list)),
     ("list?", Value::Primitive(is_list)),
     ("empty?", Value::Primitive(is_empty)),
