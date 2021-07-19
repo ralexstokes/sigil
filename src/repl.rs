@@ -131,17 +131,17 @@ impl<'a> StdRepl<'a> {
                     let forms = match read(&line) {
                         Ok(forms) => forms,
                         Err(e) => {
-                            print!("{}", e);
+                            println!("error: {}", e);
                             continue;
                         }
                     };
                     for form in forms.iter() {
                         match self.interpreter.evaluate(form) {
                             Ok(result) => {
-                                println!("{}", result.to_readable_string());
+                                println!("{}", result);
                             }
                             Err(e) => {
-                                println!("{}", e);
+                                println!("error: {}", e);
                             }
                         }
                     }
