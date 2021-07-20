@@ -1,5 +1,5 @@
 mod interpreter;
-mod prelude;
+mod lang;
 mod reader;
 mod repl;
 mod value;

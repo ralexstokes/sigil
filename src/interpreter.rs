@@ -1,4 +1,4 @@
-use crate::prelude;
+use crate::lang::{prelude, CORE_SOURCE};
 use crate::reader::{read, ReaderError};
 use crate::value::{
     exception_from_thrown, exception_is_thrown, list_with_values, update_var, var_impl_into_inner,
@@ -16,18 +16,15 @@ use std::convert::{AsRef, From};
 use std::default::Default;
 use std::env::Args;
 use std::fmt::Write;
-use std::io;
 use std::iter::FromIterator;
 use std::iter::IntoIterator;
 use std::path::Path;
 use std::time::SystemTimeError;
+use std::{fs, io};
 use thiserror::Error;
 
-const LOAD_FILE_SOURCE: &str =
-    r#"(def! load-file (fn* [f] (eval (read-string (str "(do " (slurp f) " nil)")))))"#;
 const COMMAND_LINE_ARGS_SYMBOL: &str = "*command-line-args*";
 const DEFAULT_NAMESPACE: &str = "core";
-const DEFAULT_CORE_FILE_PATH: &str = "src/core.sigil";
 const SPECIAL_FORMS: &[&str] = &[
     "def!",           // (def! symbol form)
     "var",            // (var symbol)
@@ -424,16 +421,13 @@ fn evaluate_from_string(interpreter: &mut Interpreter, source: &str) {
 }
 
 pub struct InterpreterBuilder<P: AsRef<Path>> {
-    // determines presence of `load-file` fn in the Interpreter
-    with_load_file_fn: bool,
     // points to a source file for the "core" namespace
     core_file_path: Option<P>,
 }
 
 impl Default for InterpreterBuilder<&'static str> {
     fn default() -> Self {
-        let mut builder = InterpreterBuilder::new();
-        builder.core_file_path = Some(DEFAULT_CORE_FILE_PATH);
+        let builder = InterpreterBuilder::new();
         builder
     }
 }
@@ -441,14 +435,8 @@ impl Default for InterpreterBuilder<&'static str> {
 impl<P: AsRef<Path>> InterpreterBuilder<P> {
     pub fn new() -> Self {
         InterpreterBuilder {
-            with_load_file_fn: false,
             core_file_path: None,
         }
-    }
-
-    pub fn with_load_file_fn(&mut self, with_fn: bool) -> &mut InterpreterBuilder<P> {
-        self.with_load_file_fn = with_fn;
-        self
     }
 
     pub fn with_core_file_path(&mut self, core_file_path: P) -> &mut InterpreterBuilder<P> {
@@ -459,21 +447,12 @@ impl<P: AsRef<Path>> InterpreterBuilder<P> {
     pub fn build(self) -> Interpreter {
         let mut interpreter = Interpreter::default();
 
-        let should_eval_load_file = self.with_load_file_fn || self.core_file_path.is_some();
-        if should_eval_load_file {
-            evaluate_from_string(&mut interpreter, LOAD_FILE_SOURCE);
-        }
-
-        if let Some(core_file_path) = self.core_file_path {
-            // load the "core" source
-            let mut buffer = String::new();
-            let _ = write!(
-                &mut buffer,
-                "(load-file \"{}\")",
-                core_file_path.as_ref().display()
-            )
-            .expect("can write to string");
-            evaluate_from_string(&mut interpreter, &buffer);
+        match self.core_file_path {
+            Some(core_file_path) => {
+                let source = fs::read_to_string(core_file_path).expect("file exists");
+                evaluate_from_string(&mut interpreter, &source);
+            }
+            None => evaluate_from_string(&mut interpreter, CORE_SOURCE),
         }
 
         interpreter
