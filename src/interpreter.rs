@@ -415,14 +415,14 @@ fn analyze_let(let_forms: &PersistentList<Value>) -> EvaluationResult<LetForm> {
     Ok(let_form)
 }
 
-fn get_args(forms: PersistentList<Value>) -> EvaluationResult<PersistentList<Value>> {
+fn get_args(forms: &PersistentList<Value>) -> EvaluationResult<PersistentList<Value>> {
     forms.drop_first().ok_or(EvaluationError::WrongArity {
         expected: 1,
         realized: 0,
     })
 }
 
-fn do_to_exactly_one_arg<A>(forms: PersistentList<Value>, mut action: A) -> EvaluationResult<Value>
+fn do_to_exactly_one_arg<A>(forms: &PersistentList<Value>, mut action: A) -> EvaluationResult<Value>
 where
     A: FnMut(&Value) -> EvaluationResult<Value>,
 {
@@ -452,8 +452,7 @@ pub struct InterpreterBuilder<P: AsRef<Path>> {
 
 impl Default for InterpreterBuilder<&'static str> {
     fn default() -> Self {
-        let builder = InterpreterBuilder::new();
-        builder
+        InterpreterBuilder::new()
     }
 }
 
@@ -644,6 +643,171 @@ impl Interpreter {
         let _ = self.scopes.pop().expect("no underflow in scope stack");
     }
 
+    fn analyze_list_in_fn(
+        &mut self,
+        elems: &PersistentList<Value>,
+        scopes: &mut Vec<Scope>,
+        captures: &mut Vec<HashSet<String>>,
+        // `level` helps implement lifetime analysis for captured parameters
+        level: usize,
+    ) -> EvaluationResult<Value> {
+        // if first elem introduces a new lexical scope...
+        let mut iter = elems.iter();
+        let scopes_len = scopes.len();
+        let mut analyzed_elems = vec![];
+        match iter.next() {
+            Some(Value::Symbol(s, None)) if s == "let*" => {
+                analyzed_elems.push(Value::Symbol(s.to_string(), None));
+                if let Some(Value::Vector(bindings)) = iter.next() {
+                    if bindings.len() % 2 != 0 {
+                        return Err(EvaluationError::List(ListEvaluationError::Failure(
+                            "could not analyze `let*`".to_string(),
+                        )));
+                    }
+                    let mut scope = Scope::new();
+                    let mut analyzed_bindings = PersistentVector::new();
+                    for (name, _) in bindings.iter().tuples() {
+                        match name {
+                            Value::Symbol(s, None) => {
+                                scope.insert(s.clone(), Value::Symbol(s.clone(), None));
+                            }
+                            _ => {
+                                return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                    "could not analyze `let*`".to_string(),
+                                )));
+                            }
+                        }
+                    }
+                    scopes.push(scope);
+                    for (name, value) in bindings.iter().tuples() {
+                        let analyzed_value =
+                            self.analyze_form_in_fn(value, scopes, captures, level)?;
+                        analyzed_bindings.push_back_mut(name.clone());
+                        analyzed_bindings.push_back_mut(analyzed_value);
+                    }
+                    analyzed_elems.push(Value::Vector(analyzed_bindings));
+                }
+            }
+            Some(Value::Symbol(s, None)) if s == "loop*" => {
+                analyzed_elems.push(Value::Symbol(s.to_string(), None));
+                if let Some(Value::Vector(bindings)) = iter.next() {
+                    if bindings.len() % 2 != 0 {
+                        return Err(EvaluationError::List(ListEvaluationError::Failure(
+                            "could not analyze `loop*`".to_string(),
+                        )));
+                    }
+                    let mut scope = Scope::new();
+                    let mut analyzed_bindings = PersistentVector::new();
+                    for (name, _) in bindings.iter().tuples() {
+                        match name {
+                            Value::Symbol(s, None) => {
+                                scope.insert(s.clone(), Value::Symbol(s.clone(), None));
+                            }
+                            _ => {
+                                return Err(EvaluationError::List(ListEvaluationError::Failure(
+                                    "could not analyze `loop*`".to_string(),
+                                )));
+                            }
+                        }
+                    }
+                    for (name, value) in bindings.iter().tuples() {
+                        let analyzed_value =
+                            self.analyze_form_in_fn(value, scopes, captures, level)?;
+                        analyzed_bindings.push_back_mut(name.clone());
+                        analyzed_bindings.push_back_mut(analyzed_value);
+                    }
+                    analyzed_elems.push(Value::Vector(analyzed_bindings));
+                    scopes.push(scope);
+                }
+            }
+            Some(Value::Symbol(s, None)) if s == "fn*" => {
+                if let Some(Value::Vector(bindings)) = iter.next() {
+                    let rest = iter.cloned().collect();
+                    // Note: can only have captures over enclosing fns if we have recursive nesting of fns
+                    let current_fn_level = captures.len();
+                    captures.push(HashSet::new());
+                    let analyzed_fn =
+                        self.analyze_symbols_in_fn(rest, bindings, scopes, captures)?;
+                    let captures_at_this_level = captures.pop().expect("did push");
+                    if !captures_at_this_level.is_empty() {
+                        if let Value::Fn(f) = analyzed_fn {
+                            // Note: need to hoist captures if there are intervening functions along the way...
+                            for capture in &captures_at_this_level {
+                                if let Some(level) = get_lambda_parameter_level(&capture) {
+                                    if level < current_fn_level {
+                                        let captures_at_hoisted_level =
+                                            captures.get_mut(level).expect("already pushed scope");
+                                        captures_at_hoisted_level.insert(capture.to_string());
+                                    }
+                                }
+                            }
+                            let captures = captures_at_this_level
+                                .iter()
+                                .map(|capture| (capture.to_string(), None))
+                                .collect();
+                            return Ok(Value::FnWithCaptures(FnWithCapturesImpl { f, captures }));
+                        }
+                    }
+                    return Ok(analyzed_fn);
+                }
+            }
+            Some(Value::Symbol(s, None)) if s == "catch*" => {
+                if let Some(Value::Symbol(s, None)) = iter.next() {
+                    // Note: to allow for captures inside `catch*`,
+                    // treat the form as a lambda of one parameter
+                    let mut bindings = PersistentVector::new();
+                    bindings.push_back_mut(Value::Symbol(s.clone(), None));
+
+                    let rest = iter.cloned().collect();
+                    // Note: can only have captures over enclosing fns if we have recursive nesting of fns
+                    let current_fn_level = captures.len();
+                    captures.push(HashSet::new());
+                    let analyzed_fn =
+                        self.analyze_symbols_in_fn(rest, &bindings, scopes, captures)?;
+                    let captures_at_this_level = captures.pop().expect("did push");
+                    if !captures_at_this_level.is_empty() {
+                        if let Value::Fn(f) = analyzed_fn {
+                            // Note: need to hoist captures if there are intervening functions along the way...
+                            for capture in &captures_at_this_level {
+                                if let Some(level) = get_lambda_parameter_level(&capture) {
+                                    if level < current_fn_level {
+                                        let captures_at_hoisted_level =
+                                            captures.get_mut(level).expect("already pushed scope");
+                                        captures_at_hoisted_level.insert(capture.to_string());
+                                    }
+                                }
+                            }
+                            let captures = captures_at_this_level
+                                .iter()
+                                .map(|capture| (capture.to_string(), None))
+                                .collect();
+                            return Ok(Value::FnWithCaptures(FnWithCapturesImpl { f, captures }));
+                        }
+                    }
+                    return Ok(analyzed_fn);
+                }
+            }
+            Some(Value::Symbol(s, None)) if s == "quote" => {
+                if let Some(Value::Symbol(s, None)) = iter.next() {
+                    let mut scope = Scope::new();
+                    scope.insert(s.to_string(), Value::Symbol(s.to_string(), None));
+                    scopes.push(scope);
+                }
+            }
+            _ => {}
+        }
+        for elem in elems.iter().skip(analyzed_elems.len()) {
+            let analyzed_elem = self.analyze_form_in_fn(elem, scopes, captures, level)?;
+            analyzed_elems.push(analyzed_elem);
+        }
+        if scopes_len != scopes.len() {
+            let _ = scopes
+                .pop()
+                .expect("only pop if we pushed local to this function");
+        }
+        Ok(Value::List(PersistentList::from_iter(analyzed_elems)))
+    }
+
     // Analyze symbols (recursively) in `form`:
     // 1. Rewrite lambda parameters
     // 2. Capture references to external vars
@@ -676,175 +840,21 @@ impl Interpreter {
                 self.resolve_symbol_to_var(identifier, ns_opt.as_ref())
             }
             Value::List(elems) => {
-                // if first elem introduces a new lexical scope...
-                let mut iter = elems.iter();
-                let scopes_len = scopes.len();
-                let mut analyzed_elems = vec![];
-                match iter.next() {
-                    Some(Value::Symbol(s, None)) if s == "let*" => {
-                        analyzed_elems.push(Value::Symbol(s.to_string(), None));
-                        if let Some(Value::Vector(bindings)) = iter.next() {
-                            if bindings.len() % 2 != 0 {
-                                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                                    "could not analyze `let*`".to_string(),
-                                )));
-                            }
-                            let mut scope = Scope::new();
-                            let mut analyzed_bindings = PersistentVector::new();
-                            for (name, _) in bindings.iter().tuples() {
-                                match name {
-                                    Value::Symbol(s, None) => {
-                                        scope.insert(s.clone(), Value::Symbol(s.clone(), None));
-                                    }
-                                    _ => {
-                                        return Err(EvaluationError::List(
-                                            ListEvaluationError::Failure(
-                                                "could not analyze `let*`".to_string(),
-                                            ),
-                                        ));
-                                    }
-                                }
-                            }
-                            scopes.push(scope);
-                            for (name, value) in bindings.iter().tuples() {
-                                let analyzed_value =
-                                    self.analyze_form_in_fn(value, scopes, captures, level)?;
-                                analyzed_bindings.push_back_mut(name.clone());
-                                analyzed_bindings.push_back_mut(analyzed_value);
-                            }
-                            analyzed_elems.push(Value::Vector(analyzed_bindings));
-                        }
-                    }
-                    Some(Value::Symbol(s, None)) if s == "loop*" => {
-                        analyzed_elems.push(Value::Symbol(s.to_string(), None));
-                        if let Some(Value::Vector(bindings)) = iter.next() {
-                            if bindings.len() % 2 != 0 {
-                                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                                    "could not analyze `loop*`".to_string(),
-                                )));
-                            }
-                            let mut scope = Scope::new();
-                            let mut analyzed_bindings = PersistentVector::new();
-                            for (name, _) in bindings.iter().tuples() {
-                                match name {
-                                    Value::Symbol(s, None) => {
-                                        scope.insert(s.clone(), Value::Symbol(s.clone(), None));
-                                    }
-                                    _ => {
-                                        return Err(EvaluationError::List(
-                                            ListEvaluationError::Failure(
-                                                "could not analyze `loop*`".to_string(),
-                                            ),
-                                        ));
-                                    }
-                                }
-                            }
-                            for (name, value) in bindings.iter().tuples() {
-                                let analyzed_value =
-                                    self.analyze_form_in_fn(value, scopes, captures, level)?;
-                                analyzed_bindings.push_back_mut(name.clone());
-                                analyzed_bindings.push_back_mut(analyzed_value);
-                            }
-                            analyzed_elems.push(Value::Vector(analyzed_bindings));
-                            scopes.push(scope);
-                        }
-                    }
-                    Some(Value::Symbol(s, None)) if s == "fn*" => {
-                        if let Some(Value::Vector(bindings)) = iter.next() {
-                            let rest = iter.cloned().collect();
-                            // Note: can only have captures over enclosing fns if we have recursive nesting of fns
-                            let current_fn_level = captures.len();
-                            captures.push(HashSet::new());
-                            let analyzed_fn =
-                                self.analyze_symbols_in_fn(rest, bindings, scopes, captures)?;
-                            let captures_at_this_level = captures.pop().expect("did push");
-                            if !captures_at_this_level.is_empty() {
-                                if let Value::Fn(f) = analyzed_fn {
-                                    // Note: need to hoist captures if there are intervening functions along the way...
-                                    for capture in &captures_at_this_level {
-                                        if let Some(level) = get_lambda_parameter_level(&capture) {
-                                            if level < current_fn_level {
-                                                let captures_at_hoisted_level = captures
-                                                    .get_mut(level)
-                                                    .expect("already pushed scope");
-                                                captures_at_hoisted_level
-                                                    .insert(capture.to_string());
-                                            }
-                                        }
-                                    }
-                                    let captures = captures_at_this_level
-                                        .iter()
-                                        .map(|capture| (capture.to_string(), None))
-                                        .collect();
-                                    return Ok(Value::FnWithCaptures(FnWithCapturesImpl {
-                                        f,
-                                        captures,
-                                    }));
-                                }
-                            }
-                            return Ok(analyzed_fn);
-                        }
-                    }
-                    Some(Value::Symbol(s, None)) if s == "catch*" => {
-                        if let Some(Value::Symbol(s, None)) = iter.next() {
-                            // Note: to allow for captures inside `catch*`,
-                            // treat the form as a lambda of one parameter
-                            let mut bindings = PersistentVector::new();
-                            bindings.push_back_mut(Value::Symbol(s.clone(), None));
+                if elems.is_empty() {
+                    return Ok(Value::List(PersistentList::new()));
+                }
 
-                            let rest = iter.cloned().collect();
-                            // Note: can only have captures over enclosing fns if we have recursive nesting of fns
-                            let current_fn_level = captures.len();
-                            captures.push(HashSet::new());
-                            let analyzed_fn =
-                                self.analyze_symbols_in_fn(rest, &bindings, scopes, captures)?;
-                            let captures_at_this_level = captures.pop().expect("did push");
-                            if !captures_at_this_level.is_empty() {
-                                if let Value::Fn(f) = analyzed_fn {
-                                    // Note: need to hoist captures if there are intervening functions along the way...
-                                    for capture in &captures_at_this_level {
-                                        if let Some(level) = get_lambda_parameter_level(&capture) {
-                                            if level < current_fn_level {
-                                                let captures_at_hoisted_level = captures
-                                                    .get_mut(level)
-                                                    .expect("already pushed scope");
-                                                captures_at_hoisted_level
-                                                    .insert(capture.to_string());
-                                            }
-                                        }
-                                    }
-                                    let captures = captures_at_this_level
-                                        .iter()
-                                        .map(|capture| (capture.to_string(), None))
-                                        .collect();
-                                    return Ok(Value::FnWithCaptures(FnWithCapturesImpl {
-                                        f,
-                                        captures,
-                                    }));
-                                }
-                            }
-                            return Ok(analyzed_fn);
+                let first = elems.first().unwrap();
+                if let Some(expansion) = self.get_macro_expansion(first, elems) {
+                    match expansion? {
+                        Value::List(elems) => {
+                            self.analyze_list_in_fn(&elems, scopes, captures, level)
                         }
+                        other => self.analyze_form_in_fn(&other, scopes, captures, level),
                     }
-                    Some(Value::Symbol(s, None)) if s == "quote" => {
-                        if let Some(Value::Symbol(s, None)) = iter.next() {
-                            let mut scope = Scope::new();
-                            scope.insert(s.to_string(), Value::Symbol(s.to_string(), None));
-                            scopes.push(scope);
-                        }
-                    }
-                    _ => {}
+                } else {
+                    self.analyze_list_in_fn(elems, scopes, captures, level)
                 }
-                for elem in elems.iter().skip(analyzed_elems.len()) {
-                    let analyzed_elem = self.analyze_form_in_fn(elem, scopes, captures, level)?;
-                    analyzed_elems.push(analyzed_elem);
-                }
-                if scopes_len != scopes.len() {
-                    let _ = scopes
-                        .pop()
-                        .expect("only pop if we pushed local to this function");
-                }
-                Ok(Value::List(PersistentList::from_iter(analyzed_elems)))
             }
             Value::Vector(elems) => {
                 let mut analyzed_elems = PersistentVector::new();
@@ -975,7 +985,7 @@ impl Interpreter {
     ) -> EvaluationResult<Value> {
         if let Some(forms) = forms.drop_first() {
             let result = match self.apply_fn_inner(body, *arity, *level, *variadic, forms, false) {
-                Ok(Value::List(forms)) => self.macroexpand(&forms),
+                Ok(Value::List(forms)) => self.expand_macro_if_present(&forms),
                 Ok(result) => Ok(result),
                 Err(e) => {
                     let mut err = String::from("could not apply macro: ");
@@ -990,21 +1000,19 @@ impl Interpreter {
         )))
     }
 
-    fn macroexpand(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        match forms.first() {
-            Some(Value::Symbol(identifier, ns_opt)) => {
-                if let Ok(Value::Macro(f)) = self.resolve_symbol(identifier, ns_opt.as_ref()) {
-                    return self.apply_macro(&f, forms);
-                }
+    fn expand_macro_if_present(
+        &mut self,
+        forms: &PersistentList<Value>,
+    ) -> EvaluationResult<Value> {
+        if let Some(form) = forms.first() {
+            if let Some(expansion) = self.get_macro_expansion(form, forms) {
+                expansion
+            } else {
+                Ok(Value::List(forms.clone()))
             }
-            Some(Value::Var(v)) => {
-                if let Value::Macro(f) = var_impl_into_inner(v) {
-                    return self.apply_macro(&f, forms);
-                }
-            }
-            _ => {}
+        } else {
+            Ok(Value::List(PersistentList::new()))
         }
-        Ok(Value::List(forms.clone()))
     }
 
     /// Apply the given `Fn` to the supplied `args`.
@@ -1127,7 +1135,7 @@ impl Interpreter {
         native_fn(self, &operands)
     }
 
-    fn eval_def(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    fn eval_def(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         if let Some(rest) = forms.drop_first() {
             if let Some(Value::Symbol(id, None)) = rest.first() {
                 if let Some(rest) = rest.drop_first() {
@@ -1177,7 +1185,7 @@ impl Interpreter {
         )))
     }
 
-    fn eval_var(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    fn eval_var(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         if let Some(rest) = forms.drop_first() {
             if let Some(Value::Symbol(s, ns_opt)) = rest.first() {
                 if let Some(ns_desc) = ns_opt {
@@ -1192,7 +1200,7 @@ impl Interpreter {
         )))
     }
 
-    fn eval_let(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    fn eval_let(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         let let_forms = forms
             .drop_first()
             .ok_or_else(|| -> EvaluationError { SyntaxError::MissingForms.into() })?;
@@ -1224,7 +1232,7 @@ impl Interpreter {
         result
     }
 
-    fn eval_loop(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    fn eval_loop(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         if let Some(rest) = forms.drop_first() {
             if let Some(Value::Vector(elems)) = rest.first() {
                 if elems.len() % 2 == 0 {
@@ -1280,7 +1288,7 @@ impl Interpreter {
         )))
     }
 
-    fn eval_recur(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    fn eval_recur(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         if let Some(rest) = forms.drop_first() {
             let mut result = vec![];
             for form in rest.into_iter() {
@@ -1294,7 +1302,7 @@ impl Interpreter {
         )))
     }
 
-    fn eval_if(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    fn eval_if(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         if let Some(rest) = forms.drop_first() {
             if let Some(predicate_form) = rest.first() {
                 if let Some(rest) = rest.drop_first() {
@@ -1342,7 +1350,7 @@ impl Interpreter {
             .into_inner()
     }
 
-    fn eval_do(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    fn eval_do(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         if let Some(rest) = forms.drop_first() {
             return self.eval_do_inner(&rest);
         }
@@ -1351,7 +1359,7 @@ impl Interpreter {
         )))
     }
 
-    fn eval_fn(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    fn eval_fn(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         if let Some(rest) = forms.drop_first() {
             if let Some(Value::Vector(params)) = rest.first() {
                 if let Some(body) = rest.drop_first() {
@@ -1366,7 +1374,7 @@ impl Interpreter {
         )))
     }
 
-    fn eval_quote(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    fn eval_quote(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         if let Some(rest) = forms.drop_first() {
             if rest.len() == 1 {
                 if let Some(form) = rest.first() {
@@ -1379,7 +1387,7 @@ impl Interpreter {
         )))
     }
 
-    fn eval_quasiquote(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    fn eval_quasiquote(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         if let Some(rest) = forms.drop_first() {
             if let Some(second) = rest.first() {
                 let expansion = eval_quasiquote(second)?;
@@ -1391,7 +1399,7 @@ impl Interpreter {
         )))
     }
 
-    fn eval_defmacro(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    fn eval_defmacro(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         match self.eval_def(forms) {
             Ok(Value::Var(v @ VarImpl { .. })) => match var_impl_into_inner(&v) {
                 Value::Fn(f) => {
@@ -1416,14 +1424,14 @@ impl Interpreter {
         }
     }
 
-    fn eval_macroexpand(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    fn eval_macroexpand(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         do_to_exactly_one_arg(forms, |arg| match self.evaluate(arg)? {
-            Value::List(value) => self.macroexpand(&value),
+            Value::List(elems) => self.expand_macro_if_present(&elems),
             other => Ok(other),
         })
     }
 
-    fn eval_try(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    fn eval_try(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         if let Some(rest) = forms.drop_first() {
             let catch_form = match rest.last() {
                 Some(Value::List(last_form)) => match last_form.first() {
@@ -1539,73 +1547,80 @@ impl Interpreter {
         )))
     }
 
-    fn eval_list(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        match self.macroexpand(forms)? {
-            // macroexpand to list, interpret...
-            Value::List(forms) => {
-                if let Some(operator_form) = forms.first() {
-                    // handle special forms or any apply-phase constructs
-                    match operator_form {
-                        Value::Symbol(s, None) if s == "def!" => return self.eval_def(forms),
-                        Value::Symbol(s, None) if s == "var" => return self.eval_var(forms),
-                        Value::Symbol(s, None) if s == "let*" => return self.eval_let(forms),
-                        Value::Symbol(s, None) if s == "loop*" => return self.eval_loop(forms),
-                        Value::Symbol(s, None) if s == "recur" => return self.eval_recur(forms),
-                        Value::Symbol(s, None) if s == "if" => return self.eval_if(forms),
-                        Value::Symbol(s, None) if s == "do" => return self.eval_do(forms),
-                        Value::Symbol(s, None) if s == "fn*" => return self.eval_fn(forms),
-                        Value::Symbol(s, None) if s == "quote" => return self.eval_quote(forms),
-                        Value::Symbol(s, None) if s == "quasiquote" => {
-                            return self.eval_quasiquote(forms)
-                        }
-                        Value::Symbol(s, None) if s == "defmacro!" => {
-                            return self.eval_defmacro(forms)
-                        }
-                        Value::Symbol(s, None) if s == "macroexpand" => {
-                            return self.eval_macroexpand(forms)
-                        }
-                        Value::Symbol(s, None) if s == "try*" => return self.eval_try(forms),
-                        // apply phase when operator is already evaluated:
-                        Value::Fn(f) => return self.apply_fn(f, &forms),
-                        Value::FnWithCaptures(FnWithCapturesImpl { f, .. }) => {
-                            return self.apply_fn(f, &forms)
-                        }
-                        Value::Primitive(native_fn) => {
-                            return self.apply_primitive(native_fn, &forms)
-                        }
-                        _ => match self.evaluate(operator_form)? {
-                            Value::Fn(f) => return self.apply_fn(&f, &forms),
-                            Value::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
-                                self.enter_scope();
-                                for (capture, value) in captures {
-                                    if let Some(value) = value {
-                                        self.insert_value_in_current_scope(&capture, value);
-                                    } else {
-                                        return Err(EvaluationError::List(
-                                            ListEvaluationError::MissingCapturedValue(capture),
-                                        ));
-                                    }
-                                }
-                                let result = self.apply_fn(&f, &forms);
-                                self.leave_scope();
-                                return result;
-                            }
-                            Value::Primitive(native_fn) => {
-                                return self.apply_primitive(&native_fn, &forms);
-                            }
-                            v => {
-                                return Err(EvaluationError::List(
-                                    ListEvaluationError::CannotInvoke(v),
-                                ));
-                            }
-                        },
-                    }
+    fn get_macro_expansion(
+        &mut self,
+        form: &Value,
+        forms: &PersistentList<Value>,
+    ) -> Option<EvaluationResult<Value>> {
+        match form {
+            Value::Symbol(identifier, ns_opt) => {
+                if let Ok(Value::Macro(f)) = self.resolve_symbol(identifier, ns_opt.as_ref()) {
+                    Some(self.apply_macro(&f, forms))
+                } else {
+                    None
                 }
-                // else, empty list
-                Ok(Value::List(forms))
             }
-            // macroexpand to value other than list, just evaluate
-            expansion => self.evaluate(&expansion),
+            Value::Var(v) => {
+                if let Value::Macro(f) = var_impl_into_inner(v) {
+                    Some(self.apply_macro(&f, forms))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn eval_list(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
+        if forms.is_empty() {
+            return Ok(Value::List(PersistentList::new()));
+        }
+
+        let operator_form = forms.first().unwrap();
+        if let Some(expansion) = self.get_macro_expansion(operator_form, forms) {
+            match expansion? {
+                Value::List(forms) => return self.eval_list(&forms),
+                other => return self.evaluate(&other),
+            }
+        }
+        match operator_form {
+            Value::Symbol(s, None) if s == "def!" => self.eval_def(forms),
+            Value::Symbol(s, None) if s == "var" => self.eval_var(forms),
+            Value::Symbol(s, None) if s == "let*" => self.eval_let(forms),
+            Value::Symbol(s, None) if s == "loop*" => self.eval_loop(forms),
+            Value::Symbol(s, None) if s == "recur" => self.eval_recur(forms),
+            Value::Symbol(s, None) if s == "if" => self.eval_if(forms),
+            Value::Symbol(s, None) if s == "do" => self.eval_do(forms),
+            Value::Symbol(s, None) if s == "fn*" => self.eval_fn(forms),
+            Value::Symbol(s, None) if s == "quote" => self.eval_quote(forms),
+            Value::Symbol(s, None) if s == "quasiquote" => self.eval_quasiquote(forms),
+            Value::Symbol(s, None) if s == "defmacro!" => self.eval_defmacro(forms),
+            Value::Symbol(s, None) if s == "macroexpand" => self.eval_macroexpand(forms),
+            Value::Symbol(s, None) if s == "try*" => self.eval_try(forms),
+            // apply phase when operator is already evaluated:
+            Value::Fn(f) => self.apply_fn(f, forms),
+            Value::FnWithCaptures(FnWithCapturesImpl { f, .. }) => self.apply_fn(f, forms),
+            Value::Primitive(native_fn) => self.apply_primitive(native_fn, forms),
+            _ => match self.evaluate(operator_form)? {
+                Value::Fn(f) => self.apply_fn(&f, forms),
+                Value::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
+                    self.enter_scope();
+                    for (capture, value) in captures {
+                        if let Some(value) = value {
+                            self.insert_value_in_current_scope(&capture, value);
+                        } else {
+                            return Err(EvaluationError::List(
+                                ListEvaluationError::MissingCapturedValue(capture),
+                            ));
+                        }
+                    }
+                    let result = self.apply_fn(&f, forms);
+                    self.leave_scope();
+                    result
+                }
+                Value::Primitive(native_fn) => self.apply_primitive(&native_fn, forms),
+                v => Err(EvaluationError::List(ListEvaluationError::CannotInvoke(v))),
+            },
         }
     }
 
