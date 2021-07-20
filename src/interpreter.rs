@@ -98,6 +98,8 @@ pub enum SyntaxError {
 
 #[derive(Debug, Error)]
 pub enum EvaluationError {
+    #[error("form invoked with incorrect arity: provided {realized} arguments but expected {expected} arguments")]
+    WrongArity { expected: usize, realized: usize },
     #[error("symbol error: {0}")]
     Symbol(SymbolEvaluationError),
     #[error("list error: {0}")]
@@ -411,6 +413,29 @@ fn parse_let(forms: &PersistentList<Value>) -> EvaluationResult<LetForm> {
 fn analyze_let(let_forms: &PersistentList<Value>) -> EvaluationResult<LetForm> {
     let let_form = parse_let(&let_forms)?;
     Ok(let_form)
+}
+
+fn get_args(forms: PersistentList<Value>) -> EvaluationResult<PersistentList<Value>> {
+    forms.drop_first().ok_or(EvaluationError::WrongArity {
+        expected: 1,
+        realized: 0,
+    })
+}
+
+fn do_to_exactly_one_arg<A>(forms: PersistentList<Value>, mut action: A) -> EvaluationResult<Value>
+where
+    A: FnMut(&Value) -> EvaluationResult<Value>,
+{
+    let args = get_args(forms)?;
+    let arg_count = args.len();
+    if arg_count != 1 {
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: arg_count,
+        });
+    }
+    let arg = args.first().unwrap();
+    action(arg)
 }
 
 fn evaluate_from_string(interpreter: &mut Interpreter, source: &str) {
@@ -1392,14 +1417,10 @@ impl Interpreter {
     }
 
     fn eval_macroexpand(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        if let Some(rest) = forms.drop_first() {
-            if let Some(Value::List(value)) = rest.first() {
-                return self.macroexpand(value);
-            }
-        }
-        Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not evaluate `macroexpand`".to_string(),
-        )))
+        do_to_exactly_one_arg(forms, |arg| match self.evaluate(arg)? {
+            Value::List(value) => self.macroexpand(&value),
+            other => Ok(other),
+        })
     }
 
     fn eval_try(&mut self, forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -2410,21 +2431,21 @@ mod test {
             ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (unless false 7 8)", Number(7)),
             ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (unless true 7 8)", Number(8)),
             ("(defmacro! one (fn* [] 1)) (macroexpand (one))", Number(1)),
-            ("(defmacro! unless (fn* [pred a b] `(if ~pred ~b ~a))) (macroexpand (unless PRED A B))",
+            ("(defmacro! unless (fn* [pred a b] `(if ~pred ~b ~a))) (macroexpand '(unless PRED A B))",
                 read("(if PRED B A)")
                     .expect("example is correct")
                     .into_iter()
                     .nth(0)
                     .expect("some")
             ),
-            ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (macroexpand (unless PRED A B))",
+            ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (macroexpand '(unless PRED A B))",
                 read("(if (not PRED) A B)")
                     .expect("example is correct")
                     .into_iter()
                     .nth(0)
                     .expect("some")
             ),
-            ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (macroexpand (unless 2 3 4))",
+            ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (macroexpand '(unless 2 3 4))",
                 read("(if (not 2) 3 4)")
                     .expect("example is correct")
                     .into_iter()
@@ -2432,18 +2453,14 @@ mod test {
                     .expect("some")
             ),
             ("(defmacro! identity (fn* [x] x)) (let* [a 123] (macroexpand (identity a)))",
-                read("a")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some")
+                Number(123),
             ),
             ("(defmacro! identity (fn* [x] x)) (let* [a 123] (identity a))",
                 Number(123),
             ),
             ("(macroexpand (cond))", Nil),
             ("(cond)", Nil),
-            ("(macroexpand (cond X Y))",
+            ("(macroexpand '(cond X Y))",
                 read("(if X Y (cond))")
                     .expect("example is correct")
                     .into_iter()
@@ -2458,7 +2475,7 @@ mod test {
             ("(cond false 7 (= 2 2) 8 :else 9)", Number(8)),
             ("(cond false 7 false 8 false 9)", Nil),
             ("(let* [x (cond false :no true :yes)] x)", Keyword("yes".to_string(), None)),
-            ("(macroexpand (cond X Y Z T))",
+            ("(macroexpand '(cond X Y Z T))",
                 read("(if X Y (cond Z T))")
                     .expect("example is correct")
                     .into_iter()
