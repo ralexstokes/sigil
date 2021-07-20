@@ -622,7 +622,7 @@ impl Interpreter {
     // Analyze symbols (recursively) in `form`:
     // 1. Rewrite lambda parameters
     // 2. Capture references to external vars
-    fn analyze_form_in_lambda(
+    fn analyze_form_in_fn(
         &mut self,
         form: &Value,
         scopes: &mut Vec<Scope>,
@@ -683,7 +683,7 @@ impl Interpreter {
                             scopes.push(scope);
                             for (name, value) in bindings.iter().tuples() {
                                 let analyzed_value =
-                                    self.analyze_form_in_lambda(value, scopes, captures, level)?;
+                                    self.analyze_form_in_fn(value, scopes, captures, level)?;
                                 analyzed_bindings.push_back_mut(name.clone());
                                 analyzed_bindings.push_back_mut(analyzed_value);
                             }
@@ -716,7 +716,7 @@ impl Interpreter {
                             }
                             for (name, value) in bindings.iter().tuples() {
                                 let analyzed_value =
-                                    self.analyze_form_in_lambda(value, scopes, captures, level)?;
+                                    self.analyze_form_in_fn(value, scopes, captures, level)?;
                                 analyzed_bindings.push_back_mut(name.clone());
                                 analyzed_bindings.push_back_mut(analyzed_value);
                             }
@@ -731,7 +731,7 @@ impl Interpreter {
                             let current_fn_level = captures.len();
                             captures.push(HashSet::new());
                             let analyzed_fn =
-                                self.analyze_symbols_in_lambda(rest, bindings, scopes, captures)?;
+                                self.analyze_symbols_in_fn(rest, bindings, scopes, captures)?;
                             let captures_at_this_level = captures.pop().expect("did push");
                             if !captures_at_this_level.is_empty() {
                                 if let Value::Fn(f) = analyzed_fn {
@@ -772,7 +772,7 @@ impl Interpreter {
                             let current_fn_level = captures.len();
                             captures.push(HashSet::new());
                             let analyzed_fn =
-                                self.analyze_symbols_in_lambda(rest, &bindings, scopes, captures)?;
+                                self.analyze_symbols_in_fn(rest, &bindings, scopes, captures)?;
                             let captures_at_this_level = captures.pop().expect("did push");
                             if !captures_at_this_level.is_empty() {
                                 if let Value::Fn(f) = analyzed_fn {
@@ -811,8 +811,7 @@ impl Interpreter {
                     _ => {}
                 }
                 for elem in elems.iter().skip(analyzed_elems.len()) {
-                    let analyzed_elem =
-                        self.analyze_form_in_lambda(elem, scopes, captures, level)?;
+                    let analyzed_elem = self.analyze_form_in_fn(elem, scopes, captures, level)?;
                     analyzed_elems.push(analyzed_elem);
                 }
                 if scopes_len != scopes.len() {
@@ -825,8 +824,7 @@ impl Interpreter {
             Value::Vector(elems) => {
                 let mut analyzed_elems = PersistentVector::new();
                 for elem in elems.iter() {
-                    let analyzed_elem =
-                        self.analyze_form_in_lambda(elem, scopes, captures, level)?;
+                    let analyzed_elem = self.analyze_form_in_fn(elem, scopes, captures, level)?;
                     analyzed_elems.push_back_mut(analyzed_elem);
                 }
                 Ok(Value::Vector(analyzed_elems))
@@ -834,8 +832,8 @@ impl Interpreter {
             Value::Map(elems) => {
                 let mut analyzed_elems = PersistentMap::new();
                 for (k, v) in elems.iter() {
-                    let analyzed_k = self.analyze_form_in_lambda(k, scopes, captures, level)?;
-                    let analyzed_v = self.analyze_form_in_lambda(v, scopes, captures, level)?;
+                    let analyzed_k = self.analyze_form_in_fn(k, scopes, captures, level)?;
+                    let analyzed_v = self.analyze_form_in_fn(v, scopes, captures, level)?;
                     analyzed_elems.insert_mut(analyzed_k, analyzed_v);
                 }
                 Ok(Value::Map(analyzed_elems))
@@ -843,8 +841,7 @@ impl Interpreter {
             Value::Set(elems) => {
                 let mut analyzed_elems = PersistentSet::new();
                 for elem in elems.iter() {
-                    let analyzed_elem =
-                        self.analyze_form_in_lambda(elem, scopes, captures, level)?;
+                    let analyzed_elem = self.analyze_form_in_fn(elem, scopes, captures, level)?;
                     analyzed_elems.insert_mut(analyzed_elem);
                 }
                 Ok(Value::Set(analyzed_elems))
@@ -866,7 +863,7 @@ impl Interpreter {
     // otherwise, the lambda is an error
     //
     // Note: parameters are resolved to (ordinal) reserved symbols
-    fn analyze_symbols_in_lambda(
+    fn analyze_symbols_in_fn(
         &mut self,
         body: PersistentList<Value>,
         params: &PersistentVector<Value>,
@@ -929,8 +926,7 @@ impl Interpreter {
         lambda_scopes.push(parameters);
         let mut analyzed_body = Vec::with_capacity(body.len());
         for form in body.iter() {
-            let analyzed_form =
-                self.analyze_form_in_lambda(form, lambda_scopes, captures, level)?;
+            let analyzed_form = self.analyze_form_in_fn(form, lambda_scopes, captures, level)?;
             analyzed_body.push(analyzed_form);
         }
         lambda_scopes.pop();
@@ -1336,12 +1332,7 @@ impl Interpreter {
                 if let Some(body) = rest.drop_first() {
                     let mut scopes = vec![];
                     let mut captures = vec![];
-                    return self.analyze_symbols_in_lambda(
-                        body,
-                        &params,
-                        &mut scopes,
-                        &mut captures,
-                    );
+                    return self.analyze_symbols_in_fn(body, &params, &mut scopes, &mut captures);
                 }
             }
         }
@@ -1426,7 +1417,7 @@ impl Interpreter {
                                             exception_binding.push_back_mut(s.clone());
                                             let mut scopes = vec![];
                                             let mut captures = vec![];
-                                            let body = self.analyze_symbols_in_lambda(
+                                            let body = self.analyze_symbols_in_fn(
                                                 exception_body,
                                                 &exception_binding,
                                                 &mut scopes,
