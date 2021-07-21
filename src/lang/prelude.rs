@@ -5,7 +5,8 @@ use crate::interpreter::{
 use crate::reader::read;
 use crate::value::{
     atom_impl_into_inner, atom_with_value, exception, exception_into_thrown, list_with_values,
-    map_with_values, set_with_values, var_impl_into_inner, vector_with_values, FnImpl, Value,
+    map_with_values, set_with_values, var_impl_into_inner, vector_with_values, FnImpl,
+    FnWithCapturesImpl, Value,
 };
 use itertools::Itertools;
 use rpds::HashTrieSet as PersistentSet;
@@ -472,13 +473,53 @@ pub fn swap_atom(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationRes
                 level,
                 variadic,
             }) => {
+                // Note: args should already be evaluated so can skip here...
+                let should_evaluate = false;
                 let mut inner = cell.borrow_mut();
                 let original_value = inner.clone();
                 let mut elems = vec![original_value];
                 elems.extend_from_slice(&args[2..]);
                 let fn_args = PersistentList::from_iter(elems);
-                let new_value =
-                    interpreter.apply_fn_inner(body, *arity, *level, *variadic, fn_args, true)?;
+                let new_value = interpreter.apply_fn_inner(
+                    body,
+                    *arity,
+                    *level,
+                    *variadic,
+                    fn_args,
+                    should_evaluate,
+                )?;
+                *inner = new_value.clone();
+                Ok(new_value)
+            }
+            Value::FnWithCaptures(FnWithCapturesImpl {
+                f:
+                    FnImpl {
+                        body,
+                        arity,
+                        level,
+                        variadic,
+                    },
+                captures,
+            }) => {
+                interpreter.extend_from_captures(captures)?;
+                // Note: args should already be evaluated so can skip here...
+                let should_evaluate = false;
+                let mut inner = cell.borrow_mut();
+                let original_value = inner.clone();
+                let mut elems = vec![original_value];
+                elems.extend_from_slice(&args[2..]);
+                let fn_args = PersistentList::from_iter(elems);
+                let new_value = interpreter.apply_fn_inner(
+                    body,
+                    *arity,
+                    *level,
+                    *variadic,
+                    fn_args,
+                    should_evaluate,
+                );
+                interpreter.leave_scope();
+
+                let new_value = new_value?;
                 *inner = new_value.clone();
                 Ok(new_value)
             }
@@ -727,6 +768,23 @@ pub fn apply(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<
             let fn_args = PersistentList::from_iter(fn_args);
             interpreter.apply_fn_inner(body, *arity, *level, *variadic, fn_args, false)
         }
+        Value::FnWithCaptures(FnWithCapturesImpl {
+            f:
+                FnImpl {
+                    body,
+                    arity,
+                    level,
+                    variadic,
+                },
+            captures,
+        }) => {
+            interpreter.extend_from_captures(captures)?;
+            let fn_args = PersistentList::from_iter(fn_args);
+            let result =
+                interpreter.apply_fn_inner(body, *arity, *level, *variadic, fn_args, false);
+            interpreter.leave_scope();
+            result
+        }
         Value::Primitive(native_fn) => native_fn(interpreter, &fn_args),
         _ => Err(EvaluationError::List(ListEvaluationError::Failure(
             "incorrect argument".to_string(),
@@ -749,6 +807,8 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
             )));
         }
     };
+    // Note: args should already be evaluated so can skip here...
+    let should_evaluate = false;
     let mut result = PersistentList::new();
     match &args[0] {
         Value::Fn(FnImpl {
@@ -766,10 +826,36 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
                     *level,
                     *variadic,
                     wrapped_arg,
-                    false,
+                    should_evaluate,
                 )?;
                 result.push_front_mut(mapped_arg);
             }
+        }
+        Value::FnWithCaptures(FnWithCapturesImpl {
+            f:
+                FnImpl {
+                    body,
+                    arity,
+                    level,
+                    variadic,
+                },
+            captures,
+        }) => {
+            interpreter.extend_from_captures(captures)?;
+            for arg in fn_args.into_iter().rev() {
+                let mut wrapped_arg = PersistentList::new();
+                wrapped_arg.push_front_mut(arg.clone());
+                let mapped_arg = interpreter.apply_fn_inner(
+                    body,
+                    *arity,
+                    *level,
+                    *variadic,
+                    wrapped_arg,
+                    should_evaluate,
+                )?;
+                result.push_front_mut(mapped_arg);
+            }
+            interpreter.leave_scope();
         }
         Value::Primitive(native_fn) => {
             for arg in fn_args.into_iter().rev() {
@@ -777,10 +863,11 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
                 result.push_front_mut(mapped_arg);
             }
         }
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
+        other => {
+            return Err(EvaluationError::WrongType {
+                expected: "Fn, FnWithCaptures, Primitive".to_string(),
+                realized: other.clone(),
+            });
         }
     };
     Ok(Value::List(result))
@@ -1151,7 +1238,9 @@ pub fn is_fn(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         )));
     }
     match &args[0] {
-        Value::Fn(..) | Value::Primitive(..) | Value::Macro(..) => Ok(Value::Bool(true)),
+        Value::Fn(..) | Value::FnWithCaptures(..) | Value::Primitive(..) | Value::Macro(..) => {
+            Ok(Value::Bool(true))
+        }
         _ => Ok(Value::Bool(false)),
     }
 }

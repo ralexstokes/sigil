@@ -98,6 +98,8 @@ pub enum SyntaxError {
 
 #[derive(Debug, Error)]
 pub enum EvaluationError {
+    #[error("form invoked with an argument of the incorrect type: expected a value of type(s) `{expected}` but found value `{realized}`")]
+    WrongType { expected: String, realized: Value },
     #[error("form invoked with incorrect arity: provided {realized} arguments but expected {expected} arguments")]
     WrongArity { expected: usize, realized: usize },
     #[error("symbol error: {0}")]
@@ -445,6 +447,24 @@ fn evaluate_from_string(interpreter: &mut Interpreter, source: &str) {
     }
 }
 
+fn update_captures(
+    captures: &mut HashMap<String, Option<Value>>,
+    scopes: &[Scope],
+) -> EvaluationResult<()> {
+    for (capture, value) in captures {
+        if value.is_none() {
+            let captured_value = resolve_symbol_in_scopes(scopes.iter().rev(), capture)
+                .ok_or_else(|| {
+                    EvaluationError::Symbol(SymbolEvaluationError::UnableToResolveSymbolToValue(
+                        capture.to_string(),
+                    ))
+                })?;
+            *value = Some(captured_value.clone());
+        }
+    }
+    Ok(())
+}
+
 pub struct InterpreterBuilder<P: AsRef<Path>> {
     // points to a source file for the "core" namespace
     core_file_path: Option<P>,
@@ -639,7 +659,9 @@ impl Interpreter {
         scope.insert(identifier.to_string(), value);
     }
 
-    fn leave_scope(&mut self) {
+    /// Exits the current lexical scope.
+    /// NOTE: exposed for some prelude functionality.
+    pub fn leave_scope(&mut self) {
         let _ = self.scopes.pop().expect("no underflow in scope stack");
     }
 
@@ -1085,17 +1107,7 @@ impl Interpreter {
         }
         let mut result = self.eval_do_inner(body);
         if let Ok(Value::FnWithCaptures(FnWithCapturesImpl { f, mut captures })) = result {
-            for (capture, value) in &mut captures {
-                let captured_value = resolve_symbol_in_scopes(self.scopes.iter().rev(), capture)
-                    .ok_or_else(|| {
-                        EvaluationError::Symbol(
-                            SymbolEvaluationError::UnableToResolveSymbolToValue(
-                                capture.to_string(),
-                            ),
-                        )
-                    })?;
-                *value = Some(captured_value.clone());
-            }
+            update_captures(&mut captures, &self.scopes)?;
             result = Ok(Value::FnWithCaptures(FnWithCapturesImpl { f, captures }))
         }
         self.leave_scope();
@@ -1133,6 +1145,24 @@ impl Interpreter {
             }
         }
         native_fn(self, &operands)
+    }
+
+    pub fn extend_from_captures(
+        &mut self,
+        captures: &HashMap<String, Option<Value>>,
+    ) -> EvaluationResult<()> {
+        self.enter_scope();
+        for (capture, value) in captures {
+            if let Some(value) = value {
+                self.insert_value_in_current_scope(&capture, value.clone());
+            } else {
+                self.leave_scope();
+                return Err(EvaluationError::List(
+                    ListEvaluationError::MissingCapturedValue(capture.to_string()),
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn eval_def(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
@@ -1507,28 +1537,10 @@ impl Interpreter {
                         f: FnImpl { body, level, .. },
                         mut captures,
                     })) => {
-                        for (capture, value) in &mut captures {
-                            let captured_value =
-                                resolve_symbol_in_scopes(self.scopes.iter().rev(), capture)
-                                    .ok_or_else(|| {
-                                        EvaluationError::Symbol(
-                                            SymbolEvaluationError::UnableToResolveSymbolToValue(
-                                                capture.to_string(),
-                                            ),
-                                        )
-                                    })?;
-                            *value = Some(captured_value.clone());
-                        }
-                        self.enter_scope();
-                        for (capture, value) in captures {
-                            if let Some(value) = value {
-                                self.insert_value_in_current_scope(&capture, value);
-                            } else {
-                                return Err(EvaluationError::List(
-                                    ListEvaluationError::MissingCapturedValue(capture),
-                                ));
-                            }
-                        }
+                        // FIXME: here we pull values from scopes just to turn around and put them back in a child scope.
+                        // Can we skip this?
+                        update_captures(&mut captures, &self.scopes)?;
+                        self.extend_from_captures(&captures)?;
                         self.enter_scope();
                         let parameter = lambda_parameter_key(0, level);
                         self.insert_value_in_current_scope(&parameter, exception_from_thrown(&e));
@@ -1604,16 +1616,7 @@ impl Interpreter {
             _ => match self.evaluate(operator_form)? {
                 Value::Fn(f) => self.apply_fn(&f, forms),
                 Value::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
-                    self.enter_scope();
-                    for (capture, value) in captures {
-                        if let Some(value) = value {
-                            self.insert_value_in_current_scope(&capture, value);
-                        } else {
-                            return Err(EvaluationError::List(
-                                ListEvaluationError::MissingCapturedValue(capture),
-                            ));
-                        }
-                    }
+                    self.extend_from_captures(&captures)?;
                     let result = self.apply_fn(&f, forms);
                     self.leave_scope();
                     result
@@ -1664,7 +1667,14 @@ impl Interpreter {
             }
             Value::Var(v) => Ok(var_impl_into_inner(v)),
             f @ Value::Fn(_) => Ok(f.clone()),
-            f @ Value::FnWithCaptures(_) => Ok(f.clone()),
+            Value::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
+                let mut captures = captures.clone();
+                update_captures(&mut captures, &self.scopes)?;
+                Ok(Value::FnWithCaptures(FnWithCapturesImpl {
+                    f: f.clone(),
+                    captures,
+                }))
+            }
             Value::Primitive(_) => unreachable!(),
             Value::Recur(_) => unreachable!(),
             a @ Value::Atom(_) => Ok(a.clone()),
@@ -1967,6 +1977,7 @@ mod test {
             ("(def! gen-plus-x (fn* [x] (fn* [b] (+ x b)))) (def! plus7 (gen-plus-x 7)) (plus7 8)", Number(15)),
             ("((((fn* [a] (fn* [b] (fn* [c] (+ a b c)))) 1) 2) 3)", Number(6)),
             ("(((fn* [a] (fn* [b] (* b ((fn* [c] (+ a c)) 32)))) 1) 2)", Number(66)),
+            ("(def! f (fn* [a] (fn* [b] (+ a b)))) ((first (let* [x 12] (map (fn* [_] (f x)) '(10000000)))) 27)", Number(39))
         ];
         run_eval_test(&test_cases);
     }
@@ -3036,6 +3047,10 @@ mod test {
             (
                 "(map symbol? '(nil false true))",
                 list_with_values(vec![Bool(false), Bool(false), Bool(false)]),
+            ),
+            (
+                "(def! f (fn* [a] (fn* [b] (+ a b)))) (map (f 23) (list 1 2))",
+                list_with_values(vec![Number(24), Number(25)]),
             ),
             ("(= () (map str ()))", Bool(true)),
             ("(nil? nil)", Bool(true)),
