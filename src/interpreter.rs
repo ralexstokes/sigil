@@ -60,7 +60,7 @@ pub enum ListEvaluationError {
     Failure(String),
     #[error("error evaluating quasiquote: {0}")]
     QuasiquoteError(String),
-    #[error("missing value for captured symbol {0}")]
+    #[error("missing value for captured symbol `{0}`")]
     MissingCapturedValue(String),
 }
 
