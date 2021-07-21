@@ -104,9 +104,21 @@ impl<'a> StdRepl<'a> {
 
     pub fn run_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
         let contents = fs::read_to_string(path)?;
-        let forms = read(&contents)?;
+        let forms = match read(&contents) {
+            Ok(forms) => forms,
+            Err(e) => {
+                println!("error reading source: {}", e);
+                return Ok(());
+            }
+        };
         for form in forms.iter() {
-            self.interpreter.evaluate(form)?;
+            match self.interpreter.evaluate(form) {
+                Ok(..) => {}
+                Err(err) => {
+                    println!("error evaluating `{}`: {}", form.to_readable_string(), err);
+                    continue;
+                }
+            }
         }
         Ok(())
     }
@@ -131,7 +143,7 @@ impl<'a> StdRepl<'a> {
                     let forms = match read(&line) {
                         Ok(forms) => forms,
                         Err(e) => {
-                            println!("error: {}", e);
+                            println!("error reading `{}`: {}", &line, e);
                             continue;
                         }
                     };
@@ -141,7 +153,7 @@ impl<'a> StdRepl<'a> {
                                 println!("{}", result.to_readable_string());
                             }
                             Err(e) => {
-                                println!("error: {}", e);
+                                println!("error evaluating `{}`: {}", form.to_readable_string(), e);
                             }
                         }
                     }
@@ -155,7 +167,7 @@ impl<'a> StdRepl<'a> {
                     break;
                 }
                 Err(err) => {
-                    println!("error: {:?}", err);
+                    println!("error reading line from repl: {}", err);
                     break;
                 }
             }
