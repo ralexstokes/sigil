@@ -2,6 +2,7 @@ use crate::interpreter::{
     EvaluationError, EvaluationResult, Interpreter, InterpreterError, ListEvaluationError,
     PrimitiveEvaluationError,
 };
+use crate::namespace::{Namespace, DEFAULT_NAME};
 use crate::reader::read;
 use crate::value::{
     atom_impl_into_inner, atom_with_value, exception, exception_into_thrown, list_with_values,
@@ -1408,7 +1409,7 @@ pub fn with_meta(_: &mut Interpreter, _args: &[Value]) -> EvaluationResult<Value
     Ok(Value::Nil)
 }
 
-pub const BINDINGS: &[(&str, Value)] = &[
+const BINDINGS: &[(&str, Value)] = &[
     ("+", Value::Primitive(plus)),
     ("-", Value::Primitive(subtract)),
     ("*", Value::Primitive(multiply)),
@@ -1480,3 +1481,14 @@ pub const BINDINGS: &[(&str, Value)] = &[
     ("meta", Value::Primitive(to_meta)),
     ("with-meta", Value::Primitive(with_meta)),
 ];
+
+pub fn register(interpreter: &mut Interpreter) {
+    let mut namespace = Namespace::new(DEFAULT_NAME);
+    for (identifier, value) in BINDINGS {
+        namespace
+            .intern(identifier, value)
+            .expect("prelude vars installed correctly");
+    }
+
+    interpreter.load_namespace(namespace);
+}

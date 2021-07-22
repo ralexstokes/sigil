@@ -46,15 +46,6 @@ pub fn var_impl_into_inner(var: &VarImpl) -> Value {
     var.inner.borrow().clone()
 }
 
-pub fn update_var(var: &Value, value: Value) {
-    match var {
-        Value::Var(v) => {
-            *v.inner.borrow_mut() = value;
-        }
-        _ => panic!("called with non Var value"),
-    }
-}
-
 pub fn atom_impl_into_inner(atom: &AtomImpl) -> Value {
     atom.borrow().clone()
 }
@@ -159,6 +150,12 @@ pub struct VarImpl {
     pub inner: Rc<RefCell<Value>>,
     namespace: String,
     pub identifier: String,
+}
+
+impl VarImpl {
+    pub fn update(&self, value: Value) {
+        *self.inner.borrow_mut() = value
+    }
 }
 
 type AtomImpl = Rc<RefCell<Value>>;

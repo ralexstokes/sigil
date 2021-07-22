@@ -1,8 +1,9 @@
 use crate::lang::{prelude, CORE_SOURCE};
+use crate::namespace::{Namespace, NamespaceError, DEFAULT_NAME as DEFAULT_NAMESPACE};
 use crate::reader::{read, ReaderError};
 use crate::value::{
-    exception_from_thrown, exception_is_thrown, list_with_values, update_var, var_impl_into_inner,
-    var_with_value, FnImpl, FnWithCapturesImpl, NativeFn, Value, VarImpl,
+    exception_from_thrown, exception_is_thrown, list_with_values, var_impl_into_inner,
+    var_with_value, FnImpl, FnWithCapturesImpl, NativeFn, Value,
 };
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
@@ -24,7 +25,6 @@ use std::{fs, io};
 use thiserror::Error;
 
 const COMMAND_LINE_ARGS_SYMBOL: &str = "*command-line-args*";
-const DEFAULT_NAMESPACE: &str = "core";
 const SPECIAL_FORMS: &[&str] = &[
     "def!",           // (def! symbol form)
     "var",            // (var symbol)
@@ -114,14 +114,13 @@ pub enum EvaluationError {
     ReaderError(#[from] ReaderError),
     #[error("interpreter error: {0}")]
     Interpreter(#[from] InterpreterError),
+    #[error("namespace error: {0}")]
+    Namespace(#[from] NamespaceError),
 }
 
 pub type EvaluationResult<T> = Result<T, EvaluationError>;
 
 type Scope = HashMap<String, Value>;
-
-// map from identifier to Value::Var
-type Namespace = HashMap<String, Value>;
 
 fn lambda_parameter_key(index: usize, level: usize) -> String {
     let mut key = String::new();
@@ -151,37 +150,6 @@ fn resolve_symbol_in_scopes<'a>(
         }
     }
     None
-}
-
-fn get_var_in_namespace(var_desc: &str, namespace: &Namespace) -> Option<Value> {
-    namespace.get(var_desc).map(|v| match v {
-        Value::Var(inner) => Value::Var(inner.clone()),
-        _ => unreachable!("only vars should be in namespaces"),
-    })
-}
-
-fn intern_value_in_namespace(
-    var_desc: &str,
-    value: Value,
-    namespace: &mut Namespace,
-    namespace_desc: &str,
-) -> Value {
-    match namespace.get(var_desc) {
-        // NOTE: must be Some(Value::Var)
-        Some(var) => {
-            update_var(var, value);
-            var.clone()
-        }
-        None => {
-            let var = var_with_value(value, namespace_desc, var_desc);
-            namespace.insert(var_desc.to_string(), var.clone());
-            var
-        }
-    }
-}
-
-fn unintern_value_in_namespace(identifier: &str, namespace: &mut Namespace) {
-    let _ = namespace.remove(identifier);
 }
 
 fn eval_quasiquote_list_inner<'a>(
@@ -515,20 +483,6 @@ pub struct Interpreter {
 
 impl Default for Interpreter {
     fn default() -> Self {
-        // build the "core" namespace containing the "prelude" bindings
-        let mut default_namespace = Namespace::default();
-        for (symbol, value) in prelude::BINDINGS {
-            intern_value_in_namespace(
-                symbol,
-                value.clone(),
-                &mut default_namespace,
-                DEFAULT_NAMESPACE,
-            );
-        }
-
-        let mut default_namespaces = HashMap::new();
-        default_namespaces.insert(DEFAULT_NAMESPACE.to_string(), default_namespace);
-
         // build the default scope, which resolves special forms to themselves
         // so that they fall through to the interpreter's evaluation
         let mut default_scope = Scope::new();
@@ -538,9 +492,11 @@ impl Default for Interpreter {
 
         let mut interpreter = Interpreter {
             current_namespace: DEFAULT_NAMESPACE.to_string(),
-            namespaces: default_namespaces,
+            namespaces: HashMap::new(),
             scopes: vec![default_scope],
         };
+
+        interpreter.load_namespace(Namespace::new(DEFAULT_NAMESPACE));
 
         let mut buffer = String::new();
         let _ = write!(&mut buffer, "(def! {} '())", COMMAND_LINE_ARGS_SYMBOL)
@@ -548,15 +504,28 @@ impl Default for Interpreter {
         evaluate_from_string(&mut interpreter, &buffer);
         buffer.clear();
 
+        // load the "prelude"
+        prelude::register(&mut interpreter);
+
         interpreter
     }
 }
 
 impl Interpreter {
+    pub fn load_namespace(&mut self, namespace: Namespace) {
+        let key = &namespace.name;
+        if let Some(existing) = self.namespaces.get_mut(key) {
+            existing.merge(&namespace);
+        } else {
+            self.namespaces.insert(key.clone(), namespace);
+        }
+    }
+
     /// Store `args` in the var referenced by `COMMAND_LINE_ARGS_SYMBOL`.
     pub fn intern_args(&mut self, args: Args) {
         let form = args.map(Value::String).collect();
-        self.intern_var(COMMAND_LINE_ARGS_SYMBOL, Value::List(form));
+        self.intern_var(COMMAND_LINE_ARGS_SYMBOL, Value::List(form))
+            .expect("'*command-line-args* constructed correctly");
     }
 
     /// Read the interned command line argument at position `n` in the collection.
@@ -579,14 +548,14 @@ impl Interpreter {
         &self.current_namespace
     }
 
-    fn intern_var(&mut self, identifier: &str, value: Value) -> Value {
+    fn intern_var(&mut self, identifier: &str, value: Value) -> EvaluationResult<Value> {
         let current_namespace = self.current_namespace().to_string();
 
         let ns = self
             .namespaces
             .get_mut(&current_namespace)
             .expect("current namespace always resolves");
-        intern_value_in_namespace(identifier, value, ns, &current_namespace)
+        ns.intern(identifier, &value).map_err(|err| err.into())
     }
 
     fn unintern_var(&mut self, identifier: &str) {
@@ -596,7 +565,7 @@ impl Interpreter {
             .namespaces
             .get_mut(&current_namespace)
             .expect("current namespace always resolves");
-        unintern_value_in_namespace(identifier, ns);
+        ns.remove(identifier);
     }
 
     // return a ref to some var in the current namespace
@@ -615,7 +584,7 @@ impl Interpreter {
                 ))
             })
             .and_then(|ns| {
-                get_var_in_namespace(identifier, ns).ok_or_else(|| {
+                ns.get(identifier).cloned().ok_or_else(|| {
                     EvaluationError::Symbol(SymbolEvaluationError::MissingVar(
                         identifier.to_string(),
                         ns_desc.to_string(),
@@ -1181,14 +1150,17 @@ impl Interpreter {
                                 Ok(v @ Value::Var(..)) => (v, true),
                                 Err(EvaluationError::Symbol(
                                     SymbolEvaluationError::MissingVar(..),
-                                )) => (self.intern_var(id, Value::Nil), false),
+                                )) => (self.intern_var(id, Value::Nil)?, false),
                                 e @ Err(_) => return e,
                                 _ => unreachable!(),
                             };
                         match self.evaluate(value_form) {
                             Ok(value) => {
                                 // and if the evaluation is ok, unconditionally update the var
-                                update_var(&var, value);
+                                match &var {
+                                    Value::Var(var) => var.update(value),
+                                    _ => unreachable!(),
+                                }
                                 return Ok(var);
                             }
                             Err(e) => {
@@ -1243,10 +1215,10 @@ impl Interpreter {
         for (identifier, value_form) in bindings {
             match self.evaluate(value_form) {
                 Ok(value) => {
-                    if let Some(var @ Value::Var(..)) =
+                    if let Some(Value::Var(var)) =
                         resolve_symbol_in_scopes(self.scopes.iter().rev(), identifier)
                     {
-                        update_var(var, value);
+                        var.update(value);
                     } else {
                         self.insert_value_in_current_scope(identifier, value);
                     }
@@ -1431,14 +1403,13 @@ impl Interpreter {
 
     fn eval_defmacro(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         match self.eval_def(forms) {
-            Ok(Value::Var(v @ VarImpl { .. })) => match var_impl_into_inner(&v) {
+            Ok(Value::Var(var)) => match var_impl_into_inner(&var) {
                 Value::Fn(f) => {
-                    let var = Value::Var(v);
-                    update_var(&var, Value::Macro(f));
-                    Ok(var)
+                    var.update(Value::Macro(f));
+                    Ok(Value::Var(var))
                 }
                 _ => {
-                    self.unintern_var(&v.identifier);
+                    self.unintern_var(&var.identifier);
                     let error = String::from(
                         "could not evaluate `defmacro!`: body must be `fn*` without captures",
                     );
