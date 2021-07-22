@@ -11,6 +11,7 @@ use rpds::{
     HashTrieMap as PersistentMap, HashTrieSet as PersistentSet, List as PersistentList,
     Vector as PersistentVector,
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::{AsRef, From};
@@ -20,6 +21,7 @@ use std::fmt::Write;
 use std::iter::FromIterator;
 use std::iter::IntoIterator;
 use std::path::Path;
+use std::rc::Rc;
 use std::time::SystemTimeError;
 use std::{fs, io};
 use thiserror::Error;
@@ -119,7 +121,7 @@ pub enum EvaluationError {
 }
 
 pub type EvaluationResult<T> = Result<T, EvaluationError>;
-
+pub type SymbolIndex = HashSet<String>;
 type Scope = HashMap<String, Value>;
 
 fn lambda_parameter_key(index: usize, level: usize) -> String {
@@ -475,6 +477,7 @@ impl<P: AsRef<Path>> InterpreterBuilder<P> {
 pub struct Interpreter {
     current_namespace: String,
     namespaces: HashMap<String, Namespace>,
+    symbol_index: Option<Rc<RefCell<SymbolIndex>>>,
 
     // stack of scopes
     // contains at least one scope, the "default" scope
@@ -494,6 +497,7 @@ impl Default for Interpreter {
             current_namespace: DEFAULT_NAMESPACE.to_string(),
             namespaces: HashMap::new(),
             scopes: vec![default_scope],
+            symbol_index: None,
         };
 
         interpreter.load_namespace(Namespace::new(DEFAULT_NAMESPACE));
@@ -512,6 +516,18 @@ impl Default for Interpreter {
 }
 
 impl Interpreter {
+    pub fn register_symbol_index(&mut self, symbol_index: Rc<RefCell<SymbolIndex>>) {
+        let mut index = symbol_index.borrow_mut();
+        for namespace in self.namespaces.values() {
+            for symbol in namespace.symbols() {
+                index.insert(symbol.clone());
+            }
+        }
+        drop(index);
+
+        self.symbol_index = Some(symbol_index);
+    }
+
     pub fn load_namespace(&mut self, namespace: Namespace) {
         let key = &namespace.name;
         if let Some(existing) = self.namespaces.get_mut(key) {
@@ -555,7 +571,14 @@ impl Interpreter {
             .namespaces
             .get_mut(&current_namespace)
             .expect("current namespace always resolves");
-        ns.intern(identifier, &value).map_err(|err| err.into())
+        let result = ns
+            .intern(identifier, &value)
+            .map_err(|err| -> EvaluationError { err.into() })?;
+        if let Some(index) = &self.symbol_index {
+            let mut index = index.borrow_mut();
+            index.insert(identifier.to_string());
+        }
+        Ok(result)
     }
 
     fn unintern_var(&mut self, identifier: &str) {

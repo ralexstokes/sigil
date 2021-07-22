@@ -16,7 +16,7 @@ fn is_comment(input: char) -> bool {
     input == ';'
 }
 
-fn is_token(input: char) -> bool {
+pub fn is_token(input: char) -> bool {
     !is_whitespace(input) && !is_comment(input)
 }
 
@@ -24,12 +24,19 @@ fn is_numeric(input: char) -> bool {
     char::is_numeric(input)
 }
 
-fn is_symbolic(input: char) -> bool {
+pub fn is_symbolic(input: char) -> bool {
     match input {
         '*' | '+' | '!' | '-' | '_' | '\'' | '?' | '<' | '>' | '=' | '/' | '&' | ':' | '$'
         | '#' => true,
         _ => char::is_alphanumeric(input),
     }
+}
+
+pub fn is_structural(input: char) -> bool {
+    matches!(
+        input,
+        '(' | ')' | '[' | ']' | '{' | '}' | '#' | '@' | '\'' | '`' | '~' | '"'
+    )
 }
 
 fn parse_identifier_and_optional_namespace(

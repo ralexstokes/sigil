@@ -59,4 +59,8 @@ impl Namespace {
             self.insert(identifier, value);
         }
     }
+
+    pub fn symbols(&self) -> impl Iterator<Item = &String> {
+        self.bindings.keys()
+    }
 }
