@@ -16,6 +16,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 const DEFAULT_HISTORY_PATH: &str = ".sigil.history";
+const DEFAULT_SOURCE_SPAN_LEN: usize = 64;
 
 pub struct StdRepl<'a> {
     editor: Editor<EditorHelper>,
@@ -116,8 +117,13 @@ impl<'a> StdRepl<'a> {
         let contents = fs::read_to_string(path)?;
         let forms = match read(&contents) {
             Ok(forms) => forms,
-            Err(e) => {
-                println!("error reading source: {}", e);
+            Err(err) => {
+                let context = err.context(&contents);
+                println!(
+                    "error reading source: {} at {}",
+                    err,
+                    &context[..DEFAULT_SOURCE_SPAN_LEN],
+                );
                 return Ok(());
             }
         };
@@ -146,8 +152,14 @@ impl<'a> StdRepl<'a> {
                     self.editor.add_history_entry(line.as_str());
                     let forms = match read(&line) {
                         Ok(forms) => forms,
-                        Err(e) => {
-                            println!("error reading `{}`: {}", &line, e);
+                        Err(err) => {
+                            let context = err.context(&line);
+                            println!(
+                                "error reading `{}`: {} while reading {}",
+                                &line,
+                                err,
+                                &context[..DEFAULT_SOURCE_SPAN_LEN]
+                            );
                             continue;
                         }
                     };

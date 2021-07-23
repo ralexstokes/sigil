@@ -1,6 +1,6 @@
 use crate::lang::{prelude, CORE_SOURCE};
 use crate::namespace::{Namespace, NamespaceError, DEFAULT_NAME as DEFAULT_NAMESPACE};
-use crate::reader::{read, ReaderError};
+use crate::reader::{read, ReadError};
 use crate::value::{
     exception_from_thrown, exception_is_thrown, list_with_values, var_impl_into_inner,
     var_with_value, FnImpl, FnWithCapturesImpl, NativeFn, Value,
@@ -112,12 +112,12 @@ pub enum EvaluationError {
     Syntax(#[from] SyntaxError),
     #[error("primitive error: {0}")]
     Primitive(PrimitiveEvaluationError),
-    #[error("reader error: {0}")]
-    ReaderError(#[from] ReaderError),
     #[error("interpreter error: {0}")]
     Interpreter(#[from] InterpreterError),
     #[error("namespace error: {0}")]
     Namespace(#[from] NamespaceError),
+    #[error("reader error: {0}")]
+    ReaderError(ReadError, String),
 }
 
 pub type EvaluationResult<T> = Result<T, EvaluationError>;
@@ -1703,9 +1703,13 @@ mod test {
         for (input, expected) in test_cases {
             let forms = match read(input) {
                 Ok(forms) => forms,
-                Err(e) => {
+                Err(err) => {
                     has_err = true;
-                    println!("failure: reading `{}` failed: {}", input, e);
+                    let context = err.context(input);
+                    println!(
+                        "error reading `{}`: {} while reading {}",
+                        input, err, context
+                    );
                     continue;
                 }
             };

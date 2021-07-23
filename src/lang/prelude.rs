@@ -329,7 +329,10 @@ pub fn read_string(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Valu
     }
     match &args[0] {
         Value::String(s) => {
-            let mut forms = read(s)?;
+            let mut forms = read(s).map_err(|err| {
+                let context = err.context(s);
+                EvaluationError::ReaderError(err, context.to_string())
+            })?;
             match forms.len() {
                 0 => Ok(Value::Nil),
                 1 => Ok(forms.pop().unwrap()),

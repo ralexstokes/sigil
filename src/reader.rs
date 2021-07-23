@@ -130,7 +130,7 @@ fn apply_string_escapes(input: &str) -> String {
 type Stream<'a> = Peekable<CharIndices<'a>>;
 
 #[derive(Debug)]
-enum Span {
+enum Range {
     ToEnd(usize),
     Slice(usize, usize),
 }
@@ -157,8 +157,29 @@ pub enum ReaderError {
     CouldNotParseDispatch(char),
     #[error("reader macro `#'` requires a symbol suffix but found {0} instead")]
     VarDispatchRequiresSymbol(Value),
-    #[error("internal reader error: {0}")]
-    Internal(String),
+}
+
+#[derive(Debug)]
+/// A `ReadError` wraps a `ReaderError` with information
+/// contextualizing the source of the error in the input data.
+pub struct ReadError(ReaderError, usize);
+
+impl ReadError {
+    pub fn context<'a>(&self, input: &'a str) -> &'a str {
+        &input[self.1..]
+    }
+}
+
+impl std::fmt::Display for ReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} starting at index {} in the input", self.0, self.1)
+    }
+}
+
+impl std::error::Error for ReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -173,13 +194,27 @@ impl Default for ParseState {
     }
 }
 
+#[derive(Debug)]
+enum Span {
+    // captures an atomic value
+    Simple(Range),
+    // captures a compound value with an enclosing span
+    // and some number of enclosed spans
+    Compound(Range, Vec<Span>),
+    // a span of whitespace `   ,,,,  ,, `
+    Whitespace(Range),
+    // span of a comment, e.g. `;; some comment`
+    Comment(Range),
+}
+
 #[derive(Default)]
 struct Reader<'a> {
     input: &'a str,
-    forms: Vec<Value>,
-    whitespace_spans: Vec<Span>,
-    comment_spans: Vec<Span>,
+    spans: Vec<Span>,
+    values: Vec<Value>,
     line_count: usize,
+    // beginning of the current focus in `input`
+    cursor: usize,
     parse_state: ParseState,
 }
 
@@ -191,6 +226,8 @@ impl<'a> Reader<'a> {
     fn read_whitespace(&mut self, stream: &mut Stream) -> Result<(), ReaderError> {
         let (start, ch) = stream.next().expect("from peek");
         let mut end = None;
+        self.cursor = start;
+
         if is_newline(ch) {
             self.line_count += 1;
         }
@@ -208,17 +245,18 @@ impl<'a> Reader<'a> {
         }
 
         let span = if let Some(end) = end {
-            Span::Slice(start, end)
+            Range::Slice(start, end)
         } else {
-            Span::ToEnd(start)
+            Range::ToEnd(start)
         };
-        self.whitespace_spans.push(span);
+        self.spans.push(Span::Whitespace(span));
         Ok(())
     }
 
     fn read_comment(&mut self, stream: &mut Stream) -> Result<(), ReaderError> {
         let (start, _) = stream.next().expect("from peek");
         let mut end = None;
+        self.cursor = start;
 
         while let Some((_, ch)) = stream.next() {
             if is_newline(ch) {
@@ -230,17 +268,19 @@ impl<'a> Reader<'a> {
             end = Some(*index);
         }
         let span = if let Some(end) = end {
-            Span::Slice(start, end)
+            Range::Slice(start, end)
         } else {
-            Span::ToEnd(start)
+            Range::ToEnd(start)
         };
-        self.comment_spans.push(span);
+        self.spans.push(Span::Comment(span));
         Ok(())
     }
 
     fn read_number(&mut self, stream: &mut Stream) -> Result<(), ReaderError> {
         let (start, _) = stream.next().expect("from peek");
         let mut end = None;
+        self.cursor = start;
+
         while let Some((index, ch)) = stream.peek() {
             end = Some(*index);
             if is_numeric(*ch) {
@@ -255,7 +295,9 @@ impl<'a> Reader<'a> {
         if let Some(end) = end {
             let source = &self.input[start..end];
             let n = source.parse()?;
-            self.forms.push(Value::Number(n));
+            let span = Range::Slice(start, end);
+            self.spans.push(Span::Simple(span));
+            self.values.push(Value::Number(n));
             Ok(())
         } else {
             Err(ReaderError::ExpectedMoreInput)
@@ -265,6 +307,8 @@ impl<'a> Reader<'a> {
     fn read_symbolic(&mut self, stream: &mut Stream) -> Result<(), ReaderError> {
         let (start, _) = stream.next().expect("from peek");
         let mut end = None;
+        self.cursor = start;
+
         while let Some((index, ch)) = stream.peek() {
             end = Some(*index);
             if is_symbolic(*ch) {
@@ -279,7 +323,9 @@ impl<'a> Reader<'a> {
         if let Some(end) = end {
             let source = &self.input[start..end];
             let value = parse_symbolic(source)?;
-            self.forms.push(value);
+            self.values.push(value);
+            let span = Range::Slice(start, end);
+            self.spans.push(Span::Simple(span));
             Ok(())
         } else {
             Err(ReaderError::ExpectedMoreInput)
@@ -288,62 +334,119 @@ impl<'a> Reader<'a> {
 
     fn read_string(&mut self, stream: &mut Stream) -> Result<(), ReaderError> {
         let (start, _) = stream.next().expect("from peek");
+        self.cursor = start;
+
         let end = find_string_close(stream)?;
         // start at character after first '"'
         let source = &self.input[start + 1..end];
         let escaped_string = apply_string_escapes(source);
-        self.forms.push(Value::String(escaped_string));
+        let span = Range::Slice(start, end);
+        self.spans.push(Span::Simple(span));
+        let value = Value::String(escaped_string);
+        self.values.push(value);
         Ok(())
     }
 
-    fn read_number_and_negate(&mut self, stream: &mut Stream) -> Result<(), ReaderError> {
-        self.read_number(stream)?;
-        let number = self.forms.last_mut().expect("did read number");
-        match number {
-            Value::Number(n) => {
+    fn read_number_and_negate(
+        &mut self,
+        start: usize,
+        stream: &mut Stream,
+    ) -> Result<(), ReaderError> {
+        self.cursor = start;
+        self.read_number(stream).map_err(|err| {
+            self.cursor = start;
+            err
+        })?;
+        let number = self.values.last_mut().expect("did read number");
+        let span = self.spans.last_mut().expect("did range number");
+        match (number, span) {
+            (Value::Number(n), Span::Simple(range)) => {
+                match range {
+                    Range::Slice(number_start, _) => {
+                        *number_start = start;
+                    }
+                    Range::ToEnd(number_start) => {
+                        *number_start = start;
+                    }
+                }
+
                 let neg_n = n
                     .checked_neg()
                     .ok_or_else(|| ReaderError::CouldNotNegateNumber(*n))?;
                 *n = neg_n;
             }
-            _ => unreachable!(),
+            _ => unreachable!("should have read number with simple span"),
         }
         Ok(())
     }
 
-    fn read_symbolic_and_prepend_dash(&mut self, stream: &mut Stream) -> Result<(), ReaderError> {
-        self.read_symbolic(stream)?;
-        let symbol = self.forms.last_mut().expect("did read symbol");
-        match symbol {
-            Value::Symbol(identifier, ..) => {
-                identifier.insert(0, '-');
+    fn read_symbolic_and_prepend_dash(
+        &mut self,
+        start: usize,
+        stream: &mut Stream,
+    ) -> Result<(), ReaderError> {
+        self.cursor = start;
+        self.read_symbolic(stream).map_err(|err| {
+            self.cursor = start;
+            err
+        })?;
+        let symbol = self.values.last_mut().expect("did read symbol");
+        let span = self.spans.last_mut().expect("did range symbol");
+        match (symbol, span) {
+            (Value::Symbol(identifier, ns_opt), Span::Simple(range)) => {
+                match range {
+                    Range::Slice(symbol_start, _) => {
+                        *symbol_start = start;
+                    }
+                    Range::ToEnd(symbol_start) => {
+                        *symbol_start = start;
+                    }
+                }
+
+                if let Some(ns) = ns_opt {
+                    ns.insert(0, '-');
+                } else {
+                    identifier.insert(0, '-');
+                }
             }
-            _ => unreachable!(),
+            _ => unreachable!("should have read symbol with simple span"),
         }
         Ok(())
     }
 
-    fn disambiguate_dash(&mut self, stream: &mut Stream) -> Result<(), ReaderError> {
+    fn disambiguate_dash(&mut self, start: usize, stream: &mut Stream) -> Result<(), ReaderError> {
         stream.next().expect("from peek");
-        if let Some((_, next)) = stream.peek() {
+
+        if let Some((end, next)) = stream.peek() {
             match *next {
-                ch if is_numeric(ch) => self.read_number_and_negate(stream)?,
-                ch if is_symbolic(ch) => self.read_symbolic_and_prepend_dash(stream)?,
+                ch if is_numeric(ch) => self.read_number_and_negate(start, stream)?,
+                ch if is_symbolic(ch) => self.read_symbolic_and_prepend_dash(start, stream)?,
                 _ => {
+                    self.cursor = start;
                     let value = Value::Symbol('-'.to_string(), None);
-                    self.forms.push(value);
+                    self.values.push(value);
+                    let span = Range::Slice(start, *end);
+                    self.spans.push(Span::Simple(span));
                 }
             }
         } else {
+            self.cursor = start;
             let value = Value::Symbol('-'.to_string(), None);
-            self.forms.push(value);
+            self.values.push(value);
+            let span = Range::ToEnd(start);
+            self.spans.push(Span::Simple(span));
         }
         Ok(())
     }
 
-    fn read_atom(&mut self, first_char: char, stream: &mut Stream) -> Result<(), ReaderError> {
+    fn read_atom(
+        &mut self,
+        first_char: char,
+        start: usize,
+        stream: &mut Stream,
+    ) -> Result<(), ReaderError> {
         match first_char {
-            ch if ch == '-' => self.disambiguate_dash(stream),
+            ch if ch == '-' => self.disambiguate_dash(start, stream),
             ch if is_numeric(ch) => self.read_number(stream),
             ch if is_symbolic(ch) => self.read_symbolic(stream),
             ch => {
@@ -361,31 +464,65 @@ impl<'a> Reader<'a> {
     where
         C: Fn(Vec<Value>) -> Result<Value, ReaderError>,
     {
-        stream.next().expect("from peek");
-        let start = self.forms.len();
+        let (start, _) = stream.next().expect("from peek");
+        self.cursor = start;
+        let values_index = self.values.len();
+        let spans_index = self.spans.len();
         let previous_state = self.parse_state;
         self.parse_state = ParseState::Reading;
-        self.read_from_stream(stream)?;
+        self.read_from_stream(stream).map_err(|err| {
+            self.cursor = start;
+            err
+        })?;
         self.parse_state = previous_state;
-        let collection = collector(self.forms.drain(start..).collect())?;
-        self.forms.push(collection);
-        let (_, ch) = stream
-            .next()
-            .ok_or(ReaderError::UnbalancedCollection(terminal))?;
+
+        let collection = collector(self.values.drain(values_index..).collect())?;
+        self.values.push(collection);
+
+        let (end, ch) = stream.next().ok_or_else(|| {
+            self.cursor = start;
+            ReaderError::UnbalancedCollection(terminal)
+        })?;
         if ch != terminal {
+            self.cursor = start;
             return Err(ReaderError::UnbalancedCollection(terminal));
         }
+        let range = Range::Slice(start, end);
+        let intervening_spans = self.spans.drain(spans_index..).collect();
+        self.spans.push(Span::Compound(range, intervening_spans));
         Ok(())
     }
 
-    fn read_dispatch(&mut self, stream: &mut Stream) -> Result<(), ReaderError> {
+    fn read_dispatch(&mut self, start: usize, stream: &mut Stream) -> Result<(), ReaderError> {
+        self.cursor = start;
         let (_, next_ch) = stream.peek().ok_or(ReaderError::ExpectedMoreInput)?;
         match *next_ch {
-            '{' => self.read_collection('}', stream, |elems| Ok(set_with_values(elems))),
+            '{' => {
+                self.read_collection('}', stream, |elems| Ok(set_with_values(elems)))
+                    .map_err(|err| {
+                        self.cursor = start;
+                        err
+                    })?;
+                let span = self.spans.last_mut().expect("just read set");
+                match span {
+                    Span::Compound(enclosing, _) => match enclosing {
+                        Range::Slice(set_start, _) => {
+                            *set_start = start;
+                        }
+                        _ => unreachable!("reading collection yields slice range"),
+                    },
+                    _ => unreachable!("reading collection yields compound span"),
+                }
+                Ok(())
+            }
             '\'' => {
                 stream.next().expect("from peek");
-                self.read_symbolic(stream)?;
-                let symbol = self.forms.pop().expect("just read symbol");
+                self.read_symbolic(stream).map_err(|err| {
+                    self.cursor = start;
+                    err
+                })?;
+                let symbol = self.values.pop().expect("just read symbol");
+                let span = self.spans.pop().expect("just ranged symbol");
                 match symbol {
                     symbol @ Value::Symbol(..) => {
                         let expansion = list_with_values(
@@ -393,7 +530,16 @@ impl<'a> Reader<'a> {
                                 .iter()
                                 .cloned(),
                         );
-                        self.forms.push(expansion);
+                        self.values.push(expansion);
+
+                        let dispatch_span = match span {
+                            Span::Simple(range) => match range {
+                                Range::Slice(_, end) => Range::Slice(start, end),
+                                Range::ToEnd(_) => Range::ToEnd(start),
+                            },
+                            _ => unreachable!("reading symbol yields simple span"),
+                        };
+                        self.spans.push(Span::Simple(dispatch_span));
                         Ok(())
                     }
                     other => Err(ReaderError::VarDispatchRequiresSymbol(other)),
@@ -403,40 +549,67 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn read_macro(&mut self, identifier: &str, stream: &mut Stream) -> Result<(), ReaderError> {
-        let forms_count = self.forms.len();
+    fn read_macro(
+        &mut self,
+        identifier: &str,
+        start: usize,
+        stream: &mut Stream,
+    ) -> Result<(), ReaderError> {
+        self.cursor = start;
+        let values_count = self.values.len();
         let previous_state = self.parse_state;
         self.parse_state = ParseState::Exiting;
-        self.read_from_stream(stream)?;
+        self.read_from_stream(stream).map_err(|err| {
+            self.cursor = start;
+            err
+        })?;
         self.parse_state = previous_state;
 
-        match self.forms.len() {
-            len if len == forms_count => {
+        match self.values.len() {
+            len if len == values_count => {
                 return Err(ReaderError::ExpectedMoreInput);
             }
-            len if len > forms_count + 1 => {
-                return Err(ReaderError::Internal(
-                    "read too many forms during reader macro".to_string(),
-                ));
-            }
-            len if len < forms_count => {
-                return Err(ReaderError::Internal(
-                    "unexpectedly dropped forms during reader macro".to_string(),
-                ));
-            }
+            len if len > values_count + 1 => panic!("read too many forms during reader macro"),
+            len if len < values_count => panic!("unexpectedly dropped forms during reader macro"),
             _ => {}
         }
-        let form = self.forms.pop().expect("just read form");
+
+        let form = self.values.pop().expect("just read form");
         let expansion = list_with_values(
             [Value::Symbol(identifier.to_string(), None), form]
                 .iter()
                 .cloned(),
         );
-        self.forms.push(expansion);
+        self.values.push(expansion);
+
+        let span = self.spans.pop().expect("just ranged form");
+        let span = match span {
+            Span::Simple(range) => {
+                let range = match range {
+                    Range::Slice(_, end) => Range::Slice(start, end),
+                    Range::ToEnd(_) => Range::ToEnd(start),
+                };
+                Span::Simple(range)
+            }
+            Span::Compound(range, enclosed) => {
+                let range = match range {
+                    Range::Slice(_, end) => Range::Slice(start, end),
+                    Range::ToEnd(_) => Range::ToEnd(start),
+                };
+                Span::Compound(range, enclosed)
+            }
+            _ => unreachable!("read some form"),
+        };
+        self.spans.push(span);
         Ok(())
     }
 
-    fn read_form(&mut self, next_char: char, stream: &mut Stream) -> Result<(), ReaderError> {
+    fn read_form(
+        &mut self,
+        next_char: char,
+        next_index: usize,
+        stream: &mut Stream,
+    ) -> Result<(), ReaderError> {
         match next_char {
             '(' => {
                 self.read_collection(')', stream, |elems| Ok(list_with_values(elems)))?;
@@ -464,19 +637,19 @@ impl<'a> Reader<'a> {
             }
             '#' => {
                 stream.next().expect("from peek");
-                self.read_dispatch(stream)?;
+                self.read_dispatch(next_index, stream)?;
             }
             '@' => {
                 stream.next().expect("from peek");
-                self.read_macro("deref", stream)?;
+                self.read_macro("deref", next_index, stream)?;
             }
             '\'' => {
                 stream.next().expect("from peek");
-                self.read_macro("quote", stream)?;
+                self.read_macro("quote", next_index, stream)?;
             }
             '`' => {
                 stream.next().expect("from peek");
-                self.read_macro("quasiquote", stream)?;
+                self.read_macro("quasiquote", next_index, stream)?;
             }
             '~' => {
                 stream.next().expect("from peek");
@@ -487,17 +660,17 @@ impl<'a> Reader<'a> {
                 } else {
                     "unquote"
                 };
-                self.read_macro(identifier, stream)?;
+                self.read_macro(identifier, next_index, stream)?;
             }
             '"' => self.read_string(stream)?,
-            ch if is_token(ch) => self.read_atom(ch, stream)?,
+            ch if is_token(ch) => self.read_atom(ch, next_index, stream)?,
             _ => unreachable!(),
         }
         Ok(())
     }
 
     fn read_from_stream(&mut self, stream: &mut Stream) -> Result<(), ReaderError> {
-        while let Some((_, ch)) = stream.peek() {
+        while let Some((index, ch)) = stream.peek() {
             let ch = *ch;
             if is_whitespace(ch) {
                 self.read_whitespace(stream)?;
@@ -507,7 +680,7 @@ impl<'a> Reader<'a> {
                 self.read_comment(stream)?;
                 continue;
             }
-            self.read_form(ch, stream)?;
+            self.read_form(ch, *index, stream)?;
             if matches!(self.parse_state, ParseState::Exiting) {
                 break;
             }
@@ -515,19 +688,23 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
-    fn read(mut self, input: &'a str) -> Result<Vec<Value>, ReaderError> {
+    fn read(&mut self, input: &'a str) -> Result<(), ReaderError> {
         self.input = input;
         let mut stream = input.char_indices().peekable();
         self.read_from_stream(&mut stream)?;
         if stream.next().is_some() {
             return Err(ReaderError::UnexpectedAdditionalInput);
         }
-        Ok(self.forms)
+        Ok(())
     }
 }
 
-pub fn read(input: &str) -> Result<Vec<Value>, ReaderError> {
-    Reader::new().read(input)
+pub fn read(input: &str) -> Result<Vec<Value>, ReadError> {
+    let mut reader = Reader::new();
+    match reader.read(input) {
+        Ok(_) => Ok(reader.values),
+        Err(err) => Err(ReadError(err, reader.cursor)),
+    }
 }
 
 #[cfg(test)]
@@ -568,8 +745,39 @@ mod tests {
             ("baz", vec![Symbol("baz".into(), None)], "baz"),
             ("baz#", vec![Symbol("baz#".into(), None)], "baz#"),
             ("baz$$", vec![Symbol("baz$$".into(), None)], "baz$$"),
+            ("$baz", vec![Symbol("$baz".into(), None)], "$baz"),
+            ("$baz$$", vec![Symbol("$baz$$".into(), None)], "$baz$$"),
+            (
+                "foo/$baz$$",
+                vec![Symbol("$baz$$".into(), Some("foo".into()))],
+                "foo/$baz$$",
+            ),
+            (
+                "$foo/$baz$$",
+                vec![Symbol("$baz$$".into(), Some("$foo".into()))],
+                "$foo/$baz$$",
+            ),
+            (
+                "$foo$/$baz$$",
+                vec![Symbol("$baz$$".into(), Some("$foo$".into()))],
+                "$foo$/$baz$$",
+            ),
             ("-", vec![Symbol("-".into(), None)], "-"),
+            ("-=", vec![Symbol("-=".into(), None)], "-="),
+            ("--", vec![Symbol("--".into(), None)], "--"),
             ("-baz", vec![Symbol("-baz".into(), None)], "-baz"),
+            ("--baz", vec![Symbol("--baz".into(), None)], "--baz"),
+            ("-$baz", vec![Symbol("-$baz".into(), None)], "-$baz"),
+            (
+                "--/baz",
+                vec![Symbol("baz".into(), Some("--".to_string()))],
+                "--/baz",
+            ),
+            (
+                "-=/baz",
+                vec![Symbol("baz".into(), Some("-=".to_string()))],
+                "-=/baz",
+            ),
             (
                 "- baz",
                 vec![Symbol("-".into(), None), Symbol("baz".into(), None)],
@@ -1038,8 +1246,12 @@ mod tests {
                         assert_eq!(print, expected_print);
                     }
                 }
-                Err(e) => {
-                    panic!("{} (from {})", e, input);
+                Err(err) => {
+                    let context = err.context(input);
+                    panic!(
+                        "error reading `{}`: {} while reading `{}`",
+                        input, err, context
+                    );
                 }
             }
         }
