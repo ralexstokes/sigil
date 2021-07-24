@@ -1622,11 +1622,7 @@ impl Interpreter {
             Value::Symbol(s, None) if s == "defmacro!" => self.eval_defmacro(forms),
             Value::Symbol(s, None) if s == "macroexpand" => self.eval_macroexpand(forms),
             Value::Symbol(s, None) if s == "try*" => self.eval_try(forms),
-            // apply phase when operator is already evaluated:
-            Value::Fn(f) => self.apply_fn(f, forms),
-            Value::FnWithCaptures(FnWithCapturesImpl { f, .. }) => self.apply_fn(f, forms),
-            Value::Primitive(native_fn) => self.apply_primitive(native_fn, forms),
-            _ => match self.evaluate(operator_form)? {
+            operator_form => match self.evaluate(operator_form)? {
                 Value::Fn(f) => self.apply_fn(&f, forms),
                 Value::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
                     self.extend_from_captures(&captures)?;
@@ -1691,7 +1687,7 @@ impl Interpreter {
                     captures,
                 }))
             }
-            Value::Primitive(_) => unreachable!(),
+            f @ Value::Primitive(_) => Ok(f.clone()),
             Value::Recur(_) => unreachable!(),
             a @ Value::Atom(_) => Ok(a.clone()),
             Value::Macro(_) => unreachable!(),
