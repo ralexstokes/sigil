@@ -7,17 +7,98 @@ use crate::reader::read;
 use crate::value::{
     atom_impl_into_inner, atom_with_value, exception, exception_into_thrown, list_with_values,
     map_with_values, set_with_values, var_impl_into_inner, vector_with_values, FnImpl,
-    FnWithCapturesImpl, Value,
+    FnWithCapturesImpl, PersistentList, PersistentSet, PersistentVector, Value,
 };
 use itertools::Itertools;
-use rpds::HashTrieSet as PersistentSet;
-use rpds::List as PersistentList;
-use rpds::Vector as PersistentVector;
 use std::fmt::Write;
 use std::io::{BufRead, Write as IOWrite};
 use std::iter::FromIterator;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, io};
+
+const BINDINGS: &[(&str, Value)] = &[
+    ("+", Value::Primitive(plus)),
+    ("-", Value::Primitive(subtract)),
+    ("*", Value::Primitive(multiply)),
+    ("/", Value::Primitive(divide)),
+    ("pr", Value::Primitive(pr)),
+    ("prn", Value::Primitive(prn)),
+    ("pr-str", Value::Primitive(pr_str)),
+    ("print", Value::Primitive(print_)),
+    ("println", Value::Primitive(println)),
+    ("print-str", Value::Primitive(print_str)),
+    ("list", Value::Primitive(list)),
+    ("list?", Value::Primitive(is_list)),
+    ("empty?", Value::Primitive(is_empty)),
+    ("count", Value::Primitive(count)),
+    ("<", Value::Primitive(less)),
+    ("<=", Value::Primitive(less_eq)),
+    (">", Value::Primitive(greater)),
+    (">=", Value::Primitive(greater_eq)),
+    ("=", Value::Primitive(equal)),
+    ("read-string", Value::Primitive(read_string)),
+    ("spit", Value::Primitive(spit)),
+    ("slurp", Value::Primitive(slurp)),
+    ("eval", Value::Primitive(eval)),
+    ("str", Value::Primitive(to_str)),
+    ("atom", Value::Primitive(to_atom)),
+    ("atom?", Value::Primitive(is_atom)),
+    ("deref", Value::Primitive(deref)),
+    ("reset!", Value::Primitive(reset_atom)),
+    ("swap!", Value::Primitive(swap_atom)),
+    ("cons", Value::Primitive(cons)),
+    ("concat", Value::Primitive(concat)),
+    ("vec", Value::Primitive(vec)),
+    ("nth", Value::Primitive(nth)),
+    ("first", Value::Primitive(first)),
+    ("rest", Value::Primitive(rest)),
+    ("ex-info", Value::Primitive(ex_info)),
+    ("throw", Value::Primitive(throw)),
+    ("apply", Value::Primitive(apply)),
+    ("map", Value::Primitive(map)),
+    ("nil?", Value::Primitive(is_nil)),
+    ("true?", Value::Primitive(is_true)),
+    ("false?", Value::Primitive(is_false)),
+    ("symbol?", Value::Primitive(is_symbol)),
+    ("symbol", Value::Primitive(to_symbol)),
+    ("keyword", Value::Primitive(to_keyword)),
+    ("keyword?", Value::Primitive(is_keyword)),
+    ("vector", Value::Primitive(to_vector)),
+    ("vector?", Value::Primitive(is_vector)),
+    ("sequential?", Value::Primitive(is_sequential)),
+    ("hash-map", Value::Primitive(to_map)),
+    ("map?", Value::Primitive(is_map)),
+    ("set", Value::Primitive(to_set)),
+    ("set?", Value::Primitive(is_set)),
+    ("assoc", Value::Primitive(assoc)),
+    ("dissoc", Value::Primitive(dissoc)),
+    ("get", Value::Primitive(get)),
+    ("contains?", Value::Primitive(does_contain)),
+    ("keys", Value::Primitive(to_keys)),
+    ("vals", Value::Primitive(to_vals)),
+    ("last", Value::Primitive(last)),
+    ("string?", Value::Primitive(is_string)),
+    ("number?", Value::Primitive(is_number)),
+    ("fn?", Value::Primitive(is_fn)),
+    ("conj", Value::Primitive(conj)),
+    ("macro?", Value::Primitive(is_macro)),
+    ("time-ms", Value::Primitive(time_in_millis)),
+    ("seq", Value::Primitive(to_seq)),
+    ("readline", Value::Primitive(readline)),
+    ("meta", Value::Primitive(to_meta)),
+    ("with-meta", Value::Primitive(with_meta)),
+];
+
+pub fn register(interpreter: &mut Interpreter) {
+    let mut namespace = Namespace::new(DEFAULT_NAME);
+    for (identifier, value) in BINDINGS {
+        namespace
+            .intern(identifier, value)
+            .expect("prelude vars installed correctly");
+    }
+
+    interpreter.load_namespace(namespace);
+}
 
 pub fn plus(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     args.iter()
@@ -1413,86 +1494,738 @@ pub fn with_meta(_: &mut Interpreter, _args: &[Value]) -> EvaluationResult<Value
     Ok(Value::Nil)
 }
 
-const BINDINGS: &[(&str, Value)] = &[
-    ("+", Value::Primitive(plus)),
-    ("-", Value::Primitive(subtract)),
-    ("*", Value::Primitive(multiply)),
-    ("/", Value::Primitive(divide)),
-    ("pr", Value::Primitive(pr)),
-    ("prn", Value::Primitive(prn)),
-    ("pr-str", Value::Primitive(pr_str)),
-    ("print", Value::Primitive(print_)),
-    ("println", Value::Primitive(println)),
-    ("print-str", Value::Primitive(print_str)),
-    ("list", Value::Primitive(list)),
-    ("list?", Value::Primitive(is_list)),
-    ("empty?", Value::Primitive(is_empty)),
-    ("count", Value::Primitive(count)),
-    ("<", Value::Primitive(less)),
-    ("<=", Value::Primitive(less_eq)),
-    (">", Value::Primitive(greater)),
-    (">=", Value::Primitive(greater_eq)),
-    ("=", Value::Primitive(equal)),
-    ("read-string", Value::Primitive(read_string)),
-    ("spit", Value::Primitive(spit)),
-    ("slurp", Value::Primitive(slurp)),
-    ("eval", Value::Primitive(eval)),
-    ("str", Value::Primitive(to_str)),
-    ("atom", Value::Primitive(to_atom)),
-    ("atom?", Value::Primitive(is_atom)),
-    ("deref", Value::Primitive(deref)),
-    ("reset!", Value::Primitive(reset_atom)),
-    ("swap!", Value::Primitive(swap_atom)),
-    ("cons", Value::Primitive(cons)),
-    ("concat", Value::Primitive(concat)),
-    ("vec", Value::Primitive(vec)),
-    ("nth", Value::Primitive(nth)),
-    ("first", Value::Primitive(first)),
-    ("rest", Value::Primitive(rest)),
-    ("ex-info", Value::Primitive(ex_info)),
-    ("throw", Value::Primitive(throw)),
-    ("apply", Value::Primitive(apply)),
-    ("map", Value::Primitive(map)),
-    ("nil?", Value::Primitive(is_nil)),
-    ("true?", Value::Primitive(is_true)),
-    ("false?", Value::Primitive(is_false)),
-    ("symbol?", Value::Primitive(is_symbol)),
-    ("symbol", Value::Primitive(to_symbol)),
-    ("keyword", Value::Primitive(to_keyword)),
-    ("keyword?", Value::Primitive(is_keyword)),
-    ("vector", Value::Primitive(to_vector)),
-    ("vector?", Value::Primitive(is_vector)),
-    ("sequential?", Value::Primitive(is_sequential)),
-    ("hash-map", Value::Primitive(to_map)),
-    ("map?", Value::Primitive(is_map)),
-    ("set", Value::Primitive(to_set)),
-    ("set?", Value::Primitive(is_set)),
-    ("assoc", Value::Primitive(assoc)),
-    ("dissoc", Value::Primitive(dissoc)),
-    ("get", Value::Primitive(get)),
-    ("contains?", Value::Primitive(does_contain)),
-    ("keys", Value::Primitive(to_keys)),
-    ("vals", Value::Primitive(to_vals)),
-    ("last", Value::Primitive(last)),
-    ("string?", Value::Primitive(is_string)),
-    ("number?", Value::Primitive(is_number)),
-    ("fn?", Value::Primitive(is_fn)),
-    ("conj", Value::Primitive(conj)),
-    ("macro?", Value::Primitive(is_macro)),
-    ("time-ms", Value::Primitive(time_in_millis)),
-    ("seq", Value::Primitive(to_seq)),
-    ("readline", Value::Primitive(readline)),
-    ("meta", Value::Primitive(to_meta)),
-    ("with-meta", Value::Primitive(with_meta)),
-];
 
-pub fn register(interpreter: &mut Interpreter) {
-    let mut namespace = Namespace::new(DEFAULT_NAME);
-    for (identifier, value) in BINDINGS {
-        namespace
-            .intern(identifier, value)
-            .expect("prelude vars installed correctly");
     }
 
-    interpreter.load_namespace(namespace);
+#[cfg(test)]
+mod tests {
+    use crate::testing::run_eval_test;
+    use crate::value::{
+        list_with_values, map_with_values, set_with_values, vector_with_values, Value::*,
+    };
+    use crate::value::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
+    use std::iter::FromIterator;
+
+    #[test]
+    fn test_basic_prelude() {
+        let test_cases = vec![
+            ("(list)", list_with_values(vec![])),
+            (
+                "(list 1 2)",
+                list_with_values([Number(1), Number(2)].iter().cloned()),
+            ),
+            ("(list? (list 1))", Bool(true)),
+            ("(list? (list))", Bool(true)),
+            ("(list? [1 2])", Bool(false)),
+            ("(empty? (list))", Bool(true)),
+            ("(empty? (list 1))", Bool(false)),
+            ("(empty? [1 2 3])", Bool(false)),
+            ("(empty? [])", Bool(true)),
+            ("(count nil)", Number(0)),
+            ("(count \"hi\")", Number(2)),
+            ("(count \"\")", Number(0)),
+            ("(count (list))", Number(0)),
+            ("(count (list 44 42 41))", Number(3)),
+            ("(count [])", Number(0)),
+            ("(count [1 2 3])", Number(3)),
+            ("(count {})", Number(0)),
+            ("(count {:a 1 :b 2})", Number(2)),
+            ("(count #{})", Number(0)),
+            ("(count #{:a 1 :b 2})", Number(4)),
+            ("(if (< 2 3) 12 13)", Number(12)),
+            ("(> 13 12)", Bool(true)),
+            ("(> 13 13)", Bool(false)),
+            ("(> 12 13)", Bool(false)),
+            ("(< 13 12)", Bool(false)),
+            ("(< 13 13)", Bool(false)),
+            ("(< 12 13)", Bool(true)),
+            ("(<= 12 12)", Bool(true)),
+            ("(<= 13 12)", Bool(false)),
+            ("(<= 12 13)", Bool(true)),
+            ("(>= 13 12)", Bool(true)),
+            ("(>= 13 13)", Bool(true)),
+            ("(>= 13 14)", Bool(false)),
+            ("(= 12 12)", Bool(true)),
+            ("(= 12 13)", Bool(false)),
+            ("(= 13 12)", Bool(false)),
+            ("(= 0 0)", Bool(true)),
+            ("(= 1 0)", Bool(false)),
+            ("(= true true)", Bool(true)),
+            ("(= true false)", Bool(false)),
+            ("(= false false)", Bool(true)),
+            ("(= nil nil)", Bool(true)),
+            ("(= (list) (list))", Bool(true)),
+            ("(= (list) ())", Bool(true)),
+            ("(= (list 1 2) '(1 2))", Bool(true)),
+            ("(= (list 1 ) ())", Bool(false)),
+            ("(= (list ) '(1))", Bool(false)),
+            ("(= 0 (list))", Bool(false)),
+            ("(= (list) 0)", Bool(false)),
+            ("(= (list nil) (list))", Bool(false)),
+            ("(= 1 (+ 1 1))", Bool(false)),
+            ("(= 2 (+ 1 1))", Bool(true)),
+            ("(= nil (+ 1 1))", Bool(false)),
+            ("(= nil nil)", Bool(true)),
+            ("(= \"\" \"\")", Bool(true)),
+            ("(= \"abc\" \"abc\")", Bool(true)),
+            ("(= \"\" \"abc\")", Bool(false)),
+            ("(= \"abc\" \"\")", Bool(false)),
+            ("(= \"abc\" \"def\")", Bool(false)),
+            ("(= \"abc\" \"ABC\")", Bool(false)),
+            ("(= (list) \"\")", Bool(false)),
+            ("(= \"\" (list))", Bool(false)),
+            ("(= :abc :abc)", Bool(true)),
+            ("(= :abc :def)", Bool(false)),
+            ("(= :abc \":abc\")", Bool(false)),
+            ("(= (list :abc) (list :abc))", Bool(true)),
+            ("(= [] (list))", Bool(true)),
+            ("(= [7 8] [7 8])", Bool(true)),
+            ("(= [:abc] [:abc])", Bool(true)),
+            ("(= (list 1 2) [1 2])", Bool(true)),
+            ("(= (list 1) [])", Bool(false)),
+            ("(= [] (list 1))", Bool(false)),
+            ("(= [] [1])", Bool(false)),
+            ("(= 0 [])", Bool(false)),
+            ("(= [] 0)", Bool(false)),
+            ("(= [] \"\")", Bool(false)),
+            ("(= \"\" [])", Bool(false)),
+            ("(= [(list)] (list []))", Bool(true)),
+            ("(= 'abc 'abc)", Bool(true)),
+            ("(= 'abc 'abdc)", Bool(false)),
+            ("(= 'abc \"abc\")", Bool(false)),
+            ("(= \"abc\" 'abc)", Bool(false)),
+            ("(= \"abc\" (str 'abc))", Bool(true)),
+            ("(= 'abc nil)", Bool(false)),
+            ("(= nil 'abc)", Bool(false)),
+            ("(= {} {})", Bool(true)),
+            ("(= {} (hash-map))", Bool(true)),
+            ("(= {:a 11 :b 22} (hash-map :b 22 :a 11))", Bool(true)),
+            (
+                "(= {:a 11 :b [22 33]} (hash-map :b [22 33] :a 11))",
+                Bool(true),
+            ),
+            (
+                "(= {:a 11 :b {:c 22}} (hash-map :b (hash-map :c 22) :a 11))",
+                Bool(true),
+            ),
+            ("(= {:a 11 :b 22} (hash-map :b 23 :a 11))", Bool(false)),
+            ("(= {:a 11 :b 22} (hash-map :a 11))", Bool(false)),
+            ("(= {:a [11 22]} {:a (list 11 22)})", Bool(true)),
+            ("(= {:a 11 :b 22} (list :a 11 :b 22))", Bool(false)),
+            ("(= {} [])", Bool(false)),
+            ("(= [] {})", Bool(false)),
+            (
+                "(= [1 2 (list 3 4 [5 6])] (list 1 2 [3 4 (list 5 6)]))",
+                Bool(true),
+            ),
+            (
+                "(read-string \"(+ 1 2)\")",
+                List(PersistentList::from_iter(vec![
+                    Symbol("+".to_string(), None),
+                    Number(1),
+                    Number(2),
+                ])),
+            ),
+            (
+                "(read-string \"(1 2 (3 4) nil)\")",
+                List(PersistentList::from_iter(vec![
+                    Number(1),
+                    Number(2),
+                    List(PersistentList::from_iter(vec![Number(3), Number(4)])),
+                    Nil,
+                ])),
+            ),
+            ("(= nil (read-string \"nil\"))", Bool(true)),
+            ("(read-string \"7 ;; comment\")", Number(7)),
+            ("(read-string \"7;;!\")", Number(7)),
+            ("(read-string \"7;;#\")", Number(7)),
+            ("(read-string \"7;;$\")", Number(7)),
+            ("(read-string \"7;;%\")", Number(7)),
+            ("(read-string \"7;;'\")", Number(7)),
+            ("(read-string \"7;;\\\\\")", Number(7)),
+            ("(read-string \"7;;////////\")", Number(7)),
+            ("(read-string \"7;;`\")", Number(7)),
+            ("(read-string \"7;; &()*+,-./:;<=>?@[]^_{|}~\")", Number(7)),
+            ("(read-string \";; comment\")", Nil),
+            ("(eval (list + 1 2 3))", Number(6)),
+            ("(eval (read-string \"(+ 2 3)\"))", Number(5)),
+            (
+                "(def! a 1) (let* [a 12] (eval (read-string \"a\")))",
+                Number(1),
+            ),
+            (
+                "(let* [b 12] (do (eval (read-string \"(def! aa 7)\")) aa))",
+                Number(7),
+            ),
+            ("(str)", String("".to_string())),
+            ("(str \"\")", String("".to_string())),
+            ("(str \"hi\" 3 :foo)", String("hi3:foo".to_string())),
+            ("(str \"hi   \" 3 :foo)", String("hi   3:foo".to_string())),
+            ("(str [])", String("[]".to_string())),
+            ("(str [\"hi\"])", String("[\"hi\"]".to_string())),
+            (
+                "(str \"A\" {:abc \"val\"} \"Z\")",
+                String("A{:abc \"val\"}Z".to_string()),
+            ),
+            (
+                "(str true \".\" false \".\" nil \".\" :keyw \".\" 'symb)",
+                String("true.false.nil.:keyw.symb".to_string()),
+            ),
+            (
+                "(str true \".\" false \".\" nil \".\" :keyw \".\" 'symb)",
+                String("true.false.nil.:keyw.symb".to_string()),
+            ),
+            (
+                "(pr-str \"A\" {:abc \"val\"} \"Z\")",
+                String("\"A\" {:abc \"val\"} \"Z\"".to_string()),
+            ),
+            (
+                "(pr-str true \".\" false \".\" nil \".\" :keyw \".\" 'symb)",
+                String("true \".\" false \".\" nil \".\" :keyw \".\" symb".to_string()),
+            ),
+            (
+                "(cons 1 (list))",
+                list_with_values([Number(1)].iter().cloned()),
+            ),
+            ("(cons 1 [])", list_with_values([Number(1)].iter().cloned())),
+            (
+                "(cons 1 (list 2))",
+                list_with_values([Number(1), Number(2)].iter().cloned()),
+            ),
+            (
+                "(cons 1 (list 2 3))",
+                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(cons 1 [2 3])",
+                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(cons [1] [2 3])",
+                list_with_values(
+                    [vector_with_values(vec![Number(1)]), Number(2), Number(3)]
+                        .iter()
+                        .cloned(),
+                ),
+            ),
+            (
+                "(def! a [2 3]) (cons 1 a)",
+                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(def! a [2 3]) (cons 1 a) a",
+                vector_with_values(vec![Number(2), Number(3)]),
+            ),
+            (
+                "(cons (list 1) (list 2 3))",
+                list_with_values(
+                    [
+                        list_with_values([Number(1)].iter().cloned()),
+                        Number(2),
+                        Number(3),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
+            ("(concat)", List(PersistentList::new())),
+            ("(concat (concat))", List(PersistentList::new())),
+            ("(concat (list) (list))", List(PersistentList::new())),
+            ("(= () (concat))", Bool(true)),
+            (
+                "(concat (list 1 2))",
+                list_with_values([Number(1), Number(2)].iter().cloned()),
+            ),
+            (
+                "(concat (list 1) (list 2 3))",
+                list_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(concat (list 1) [3 3] (list 2 3))",
+                list_with_values(
+                    [Number(1), Number(3), Number(3), Number(2), Number(3)]
+                        .iter()
+                        .cloned(),
+                ),
+            ),
+            (
+                "(concat [1 2] '(3 4) [5 6])",
+                list_with_values(
+                    [
+                        Number(1),
+                        Number(2),
+                        Number(3),
+                        Number(4),
+                        Number(5),
+                        Number(6),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
+            (
+                "(concat (list 1) (list 2 3) (list (list 4 5) 6))",
+                list_with_values(
+                    [
+                        Number(1),
+                        Number(2),
+                        Number(3),
+                        list_with_values([Number(4), Number(5)].iter().cloned()),
+                        Number(6),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
+            (
+                "(def! a (list 1 2)) (def! b (list 3 4)) (concat a b (list 5 6))",
+                list_with_values(
+                    [
+                        Number(1),
+                        Number(2),
+                        Number(3),
+                        Number(4),
+                        Number(5),
+                        Number(6),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
+            (
+                "(def! a (list 1 2)) (def! b (list 3 4)) (concat a b (list 5 6)) a",
+                list_with_values([Number(1), Number(2)].iter().cloned()),
+            ),
+            (
+                "(def! a (list 1 2)) (def! b (list 3 4)) (concat a b (list 5 6)) b",
+                list_with_values([Number(3), Number(4)].iter().cloned()),
+            ),
+            (
+                "(concat [1 2])",
+                list_with_values([Number(1), Number(2)].iter().cloned()),
+            ),
+            (
+                "(vec '(1 2 3))",
+                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            (
+                "(vec [1 2 3])",
+                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            ("(vec nil)", vector_with_values([].iter().cloned())),
+            ("(vec '())", vector_with_values([].iter().cloned())),
+            ("(vec [])", vector_with_values([].iter().cloned())),
+            (
+                "(def! a '(1 2)) (vec a)",
+                vector_with_values([Number(1), Number(2)].iter().cloned()),
+            ),
+            (
+                "(def! a '(1 2)) (vec a) a",
+                list_with_values([Number(1), Number(2)].iter().cloned()),
+            ),
+            (
+                "(vec '(1))",
+                vector_with_values([Number(1)].iter().cloned()),
+            ),
+            ("(nth [1 2 3] 2)", Number(3)),
+            ("(nth [1] 0)", Number(1)),
+            ("(nth [1 2 nil] 2)", Nil),
+            ("(nth '(1 2 3) 1)", Number(2)),
+            ("(nth '(1 2 3) 0)", Number(1)),
+            ("(nth '(1 2 nil) 2)", Nil),
+            ("(first '(1 2 3))", Number(1)),
+            ("(first '())", Nil),
+            ("(first [1 2 3])", Number(1)),
+            ("(first [10])", Number(10)),
+            ("(first [])", Nil),
+            ("(first nil)", Nil),
+            (
+                "(rest '(1 2 3))",
+                list_with_values([Number(2), Number(3)].iter().cloned()),
+            ),
+            ("(rest '(1))", list_with_values(vec![])),
+            ("(rest '())", List(PersistentList::new())),
+            (
+                "(rest [1 2 3])",
+                list_with_values([Number(2), Number(3)].iter().cloned()),
+            ),
+            ("(rest [])", List(PersistentList::new())),
+            ("(rest nil)", List(PersistentList::new())),
+            ("(rest [10])", List(PersistentList::new())),
+            (
+                "(rest [10 11 12])",
+                list_with_values(vec![Number(11), Number(12)]),
+            ),
+            (
+                "(rest (cons 10 [11 12]))",
+                list_with_values(vec![Number(11), Number(12)]),
+            ),
+            ("(apply str [1 2 3])", String("123".to_string())),
+            ("(apply str '(1 2 3))", String("123".to_string())),
+            ("(apply str 0 1 2 '(1 2 3))", String("012123".to_string())),
+            ("(apply + '(2 3))", Number(5)),
+            ("(apply + 4 '(5))", Number(9)),
+            ("(apply + 4 [5])", Number(9)),
+            ("(apply list ())", list_with_values(vec![])),
+            ("(apply list [])", list_with_values(vec![])),
+            ("(apply symbol? (list 'two))", Bool(true)),
+            ("(apply (fn* [a b] (+ a b)) '(2 3))", Number(5)),
+            ("(apply (fn* [a b] (+ a b)) 4 '(5))", Number(9)),
+            ("(apply (fn* [a b] (+ a b)) [2 3])", Number(5)),
+            ("(apply (fn* [a b] (+ a b)) 4 [5])", Number(9)),
+            ("(apply (fn* [& rest] (list? rest)) [1 2 3])", Bool(true)),
+            ("(apply (fn* [& rest] (list? rest)) [])", Bool(true)),
+            ("(apply (fn* [a & rest] (list? rest)) [1])", Bool(true)),
+            (
+                "(def! inc (fn* [a] (+ a 1))) (map inc [1 2 3])",
+                list_with_values(vec![Number(2), Number(3), Number(4)]),
+            ),
+            (
+                "(map inc '(1 2 3))",
+                list_with_values(vec![Number(2), Number(3), Number(4)]),
+            ),
+            (
+                "(map (fn* [x] (* 2 x)) [1 2 3])",
+                list_with_values(vec![Number(2), Number(4), Number(6)]),
+            ),
+            (
+                "(map (fn* [& args] (list? args)) [1 2])",
+                list_with_values(vec![Bool(true), Bool(true)]),
+            ),
+            (
+                "(map symbol? '(nil false true))",
+                list_with_values(vec![Bool(false), Bool(false), Bool(false)]),
+            ),
+            (
+                "(def! f (fn* [a] (fn* [b] (+ a b)))) (map (f 23) (list 1 2))",
+                list_with_values(vec![Number(24), Number(25)]),
+            ),
+            ("(= () (map str ()))", Bool(true)),
+            ("(nil? nil)", Bool(true)),
+            ("(nil? true)", Bool(false)),
+            ("(nil? false)", Bool(false)),
+            ("(nil? [1 2 3])", Bool(false)),
+            ("(true? true)", Bool(true)),
+            ("(true? nil)", Bool(false)),
+            ("(true? false)", Bool(false)),
+            ("(true? true?)", Bool(false)),
+            ("(true? [1 2 3])", Bool(false)),
+            ("(false? false)", Bool(true)),
+            ("(false? nil)", Bool(false)),
+            ("(false? true)", Bool(false)),
+            ("(false? [1 2 3])", Bool(false)),
+            ("(symbol? 'a)", Bool(true)),
+            ("(symbol? 'foo/a)", Bool(true)),
+            ("(symbol? :foo/a)", Bool(false)),
+            ("(symbol? :a)", Bool(false)),
+            ("(symbol? false)", Bool(false)),
+            ("(symbol? true)", Bool(false)),
+            ("(symbol? nil)", Bool(false)),
+            ("(symbol? (symbol \"abc\"))", Bool(true)),
+            ("(symbol? [1 2 3])", Bool(false)),
+            ("(symbol \"hi\")", Symbol("hi".to_string(), None)),
+            ("(keyword \"hi\")", Keyword("hi".to_string(), None)),
+            ("(keyword :hi)", Keyword("hi".to_string(), None)),
+            ("(keyword? :a)", Bool(true)),
+            ("(keyword? false)", Bool(false)),
+            ("(keyword? 'abc)", Bool(false)),
+            ("(keyword? \"hi\")", Bool(false)),
+            ("(keyword? \"\")", Bool(false)),
+            ("(keyword? (keyword \"abc\"))", Bool(true)),
+            (
+                "(keyword? (first (keys {\":abc\" 123 \":def\" 456})))",
+                Bool(false),
+            ),
+            ("(vector)", Vector(PersistentVector::new())),
+            (
+                "(vector 1)",
+                vector_with_values([Number(1)].iter().cloned()),
+            ),
+            (
+                "(vector 1 2 3)",
+                vector_with_values([Number(1), Number(2), Number(3)].iter().cloned()),
+            ),
+            ("(vector? [1 2])", Bool(true)),
+            ("(vector? '(1 2))", Bool(false)),
+            ("(vector? :hi)", Bool(false)),
+            ("(= [] (vector))", Bool(true)),
+            ("(sequential? '(1 2))", Bool(true)),
+            ("(sequential? [1 2])", Bool(true)),
+            ("(sequential? :hi)", Bool(false)),
+            ("(sequential? nil)", Bool(false)),
+            ("(sequential? \"abc\")", Bool(false)),
+            ("(sequential? sequential?)", Bool(false)),
+            ("(hash-map)", Map(PersistentMap::new())),
+            (
+                "(hash-map :a 2)",
+                map_with_values(
+                    [(Keyword("a".to_string(), None), Number(2))]
+                        .iter()
+                        .cloned(),
+                ),
+            ),
+            ("(map? {:a 1 :b 2})", Bool(true)),
+            ("(map? {})", Bool(true)),
+            ("(map? '())", Bool(false)),
+            ("(map? [])", Bool(false)),
+            ("(map? 'abc)", Bool(false)),
+            ("(map? :abc)", Bool(false)),
+            ("(map? [1 2])", Bool(false)),
+            (
+                "(assoc {} :a 1)",
+                map_with_values(
+                    [(Keyword("a".to_string(), None), Number(1))]
+                        .iter()
+                        .cloned(),
+                ),
+            ),
+            (
+                "(assoc {} :a 1 :b 3)",
+                map_with_values(
+                    [
+                        (Keyword("a".to_string(), None), Number(1)),
+                        (Keyword("b".to_string(), None), Number(3)),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
+            (
+                "(assoc {:a 1} :b 3)",
+                map_with_values(
+                    [
+                        (Keyword("a".to_string(), None), Number(1)),
+                        (Keyword("b".to_string(), None), Number(3)),
+                    ]
+                    .iter()
+                    .cloned(),
+                ),
+            ),
+            (
+                "(assoc {:a 1} :a 3 :c 33)",
+                map_with_values(vec![
+                    (Keyword("a".to_string(), None), Number(3)),
+                    (Keyword("c".to_string(), None), Number(33)),
+                ]),
+            ),
+            (
+                "(assoc {} :a nil)",
+                map_with_values(vec![(Keyword("a".to_string(), None), Nil)]),
+            ),
+            ("(dissoc {})", map_with_values([].iter().cloned())),
+            ("(dissoc {} :a)", map_with_values([].iter().cloned())),
+            (
+                "(dissoc {:a 1 :b 3} :a)",
+                map_with_values(
+                    [(Keyword("b".to_string(), None), Number(3))]
+                        .iter()
+                        .cloned(),
+                ),
+            ),
+            (
+                "(dissoc {:a 1 :b 3} :a :b :c)",
+                map_with_values([].iter().cloned()),
+            ),
+            ("(count (keys (assoc {} :b 2 :c 3)))", Number(2)),
+            ("(get {:a 1} :a)", Number(1)),
+            ("(get {:a 1} :b)", Nil),
+            ("(get nil :b)", Nil),
+            ("(contains? {:a 1} :b)", Bool(false)),
+            ("(contains? {:a 1} :a)", Bool(true)),
+            ("(contains? {:abc nil} :abc)", Bool(true)),
+            ("(keyword? (nth (keys {:abc 123 :def 456}) 0))", Bool(true)),
+            ("(keyword? (nth (vals {123 :abc 456 :def}) 0))", Bool(true)),
+            ("(keys {})", Nil),
+            (
+                "(= (set '(:a :b :c)) (set (keys {:a 1 :b 2 :c 3})))",
+                Bool(true),
+            ),
+            (
+                "(= (set '(:a :c)) (set (keys {:a 1 :b 2 :c 3})))",
+                Bool(false),
+            ),
+            ("(vals {})", Nil),
+            (
+                "(= (set '(1 2 3)) (set (vals {:a 1 :b 2 :c 3})))",
+                Bool(true),
+            ),
+            (
+                "(= (set '(1 2)) (set (vals {:a 1 :b 2 :c 3})))",
+                Bool(false),
+            ),
+            ("(last '(1 2 3))", Number(3)),
+            ("(last [1 2 3])", Number(3)),
+            ("(last '())", Nil),
+            ("(last [])", Nil),
+            ("(not [])", Bool(false)),
+            ("(not nil)", Bool(true)),
+            ("(not true)", Bool(false)),
+            ("(not false)", Bool(true)),
+            ("(not 1)", Bool(false)),
+            ("(not 0)", Bool(false)),
+            ("(not \"a\")", Bool(false)),
+            ("(not \"\")", Bool(false)),
+            ("(not (= 1 1))", Bool(false)),
+            ("(not (= 1 2))", Bool(true)),
+            ("(set nil)", Set(PersistentSet::new())),
+            // NOTE: these all rely on an _unguaranteed_ insertion order...
+            (
+                "(set \"hi\")",
+                set_with_values(vec![String("h".to_string()), String("i".to_string())]),
+            ),
+            ("(set '(1 2))", set_with_values(vec![Number(1), Number(2)])),
+            (
+                "(set '(1 2 1 2 1 2 2 2 2))",
+                set_with_values(vec![Number(1), Number(2)]),
+            ),
+            (
+                "(set [1 2 1 2 1 2 2 2 2])",
+                set_with_values(vec![Number(1), Number(2)]),
+            ),
+            (
+                "(set {1 2 3 4})",
+                set_with_values(vec![
+                    vector_with_values(vec![Number(1), Number(2)]),
+                    vector_with_values(vec![Number(3), Number(4)]),
+                ]),
+            ),
+            (
+                "(set #{1 2 3 4})",
+                set_with_values(vec![Number(1), Number(2), Number(3), Number(4)]),
+            ),
+            ("(set? #{1 2 3 4})", Bool(true)),
+            ("(set? nil)", Bool(false)),
+            ("(set? '())", Bool(false)),
+            ("(set? [])", Bool(false)),
+            ("(set? {})", Bool(false)),
+            ("(set? #{})", Bool(true)),
+            ("(set? \"a\")", Bool(false)),
+            ("(set? :a)", Bool(false)),
+            ("(set? 'a)", Bool(false)),
+            ("(string? nil)", Bool(false)),
+            ("(string? true)", Bool(false)),
+            ("(string? false)", Bool(false)),
+            ("(string? [1 2 3])", Bool(false)),
+            ("(string? 1)", Bool(false)),
+            ("(string? :hi)", Bool(false)),
+            ("(string? \"hi\")", Bool(true)),
+            ("(string? string?)", Bool(false)),
+            ("(number? nil)", Bool(false)),
+            ("(number? true)", Bool(false)),
+            ("(number? false)", Bool(false)),
+            ("(number? [1 2 3])", Bool(false)),
+            ("(number? 1)", Bool(true)),
+            ("(number? -1)", Bool(true)),
+            ("(number? :hi)", Bool(false)),
+            ("(number? \"hi\")", Bool(false)),
+            ("(number? string?)", Bool(false)),
+            ("(fn? nil)", Bool(false)),
+            ("(fn? true)", Bool(false)),
+            ("(fn? false)", Bool(false)),
+            ("(fn? [1 2 3])", Bool(false)),
+            ("(fn? 1)", Bool(false)),
+            ("(fn? -1)", Bool(false)),
+            ("(fn? :hi)", Bool(false)),
+            ("(fn? \"hi\")", Bool(false)),
+            ("(fn? string?)", Bool(true)),
+            ("(fn? (fn* [a] a))", Bool(true)),
+            ("(def! foo (fn* [a] a)) (fn? foo)", Bool(true)),
+            ("(defmacro! foo (fn* [a] a)) (fn? foo)", Bool(true)),
+            ("(conj (list) 1)", list_with_values(vec![Number(1)])),
+            (
+                "(conj (list 1) 2)",
+                list_with_values(vec![Number(2), Number(1)]),
+            ),
+            (
+                "(conj (list 1 2) 3)",
+                list_with_values(vec![Number(3), Number(1), Number(2)]),
+            ),
+            (
+                "(conj (list 2 3) 4 5 6)",
+                list_with_values(vec![Number(6), Number(5), Number(4), Number(2), Number(3)]),
+            ),
+            (
+                "(conj (list 1) (list 2 3))",
+                list_with_values(vec![
+                    list_with_values(vec![Number(2), Number(3)]),
+                    Number(1),
+                ]),
+            ),
+            ("(conj [] 1)", vector_with_values(vec![Number(1)])),
+            (
+                "(conj [1] 2)",
+                vector_with_values(vec![Number(1), Number(2)]),
+            ),
+            (
+                "(conj [1 2 3] 4)",
+                vector_with_values(vec![Number(1), Number(2), Number(3), Number(4)]),
+            ),
+            (
+                "(conj [1 2 3] 4 5)",
+                vector_with_values(vec![Number(1), Number(2), Number(3), Number(4), Number(5)]),
+            ),
+            (
+                "(conj '(1 2 3) 4 5)",
+                list_with_values(vec![Number(5), Number(4), Number(1), Number(2), Number(3)]),
+            ),
+            (
+                "(conj [3] [4 5])",
+                vector_with_values(vec![
+                    Number(3),
+                    vector_with_values(vec![Number(4), Number(5)]),
+                ]),
+            ),
+            (
+                "(conj {:c :d} [1 2] {:a :b :c :e})",
+                map_with_values(vec![
+                    (
+                        Keyword("c".to_string(), None),
+                        Keyword("e".to_string(), None),
+                    ),
+                    (
+                        Keyword("a".to_string(), None),
+                        Keyword("b".to_string(), None),
+                    ),
+                    (Number(1), Number(2)),
+                ]),
+            ),
+            (
+                "(conj #{1 2} 1 3 2 2 2 2 1)",
+                set_with_values(vec![Number(1), Number(2), Number(3)]),
+            ),
+            ("(macro? nil)", Bool(false)),
+            ("(macro? true)", Bool(false)),
+            ("(macro? false)", Bool(false)),
+            ("(macro? [1 2 3])", Bool(false)),
+            ("(macro? 1)", Bool(false)),
+            ("(macro? -1)", Bool(false)),
+            ("(macro? :hi)", Bool(false)),
+            ("(macro? \"hi\")", Bool(false)),
+            ("(macro? string?)", Bool(false)),
+            ("(macro? {})", Bool(false)),
+            ("(macro? (fn* [a] a))", Bool(false)),
+            ("(def! foo (fn* [a] a)) (macro? foo)", Bool(false)),
+            ("(defmacro! foo (fn* [a] a)) (macro? foo)", Bool(true)),
+            ("(number? (time-ms))", Bool(true)),
+            ("(seq nil)", Nil),
+            ("(seq \"\")", Nil),
+            (
+                "(seq \"ab\")",
+                list_with_values(vec![String("a".to_string()), String("b".to_string())]),
+            ),
+            ("(apply str (seq \"ab\"))", String("ab".to_string())),
+            ("(seq '())", Nil),
+            ("(seq '(1 2))", list_with_values(vec![Number(1), Number(2)])),
+            ("(seq [])", Nil),
+            ("(seq [1 2])", list_with_values(vec![Number(1), Number(2)])),
+            ("(seq {})", Nil),
+            (
+                "(seq {1 2})",
+                list_with_values(vec![vector_with_values(vec![Number(1), Number(2)])]),
+            ),
+            ("(seq #{})", Nil),
+            ("(= (set '(1 2)) (set (seq #{1 2})))", Bool(true)),
+        ];
+        run_eval_test(&test_cases);
+    }
 }
