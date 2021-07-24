@@ -42,21 +42,43 @@ pub fn is_structural(input: char) -> bool {
 fn parse_identifier_and_optional_namespace(
     symbolic: &str,
 ) -> Result<(String, Option<String>), ReaderError> {
+    if symbolic.is_empty() {
+        return Err(ReaderError::InvalidIdentifier);
+    }
     if let Some((ns, identifier)) = symbolic.split_once('/') {
-        if ns.is_empty() {
-            if identifier.is_empty() {
-                return Ok(("/".to_string(), None));
+        match (ns, identifier) {
+            ("", "") => Ok(("/".to_string(), None)),
+            ("", _) => Err(ReaderError::MissingNamespace),
+            (_, "") => Err(ReaderError::InvalidIdentifier),
+            (namespace, identifier) => {
+                if namespace.contains(':') {
+                    return Err(ReaderError::InvalidNamespace);
+                }
+                if identifier.contains(':') {
+                    return Err(ReaderError::InvalidIdentifier);
+                }
+                Ok((identifier.to_string(), Some(ns.to_string())))
             }
-            return Err(ReaderError::MissingNamespace);
         }
-        Ok((identifier.to_string(), Some(ns.to_string())))
     } else {
+        if let Some((ns, identifier)) = symbolic.split_once(':') {
+            if ns.is_empty() {
+                if identifier.is_empty() {
+                    return Err(ReaderError::InvalidIdentifier);
+                }
+                // `::identifier` form
+                return Ok((identifier.to_string(), Some(":".to_string())));
+            }
+        }
         Ok((symbolic.to_string(), None))
     }
 }
 
 fn parse_symbolic_with_namespace(symbolic: &str) -> Result<Value, ReaderError> {
     if let Some(symbolic) = symbolic.strip_prefix(':') {
+        if symbolic == "/" {
+            return Err(ReaderError::InvalidIdentifier);
+        }
         let (identifier, ns_opt) = parse_identifier_and_optional_namespace(symbolic)?;
         Ok(Value::Keyword(identifier, ns_opt))
     } else {
@@ -141,12 +163,18 @@ pub enum ReaderError {
     CouldNotParseNumber(#[from] ParseIntError),
     #[error("error negating number: {0}")]
     CouldNotNegateNumber(i64),
-    #[error("unexpected input found after parsing all forms before EOF")]
-    UnexpectedAdditionalInput,
+    #[error("unexpected input {0}")]
+    UnexpectedInput(char),
     #[error("expected further input but found EOF")]
     ExpectedMoreInput,
     #[error("expected a namespace but none was given")]
     MissingNamespace,
+    #[error("namespace for symbolic form was invalid in the given context")]
+    InvalidNamespace,
+    #[error("expected an identifier for symbol in namespace but none was given")]
+    MissingIdentifier,
+    #[error("identifier for symbolic form was invalid in the given context")]
+    InvalidIdentifier,
     #[error("started reading a string but did not find the terminating `\"`")]
     UnbalancedString,
     #[error("unbalanced collection: missing closing {0}")]
@@ -182,7 +210,7 @@ impl std::error::Error for ReadError {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 enum ParseState {
     Reading,
     Exiting,
@@ -207,7 +235,7 @@ enum Span {
     Comment(Range),
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct Reader<'a> {
     input: &'a str,
     spans: Vec<Span>,
@@ -283,7 +311,9 @@ impl<'a> Reader<'a> {
 
         while let Some((index, ch)) = stream.peek() {
             end = Some(*index);
-            if is_numeric(*ch) {
+            let ch = *ch;
+            // NOTE: want to scan until whitespace, comment or structural ch
+            if is_token(ch) && !is_structural(ch) {
                 stream.next();
                 continue;
             }
@@ -393,6 +423,18 @@ impl<'a> Reader<'a> {
         let symbol = self.values.last_mut().expect("did read symbol");
         let span = self.spans.last_mut().expect("did range symbol");
         match (symbol, span) {
+            (Value::Symbol(identifier, None), Span::Simple(range)) if identifier == "/" => {
+                match range {
+                    Range::Slice(symbol_start, _) => {
+                        *symbol_start = start;
+                    }
+                    Range::ToEnd(symbol_start) => {
+                        *symbol_start = start;
+                    }
+                }
+                self.cursor = start;
+                return Err(ReaderError::MissingIdentifier);
+            }
             (Value::Symbol(identifier, ns_opt), Span::Simple(range)) => {
                 match range {
                     Range::Slice(symbol_start, _) => {
@@ -450,7 +492,8 @@ impl<'a> Reader<'a> {
             ch if is_numeric(ch) => self.read_number(stream),
             ch if is_symbolic(ch) => self.read_symbolic(stream),
             ch => {
-                panic!("unexpected character when reading atom: {}", ch);
+                self.cursor = start;
+                Err(ReaderError::UnexpectedInput(ch))
             }
         }
     }
@@ -470,10 +513,7 @@ impl<'a> Reader<'a> {
         let spans_index = self.spans.len();
         let previous_state = self.parse_state;
         self.parse_state = ParseState::Reading;
-        self.read_from_stream(stream).map_err(|err| {
-            self.cursor = start;
-            err
-        })?;
+        self.read_from_stream(stream)?;
         self.parse_state = previous_state;
 
         let collection = collector(self.values.drain(values_index..).collect())?;
@@ -517,7 +557,7 @@ impl<'a> Reader<'a> {
             }
             '\'' => {
                 stream.next().expect("from peek");
-                self.read_symbolic(stream).map_err(|err| {
+                self.read_exactly_one_form(start, stream).map_err(|err| {
                     self.cursor = start;
                     err
                 })?;
@@ -542,12 +582,15 @@ impl<'a> Reader<'a> {
                         self.spans.push(Span::Simple(dispatch_span));
                         Ok(())
                     }
-                    other => Err(ReaderError::VarDispatchRequiresSymbol(other)),
+                    other => {
+                        self.cursor = start;
+                        Err(ReaderError::VarDispatchRequiresSymbol(other))
+                    }
                 }
             }
             '_' => {
                 stream.next().expect("from peek");
-                self.read_one_form(start, stream).map_err(|err| {
+                self.read_exactly_one_form(start, stream).map_err(|err| {
                     self.cursor = start;
                     err
                 })?;
@@ -560,7 +603,11 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn read_one_form(&mut self, start: usize, stream: &mut Stream) -> Result<(), ReaderError> {
+    fn read_exactly_one_form(
+        &mut self,
+        start: usize,
+        stream: &mut Stream,
+    ) -> Result<(), ReaderError> {
         self.cursor = start;
         let values_count = self.values.len();
         let previous_state = self.parse_state;
@@ -588,7 +635,10 @@ impl<'a> Reader<'a> {
         start: usize,
         stream: &mut Stream,
     ) -> Result<(), ReaderError> {
-        self.read_one_form(start, stream)?;
+        self.read_exactly_one_form(start, stream).map_err(|err| {
+            self.cursor = start;
+            err
+        })?;
         let form = self.values.pop().expect("just read form");
         let expansion = list_with_values(
             [Value::Symbol(identifier.to_string(), None), form]
@@ -707,8 +757,8 @@ impl<'a> Reader<'a> {
         self.input = input;
         let mut stream = input.char_indices().peekable();
         self.read_from_stream(&mut stream)?;
-        if stream.next().is_some() {
-            return Err(ReaderError::UnexpectedAdditionalInput);
+        if let Some((_, ch)) = stream.next() {
+            return Err(ReaderError::UnexpectedInput(ch));
         }
         Ok(())
     }
@@ -725,9 +775,269 @@ pub fn read(input: &str) -> Result<Vec<Value>, ReadError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        list_with_values, map_with_values, read, set_with_values, vector_with_values, Value::*,
+        list_with_values, map_with_values, read, set_with_values, vector_with_values, ReadError,
+        ReaderError, Value::*,
     };
     use itertools::Itertools;
+
+    #[test]
+    fn test_read_error() {
+        use std::ops::Fn;
+
+        let cases: Vec<(&str, Box<dyn Fn(&ReaderError) -> bool>, usize)> = vec![
+            (
+                "234897abc",
+                Box::new(|err| matches!(err, ReaderError::CouldNotParseNumber(_))),
+                0,
+            ),
+            (
+                "( 234897abc",
+                Box::new(|err| matches!(err, ReaderError::CouldNotParseNumber(_))),
+                2,
+            ),
+            (
+                "-234897abc",
+                Box::new(|err| matches!(err, ReaderError::CouldNotParseNumber(_))),
+                0,
+            ),
+            (
+                "-/",
+                Box::new(|err| matches!(err, ReaderError::MissingIdentifier)),
+                0,
+            ),
+            (
+                "123 abc -/",
+                Box::new(|err| matches!(err, ReaderError::MissingIdentifier)),
+                8,
+            ),
+            (
+                "/foo",
+                Box::new(|err| matches!(err, ReaderError::MissingNamespace)),
+                0,
+            ),
+            (
+                "/-",
+                Box::new(|err| matches!(err, ReaderError::MissingNamespace)),
+                0,
+            ),
+            (
+                "//",
+                Box::new(|err| matches!(err, ReaderError::MissingNamespace)),
+                0,
+            ),
+            (
+                "///",
+                Box::new(|err| matches!(err, ReaderError::MissingNamespace)),
+                0,
+            ),
+            (
+                "\"some string",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedString)),
+                0,
+            ),
+            (
+                "(  \"some string)",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedString)),
+                3,
+            ),
+            (
+                "\"some string \\\"nested string\\\"",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedString)),
+                0,
+            ),
+            (
+                "\"some string \\\"nested string does not end",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedString)),
+                0,
+            ),
+            (
+                ",,,,,\"some string",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedString)),
+                5,
+            ),
+            (
+                ",,,,,\n\n\"some string",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedString)),
+                7,
+            ),
+            (
+                "foo/:",
+                Box::new(|err| matches!(err, ReaderError::InvalidIdentifier)),
+                0,
+            ),
+            (
+                "foo/:bar",
+                Box::new(|err| matches!(err, ReaderError::InvalidIdentifier)),
+                0,
+            ),
+            (
+                ":",
+                Box::new(|err| matches!(err, ReaderError::InvalidIdentifier)),
+                0,
+            ),
+            (
+                ":/",
+                Box::new(|err| matches!(err, ReaderError::InvalidIdentifier)),
+                0,
+            ),
+            (
+                ":/:",
+                Box::new(|err| matches!(err, ReaderError::MissingNamespace)),
+                0,
+            ),
+            (
+                ":/foo",
+                Box::new(|err| matches!(err, ReaderError::MissingNamespace)),
+                0,
+            ),
+            (
+                "::",
+                Box::new(|err| matches!(err, ReaderError::InvalidIdentifier)),
+                0,
+            ),
+            (
+                "::/",
+                Box::new(|err| matches!(err, ReaderError::InvalidIdentifier)),
+                0,
+            ),
+            (
+                "::foo/bar",
+                Box::new(|err| matches!(err, ReaderError::InvalidNamespace)),
+                0,
+            ),
+            (
+                ";; some comment \n:",
+                Box::new(|err| matches!(err, ReaderError::InvalidIdentifier)),
+                17,
+            ),
+            (
+                "(",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedCollection(')'))),
+                0,
+            ),
+            (
+                "(1 2",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedCollection(')'))),
+                0,
+            ),
+            (
+                "[1 2",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedCollection(']'))),
+                0,
+            ),
+            (
+                "{1 2",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedCollection('}'))),
+                0,
+            ),
+            (
+                "#{1 2",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedCollection('}'))),
+                0,
+            ),
+            (
+                "1 2 (1 2",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedCollection(')'))),
+                4,
+            ),
+            (
+                "[1 2 (1 2])",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedCollection(')'))),
+                5,
+            ),
+            (
+                "{1 3 4}",
+                Box::new(|err| matches!(err, ReaderError::MapLiteralWithUnpairedElements)),
+                5,
+            ),
+            (
+                "{1 3 [1 2}",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedCollection(']'))),
+                5,
+            ),
+            (
+                "(((((((([))))))))",
+                Box::new(|err| matches!(err, ReaderError::UnbalancedCollection(']'))),
+                8,
+            ),
+            (
+                "(a b c)\u{200B}",
+                Box::new(|err| matches!(err, ReaderError::UnexpectedInput('\u{200B}'))),
+                7,
+            ),
+            (
+                "(a b c)  \u{200B}",
+                Box::new(|err| matches!(err, ReaderError::UnexpectedInput('\u{200B}'))),
+                9,
+            ),
+            (
+                "#",
+                Box::new(|err| matches!(err, ReaderError::ExpectedMoreInput)),
+                0,
+            ),
+            (
+                "#!some-form",
+                Box::new(|err| matches!(err, ReaderError::CouldNotParseDispatch('!'))),
+                0,
+            ),
+            (
+                "#'(not-a-symbol)",
+                Box::new(|err| matches!(err, ReaderError::VarDispatchRequiresSymbol(_))),
+                0,
+            ),
+            (
+                "@",
+                Box::new(|err| matches!(err, ReaderError::ExpectedMoreInput)),
+                0,
+            ),
+            (
+                "1 2 @,,,,,,,",
+                Box::new(|err| matches!(err, ReaderError::ExpectedMoreInput)),
+                4,
+            ),
+            (
+                "1 2 [3 4 @] 5",
+                Box::new(|err| matches!(err, ReaderError::ExpectedMoreInput)),
+                9,
+            ),
+            (
+                "'",
+                Box::new(|err| matches!(err, ReaderError::ExpectedMoreInput)),
+                0,
+            ),
+            (
+                "`",
+                Box::new(|err| matches!(err, ReaderError::ExpectedMoreInput)),
+                0,
+            ),
+            (
+                "~",
+                Box::new(|err| matches!(err, ReaderError::ExpectedMoreInput)),
+                0,
+            ),
+        ];
+        for (case, err_pattern, expected_index) in cases {
+            match read(case) {
+                Ok(value) => {
+                    println!(
+                        "read value(s) {:?} successfully when expected error on this input `{}`",
+                        value, case
+                    );
+                    assert!(false);
+                }
+                Err(ReadError(err, index)) => {
+                    if !err_pattern(&err) {
+                        println!("did not get back the expected error type when reading `{}`, instead got {}", case, err);
+                        assert!(false);
+                    }
+                    if index != expected_index {
+                        println!("did not locate the correct error position when reading `{}`: expected {} but got {}", case, expected_index, index);
+                        assert!(false);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_basic_read() {
@@ -885,6 +1195,14 @@ mod tests {
                 ":net/hi",
                 vec![Keyword("hi".into(), Some("net".into()))],
                 ":net/hi",
+            ),
+            (
+                "::bar",
+                vec![Keyword("bar".into(), Some(":".into()))],
+                // NOTE: this is to match `Value` specific behavior
+                // the `::` form is interpreted as an auto-resolving
+                // namespace inside the interpreter
+                "::/bar",
             ),
             (
                 ":a0987234",
