@@ -87,6 +87,7 @@ const BINDINGS: &[(&str, Value)] = &[
     ("readline", Value::Primitive(readline)),
     ("meta", Value::Primitive(to_meta)),
     ("with-meta", Value::Primitive(with_meta)),
+    ("zero?", Value::Primitive(is_zero)),
 ];
 
 pub fn register(interpreter: &mut Interpreter) {
@@ -1494,8 +1495,21 @@ pub fn with_meta(_: &mut Interpreter, _args: &[Value]) -> EvaluationResult<Value
     Ok(Value::Nil)
 }
 
-
+pub fn is_zero(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+    if args.len() != 1 {
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
+    match &args[0] {
+        Value::Number(n) => Ok(Value::Bool(*n == 0)),
+        other => Err(EvaluationError::WrongType {
+            expected: "Number".to_string(),
+            realized: other.clone(),
+        }),
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -2227,6 +2241,9 @@ mod tests {
             ),
             ("(seq #{})", Nil),
             ("(= (set '(1 2)) (set (seq #{1 2})))", Bool(true)),
+            ("(zero? 0)", Bool(true)),
+            ("(zero? 10)", Bool(false)),
+            ("(zero? -10)", Bool(false)),
         ];
         run_eval_test(&test_cases);
     }
