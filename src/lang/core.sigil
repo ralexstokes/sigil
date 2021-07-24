@@ -3,14 +3,16 @@
        `(defmacro! ~macro-name (fn* ~macro-args ~@body))))
 (defmacro let [bindings & body]
   `(let* ~bindings ~@body))
-(defmacro def [var-name value]
-  `(def! ~var-name ~value))
+(defmacro def [var-name & value]
+  (if (empty? value)
+    `(def! ~var-name)
+    `(def! ~var-name ~(first value))))
 (defmacro cond [& xs]
   (if (> (count xs) 0) (list 'if (first xs) (if (> (count xs) 1) (nth xs 1) (throw "odd number of forms to cond")) (cons 'cond (rest (rest xs))))))
 (defmacro defn [fn-name fn-args & body]
   `(def! ~fn-name (fn* ~fn-args ~@body)))
 (defmacro declare [& names]
-  `(do ~@(map (fn* [name] (list 'def name nil)) names)))
+  `(do ~@(map (fn* [name] (list 'def name)) names)))
 
 (defn inc [x]
   (+ x 1))

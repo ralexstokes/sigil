@@ -38,6 +38,14 @@ pub fn var_with_value(value: Value, namespace: &str, identifier: &str) -> Value 
     })
 }
 
+pub fn unbound_var(namespace: &str, identifier: &str) -> Value {
+    Value::Var(VarImpl {
+        data: Rc::new(RefCell::new(None)),
+        namespace: namespace.to_string(),
+        identifier: identifier.to_string(),
+    })
+}
+
 pub fn atom_with_value(value: Value) -> Value {
     Value::Atom(Rc::new(RefCell::new(value)))
 }
@@ -709,10 +717,16 @@ impl fmt::Display for Value {
             FnWithCaptures(..) => write!(f, "<fn* +captures>",),
             Primitive(_) => write!(f, "<native function>"),
             Var(VarImpl {
+                data,
                 namespace,
                 identifier,
-                ..
-            }) => write!(f, "#'{}/{}", namespace, identifier),
+            }) => {
+                if data.borrow().is_some() {
+                    write!(f, "#'{}/{}", namespace, identifier)
+                } else {
+                    write!(f, "#'{}/{} (unbound)", namespace, identifier)
+                }
+            }
             Recur(elems) => write!(f, "[{}]", join(elems, " ")),
             Atom(v) => write!(f, "(atom {})", *v.borrow()),
             Macro(_) => write!(f, "<macro>"),

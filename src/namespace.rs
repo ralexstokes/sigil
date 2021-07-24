@@ -1,4 +1,4 @@
-use crate::value::{var_with_value, Value};
+use crate::value::{unbound_var, var_with_value, Value};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -48,6 +48,12 @@ impl Namespace {
                 Ok(var)
             }
         }
+    }
+
+    pub fn intern_unbound(&mut self, identifier: &str) -> Value {
+        let var = unbound_var(&self.name, identifier);
+        self.insert(identifier, &var);
+        var
     }
 
     pub fn remove(&mut self, identifier: &str) {

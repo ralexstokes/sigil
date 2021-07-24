@@ -583,6 +583,21 @@ impl Interpreter {
         Ok(result)
     }
 
+    fn intern_unbound_var(&mut self, identifier: &str) -> EvaluationResult<Value> {
+        let current_namespace = self.current_namespace().to_string();
+
+        let ns = self
+            .namespaces
+            .get_mut(&current_namespace)
+            .expect("current namespace always resolves");
+        let result = ns.intern_unbound(identifier);
+        if let Some(index) = &self.symbol_index {
+            let mut index = index.borrow_mut();
+            index.insert(identifier.to_string());
+        }
+        Ok(result)
+    }
+
     fn unintern_var(&mut self, identifier: &str) {
         let current_namespace = self.current_namespace().to_string();
 
@@ -1178,7 +1193,7 @@ impl Interpreter {
                                 Ok(v @ Value::Var(..)) => (v, true),
                                 Err(EvaluationError::Symbol(
                                     SymbolEvaluationError::MissingVar(..),
-                                )) => (self.intern_var(id, Value::Nil)?, false),
+                                )) => (self.intern_unbound_var(id)?, false),
                                 e @ Err(_) => return e,
                                 _ => unreachable!(),
                             };
@@ -1206,6 +1221,8 @@ impl Interpreter {
                                 )));
                             }
                         }
+                    } else {
+                        return self.intern_unbound_var(id);
                     }
                 }
             }
