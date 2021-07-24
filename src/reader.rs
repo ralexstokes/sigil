@@ -545,16 +545,22 @@ impl<'a> Reader<'a> {
                     other => Err(ReaderError::VarDispatchRequiresSymbol(other)),
                 }
             }
+            '_' => {
+                stream.next().expect("from peek");
+                self.read_one_form(start, stream).map_err(|err| {
+                    self.cursor = start;
+                    err
+                })?;
+
+                self.values.pop().expect("just read one form");
+                self.spans.pop().expect("just ranged one form");
+                Ok(())
+            }
             ch => Err(ReaderError::CouldNotParseDispatch(ch)),
         }
     }
 
-    fn read_macro(
-        &mut self,
-        identifier: &str,
-        start: usize,
-        stream: &mut Stream,
-    ) -> Result<(), ReaderError> {
+    fn read_one_form(&mut self, start: usize, stream: &mut Stream) -> Result<(), ReaderError> {
         self.cursor = start;
         let values_count = self.values.len();
         let previous_state = self.parse_state;
@@ -573,7 +579,16 @@ impl<'a> Reader<'a> {
             len if len < values_count => panic!("unexpectedly dropped forms during reader macro"),
             _ => {}
         }
+        Ok(())
+    }
 
+    fn read_macro(
+        &mut self,
+        identifier: &str,
+        start: usize,
+        stream: &mut Stream,
+    ) -> Result<(), ReaderError> {
+        self.read_one_form(start, stream)?;
         let form = self.values.pop().expect("just read form");
         let expansion = list_with_values(
             [Value::Symbol(identifier.to_string(), None), form]
@@ -1232,6 +1247,33 @@ mod tests {
                     list_with_values(vec![Number(1), Number(2), Number(3)]),
                 ])],
                 "(splice-unquote (1 2 3))",
+            ),
+            ("1 #_(1 2 3) 3", vec![Number(1), Number(3)], "1 3"),
+            (
+                "1 (1 2 #_[1 2 3 :keyw]) 3",
+                vec![
+                    Number(1),
+                    list_with_values([Number(1), Number(2)].iter().cloned()),
+                    Number(3),
+                ],
+                "1 (1 2) 3",
+            ),
+            (
+                "1 (1 2 #_[1 2 3 :keyw]) ,,,,,,, #_3",
+                vec![
+                    Number(1),
+                    list_with_values([Number(1), Number(2)].iter().cloned()),
+                ],
+                "1 (1 2)",
+            ),
+            (
+                "1 (1 2 #_[1 2 3 :keyw]) ,,,,,,, #_3        \n\n4",
+                vec![
+                    Number(1),
+                    list_with_values([Number(1), Number(2)].iter().cloned()),
+                    Number(4),
+                ],
+                "1 (1 2) 4",
             ),
         ];
         for (input, expected_read, expected_print) in cases {
