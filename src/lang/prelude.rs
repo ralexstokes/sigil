@@ -438,7 +438,8 @@ pub fn deref(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
     match &args[0] {
         Value::Atom(inner) => Ok(atom_impl_into_inner(inner)),
-        Value::Var(inner) => Ok(var_impl_into_inner(inner)),
+        Value::Var(var) => var_impl_into_inner(var)
+            .ok_or_else(|| EvaluationError::CannotDerefUnboundVar(Value::Var(var.clone()))),
         _ => Err(EvaluationError::List(ListEvaluationError::Failure(
             "incorrect argument".to_string(),
         ))),

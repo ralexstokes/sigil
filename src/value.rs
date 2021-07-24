@@ -32,7 +32,7 @@ pub fn set_with_values(values: impl IntoIterator<Item = Value>) -> Value {
 
 pub fn var_with_value(value: Value, namespace: &str, identifier: &str) -> Value {
     Value::Var(VarImpl {
-        inner: Rc::new(RefCell::new(value)),
+        data: Rc::new(RefCell::new(Some(value))),
         namespace: namespace.to_string(),
         identifier: identifier.to_string(),
     })
@@ -42,8 +42,8 @@ pub fn atom_with_value(value: Value) -> Value {
     Value::Atom(Rc::new(RefCell::new(value)))
 }
 
-pub fn var_impl_into_inner(var: &VarImpl) -> Value {
-    var.inner.borrow().clone()
+pub fn var_impl_into_inner(var: &VarImpl) -> Option<Value> {
+    var.data.borrow().clone()
 }
 
 pub fn atom_impl_into_inner(atom: &AtomImpl) -> Value {
@@ -147,14 +147,14 @@ impl Hash for FnWithCapturesImpl {
 
 #[derive(Clone)]
 pub struct VarImpl {
-    pub inner: Rc<RefCell<Value>>,
+    data: Rc<RefCell<Option<Value>>>,
     namespace: String,
     pub identifier: String,
 }
 
 impl VarImpl {
     pub fn update(&self, value: Value) {
-        *self.inner.borrow_mut() = value
+        *self.data.borrow_mut() = Some(value);
     }
 }
 
@@ -591,11 +591,11 @@ impl Hash for Value {
                 identifier.hash(state);
             }
             Var(VarImpl {
-                inner,
+                data,
                 namespace,
                 identifier,
             }) => {
-                (*inner.borrow()).hash(state);
+                data.borrow().hash(state);
                 namespace.hash(state);
                 identifier.hash(state);
             }
@@ -648,16 +648,15 @@ impl fmt::Debug for Value {
             FnWithCaptures(..) => write!(f, "FnWithCaptures(..)",),
             Primitive(_) => write!(f, "Primitive(..)"),
             Var(VarImpl {
+                data,
                 namespace,
                 identifier,
-                inner,
-            }) => write!(
-                f,
-                "Var({:?}/{:?}, {:?})",
-                namespace,
-                identifier,
-                inner.borrow()
-            ),
+            }) => match data.borrow().as_ref() {
+                Some(inner) => {
+                    write!(f, "Var({:?}/{:?}, {:?})", namespace, identifier, inner)
+                }
+                None => write!(f, "Var({:?}/{:?}, unbound)", namespace, identifier),
+            },
             Recur(elems) => write!(f, "Recur({:?})", elems.iter().format(" ")),
             Atom(v) => write!(f, "Atom({:?})", *v.borrow()),
             Macro(_) => write!(f, "Macro(..)"),

@@ -104,6 +104,8 @@ pub enum EvaluationError {
     WrongType { expected: String, realized: Value },
     #[error("form invoked with incorrect arity: provided {realized} arguments but expected {expected} arguments")]
     WrongArity { expected: usize, realized: usize },
+    #[error("cannot deref an unbound var `{0}`")]
+    CannotDerefUnboundVar(Value),
     #[error("symbol error: {0}")]
     Symbol(SymbolEvaluationError),
     #[error("list error: {0}")]
@@ -637,7 +639,10 @@ impl Interpreter {
     // symbol -> namespace -> var -> value
     fn resolve_symbol(&self, identifier: &str, ns_opt: Option<&String>) -> EvaluationResult<Value> {
         match self.resolve_symbol_to_var(identifier, ns_opt)? {
-            Value::Var(v) => Ok(var_impl_into_inner(&v)),
+            Value::Var(v) => match var_impl_into_inner(&v) {
+                Some(value) => Ok(value),
+                None => Ok(Value::Var(v)),
+            },
             other => Ok(other),
         }
     }
@@ -1427,7 +1432,7 @@ impl Interpreter {
     fn eval_defmacro(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         match self.eval_def(forms) {
             Ok(Value::Var(var)) => match var_impl_into_inner(&var) {
-                Value::Fn(f) => {
+                Some(Value::Fn(f)) => {
                     var.update(Value::Macro(f));
                     Ok(Value::Var(var))
                 }
@@ -1567,7 +1572,7 @@ impl Interpreter {
                 }
             }
             Value::Var(v) => {
-                if let Value::Macro(f) = var_impl_into_inner(v) {
+                if let Some(Value::Macro(f)) = var_impl_into_inner(v) {
                     Some(self.apply_macro(&f, forms))
                 } else {
                     None
@@ -1659,7 +1664,10 @@ impl Interpreter {
                 }
                 Ok(Value::Set(result))
             }
-            Value::Var(v) => Ok(var_impl_into_inner(v)),
+            Value::Var(v) => match var_impl_into_inner(v) {
+                Some(value) => Ok(value),
+                None => Ok(Value::Var(v.clone())),
+            },
             f @ Value::Fn(_) => Ok(f.clone()),
             Value::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
                 let mut captures = captures.clone();
