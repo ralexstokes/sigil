@@ -415,12 +415,10 @@ pub fn read_string(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Valu
                 let context = err.context(s);
                 EvaluationError::ReaderError(err, context.to_string())
             })?;
-            match forms.len() {
-                0 => Ok(Value::Nil),
-                1 => Ok(forms.pop().unwrap()),
-                _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-                    "`read-string` only reads one form".to_string(),
-                ))),
+            if forms.is_empty() {
+                Ok(Value::Nil)
+            } else {
+                Ok(forms.pop().unwrap())
             }
         }
         _ => Err(EvaluationError::List(ListEvaluationError::Failure(
