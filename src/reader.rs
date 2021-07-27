@@ -185,6 +185,8 @@ pub enum ReaderError {
     CouldNotParseDispatch(char),
     #[error("reader macro `#'` requires a symbol suffix but found {0} instead")]
     VarDispatchRequiresSymbol(Value),
+    #[error("internal error: {0}")]
+    Internal(&'static str),
 }
 
 #[derive(Debug)]
@@ -619,14 +621,15 @@ impl<'a> Reader<'a> {
         self.parse_state = previous_state;
 
         match self.values.len() {
-            len if len == values_count => {
-                return Err(ReaderError::ExpectedMoreInput);
-            }
-            len if len > values_count + 1 => panic!("read too many forms during reader macro"),
-            len if len < values_count => panic!("unexpectedly dropped forms during reader macro"),
-            _ => {}
+            len if len == values_count => Err(ReaderError::ExpectedMoreInput),
+            len if len > values_count + 1 => Err(ReaderError::Internal(
+                "read too many forms during reader macro",
+            )),
+            len if len < values_count => Err(ReaderError::Internal(
+                "unexpectedly dropped forms during reader macro",
+            )),
+            _ => Ok(()),
         }
-        Ok(())
     }
 
     fn read_macro(
