@@ -302,93 +302,36 @@ pub fn count(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
 }
 
-pub fn less(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 2 {
-        return Err(EvaluationError::WrongArity {
-            expected: 2,
-            realized: args.len(),
-        });
-    }
-    match &args[0] {
-        Value::Number(a) => match &args[1] {
-            Value::Number(b) => Ok(Value::Bool(a < b)),
-            other => Err(EvaluationError::WrongType {
-                expected: "Number",
-                realized: other.clone(),
-            }),
-        },
-        other => Err(EvaluationError::WrongType {
-            expected: "Number",
-            realized: other.clone(),
-        }),
-    }
+macro_rules! comparator {
+    ($name:ident, $comparison:tt) => {
+        pub fn $name(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+            if args.len() != 2 {
+                return Err(EvaluationError::WrongArity {
+                    expected: 2,
+                    realized: args.len(),
+                });
+            }
+            match &args[0] {
+                Value::Number(a) => match &args[1] {
+                    Value::Number(b) => Ok(Value::Bool(a $comparison b)),
+                    other => Err(EvaluationError::WrongType {
+                        expected: "Number",
+                        realized: other.clone(),
+                    }),
+                },
+                other => Err(EvaluationError::WrongType {
+                    expected: "Number",
+                    realized: other.clone(),
+                }),
+            }
+        }
+    };
 }
 
-pub fn less_eq(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 2 {
-        return Err(EvaluationError::WrongArity {
-            expected: 2,
-            realized: args.len(),
-        });
-    }
-    match &args[0] {
-        Value::Number(a) => match &args[1] {
-            Value::Number(b) => Ok(Value::Bool(a <= b)),
-            other => Err(EvaluationError::WrongType {
-                expected: "Number",
-                realized: other.clone(),
-            }),
-        },
-        other => Err(EvaluationError::WrongType {
-            expected: "Number",
-            realized: other.clone(),
-        }),
-    }
-}
-
-pub fn greater(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 2 {
-        return Err(EvaluationError::WrongArity {
-            expected: 2,
-            realized: args.len(),
-        });
-    }
-    match &args[0] {
-        Value::Number(a) => match &args[1] {
-            Value::Number(b) => Ok(Value::Bool(a > b)),
-            other => Err(EvaluationError::WrongType {
-                expected: "Number",
-                realized: other.clone(),
-            }),
-        },
-        other => Err(EvaluationError::WrongType {
-            expected: "Number",
-            realized: other.clone(),
-        }),
-    }
-}
-
-pub fn greater_eq(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 2 {
-        return Err(EvaluationError::WrongArity {
-            expected: 2,
-            realized: args.len(),
-        });
-    }
-    match &args[0] {
-        Value::Number(a) => match &args[1] {
-            Value::Number(b) => Ok(Value::Bool(a >= b)),
-            other => Err(EvaluationError::WrongType {
-                expected: "Number",
-                realized: other.clone(),
-            }),
-        },
-        other => Err(EvaluationError::WrongType {
-            expected: "Number",
-            realized: other.clone(),
-        }),
-    }
-}
+comparator!(less, <);
+comparator!(less_eq, <=);
+comparator!(greater, >);
+comparator!(greater_eq, >=);
 
 pub fn equal(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
