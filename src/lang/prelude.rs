@@ -1,7 +1,4 @@
-use crate::interpreter::{
-    EvaluationError, EvaluationResult, Interpreter, InterpreterError, ListEvaluationError,
-    PrimitiveEvaluationError,
-};
+use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter, InterpreterError};
 use crate::namespace::{Namespace, DEFAULT_NAME};
 use crate::reader::read;
 use crate::value::{
@@ -103,63 +100,54 @@ pub fn register(interpreter: &mut Interpreter) {
 
 pub fn plus(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     args.iter()
-        .try_fold(i64::default(), |acc, x| match *x {
-            Value::Number(n) => acc.checked_add(n).ok_or_else(|| {
-                EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
-                    "overflow detected".to_string(),
-                ))
+        .try_fold(i64::default(), |acc, x| match x {
+            Value::Number(n) => acc
+                .checked_add(*n)
+                .ok_or_else(|| EvaluationError::Overflow(acc, *n)),
+            other => Err(EvaluationError::WrongType {
+                expected: "Number",
+                realized: other.clone(),
             }),
-            _ => Err(EvaluationError::Primitive(
-                PrimitiveEvaluationError::Failure("plus only takes number arguments".to_string()),
-            )),
         })
         .map(Value::Number)
 }
 
 pub fn subtract(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     match args.len() {
-        0 => Err(EvaluationError::Primitive(
-            PrimitiveEvaluationError::Failure("subtract needs more than 0 args".to_string()),
-        )),
-        1 => match args[0] {
+        0 => Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: 0,
+        }),
+        1 => match &args[0] {
             Value::Number(first) => first
                 .checked_neg()
-                .ok_or_else(|| {
-                    EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
-                        "negation failed".to_string(),
-                    ))
-                })
+                .ok_or_else(|| EvaluationError::Negation(*first))
                 .map(Value::Number),
-            _ => Err(EvaluationError::Primitive(
-                PrimitiveEvaluationError::Failure(
-                    "negation requires an integer argument".to_string(),
-                ),
-            )),
+            other => Err(EvaluationError::WrongType {
+                expected: "Number",
+                realized: other.clone(),
+            }),
         },
         _ => {
             let first_value = &args[0];
             let rest_values = &args[1..];
-            match *first_value {
+            match first_value {
                 Value::Number(first) => rest_values
                     .iter()
-                    .try_fold(first, |acc, x| match *x {
-                        Value::Number(next) => acc.checked_sub(next).ok_or_else(|| {
-                            EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
-                                "underflow detected".to_string(),
-                            ))
+                    .try_fold(*first, |acc, x| match x {
+                        Value::Number(next) => acc
+                            .checked_sub(*next)
+                            .ok_or_else(|| EvaluationError::Underflow(acc, *next)),
+                        other => Err(EvaluationError::WrongType {
+                            expected: "Number",
+                            realized: other.clone(),
                         }),
-                        _ => Err(EvaluationError::Primitive(
-                            PrimitiveEvaluationError::Failure(
-                                "subtract only takes number arguments".to_string(),
-                            ),
-                        )),
                     })
                     .map(Value::Number),
-                _ => Err(EvaluationError::Primitive(
-                    PrimitiveEvaluationError::Failure(
-                        "subtract only takes number arguments".to_string(),
-                    ),
-                )),
+                other => Err(EvaluationError::WrongType {
+                    expected: "Number",
+                    realized: other.clone(),
+                }),
             }
         }
     }
@@ -167,63 +155,54 @@ pub fn subtract(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> 
 
 pub fn multiply(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     args.iter()
-        .try_fold(1_i64, |acc, x| match *x {
-            Value::Number(n) => acc.checked_mul(n).ok_or_else(|| {
-                EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
-                    "overflow detected".to_string(),
-                ))
+        .try_fold(1_i64, |acc, x| match x {
+            Value::Number(n) => acc
+                .checked_mul(*n)
+                .ok_or_else(|| EvaluationError::Overflow(acc, *n)),
+            other => Err(EvaluationError::WrongType {
+                expected: "Number",
+                realized: other.clone(),
             }),
-            _ => Err(EvaluationError::Primitive(
-                PrimitiveEvaluationError::Failure(
-                    "multiply only takes number arguments".to_string(),
-                ),
-            )),
         })
         .map(Value::Number)
 }
 
 pub fn divide(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     match args.len() {
-        0 => Err(EvaluationError::Primitive(
-            PrimitiveEvaluationError::Failure("divide needs more than 0 args".to_string()),
-        )),
-        1 => match args[0] {
+        0 => Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: 0,
+        }),
+        1 => match &args[0] {
             Value::Number(first) => 1_i64
-                .checked_div_euclid(first)
-                .ok_or_else(|| {
-                    EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
-                        "overflow detected".to_string(),
-                    ))
-                })
+                .checked_div_euclid(*first)
+                .ok_or_else(|| EvaluationError::Underflow(1, *first))
                 .map(Value::Number),
-            _ => Err(EvaluationError::Primitive(
-                PrimitiveEvaluationError::Failure("divide requires number arguments".to_string()),
-            )),
+            other => Err(EvaluationError::WrongType {
+                expected: "Number",
+                realized: other.clone(),
+            }),
         },
         _ => {
             let first_value = &args[0];
             let rest_values = &args[1..];
-            match *first_value {
+            match first_value {
                 Value::Number(first) => rest_values
                     .iter()
-                    .try_fold(first, |acc, x| match *x {
-                        Value::Number(next) => acc.checked_div_euclid(next).ok_or_else(|| {
-                            EvaluationError::Primitive(PrimitiveEvaluationError::Failure(
-                                "overflow detected".to_string(),
-                            ))
+                    .try_fold(*first, |acc, x| match x {
+                        Value::Number(next) => acc
+                            .checked_div_euclid(*next)
+                            .ok_or_else(|| EvaluationError::Underflow(acc, *next)),
+                        other => Err(EvaluationError::WrongType {
+                            expected: "Number",
+                            realized: other.clone(),
                         }),
-                        _ => Err(EvaluationError::Primitive(
-                            PrimitiveEvaluationError::Failure(
-                                "divide only takes number arguments".to_string(),
-                            ),
-                        )),
                     })
                     .map(Value::Number),
-                _ => Err(EvaluationError::Primitive(
-                    PrimitiveEvaluationError::Failure(
-                        "divide only takes number arguments".to_string(),
-                    ),
-                )),
+                other => Err(EvaluationError::WrongType {
+                    expected: "Number",
+                    realized: other.clone(),
+                }),
             }
         }
     }
@@ -270,9 +249,10 @@ pub fn list(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 
 pub fn is_list(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match args[0] {
         Value::List(_) => Ok(Value::Bool(true)),
@@ -282,9 +262,10 @@ pub fn is_list(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 
 pub fn is_empty(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::Nil => Ok(Value::Bool(true)),
@@ -293,17 +274,19 @@ pub fn is_empty(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> 
         Value::Vector(elems) => Ok(Value::Bool(elems.is_empty())),
         Value::Map(elems) => Ok(Value::Bool(elems.is_empty())),
         Value::Set(elems) => Ok(Value::Bool(elems.is_empty())),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Nil, String, List, Vector, Map, Set",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn count(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::Nil => Ok(Value::Number(0)),
@@ -312,102 +295,117 @@ pub fn count(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         Value::Vector(elems) => Ok(Value::Number(elems.len() as i64)),
         Value::Map(elems) => Ok(Value::Number(elems.size() as i64)),
         Value::Set(elems) => Ok(Value::Number(elems.size() as i64)),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Nil, String, List, Vector, Map, Set",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn less(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::Number(a) => match &args[1] {
             Value::Number(b) => Ok(Value::Bool(a < b)),
-            _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            ))),
+            other => Err(EvaluationError::WrongType {
+                expected: "Number",
+                realized: other.clone(),
+            }),
         },
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Number",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn less_eq(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::Number(a) => match &args[1] {
             Value::Number(b) => Ok(Value::Bool(a <= b)),
-            _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            ))),
+            other => Err(EvaluationError::WrongType {
+                expected: "Number",
+                realized: other.clone(),
+            }),
         },
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Number",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn greater(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::Number(a) => match &args[1] {
             Value::Number(b) => Ok(Value::Bool(a > b)),
-            _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            ))),
+            other => Err(EvaluationError::WrongType {
+                expected: "Number",
+                realized: other.clone(),
+            }),
         },
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Number",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn greater_eq(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::Number(a) => match &args[1] {
             Value::Number(b) => Ok(Value::Bool(a >= b)),
-            _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            ))),
+            other => Err(EvaluationError::WrongType {
+                expected: "Number",
+                realized: other.clone(),
+            }),
         },
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Number",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn equal(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     Ok(Value::Bool(args[0] == args[1]))
 }
 
 pub fn read_string(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::String(s) => {
@@ -421,17 +419,19 @@ pub fn read_string(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Valu
                 Ok(forms.pop().unwrap())
             }
         }
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "String",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn spit(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::String(path) => {
@@ -440,34 +440,38 @@ pub fn spit(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             let _ = fs::write(path, contents).unwrap();
             Ok(Value::Nil)
         }
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "String",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn slurp(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::String(path) => {
             let contents = fs::read_to_string(path).unwrap();
             Ok(Value::String(contents))
         }
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "String",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn eval(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
 
     interpreter.evaluate_in_global_scope(&args[0])
@@ -491,18 +495,20 @@ pub fn to_str(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 
 pub fn to_atom(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     Ok(atom_with_value(args[0].clone()))
 }
 
 pub fn is_atom(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match args[0] {
         Value::Atom(_) => Ok(Value::Bool(true)),
@@ -512,25 +518,28 @@ pub fn is_atom(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 
 pub fn deref(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::Atom(inner) => Ok(atom_impl_into_inner(inner)),
         Value::Var(var) => var_impl_into_inner(var)
             .ok_or_else(|| EvaluationError::CannotDerefUnboundVar(Value::Var(var.clone()))),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Atom, Var",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn reset_atom(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::Atom(inner) => {
@@ -538,17 +547,19 @@ pub fn reset_atom(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value
             *inner.borrow_mut() = value.clone();
             Ok(value)
         }
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Atom",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn swap_atom(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() < 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::Atom(cell) => match &args[1] {
@@ -570,7 +581,7 @@ pub fn swap_atom(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationRes
                     *arity,
                     *level,
                     *variadic,
-                    fn_args,
+                    &fn_args,
                     should_evaluate,
                 )?;
                 *inner = new_value.clone();
@@ -599,7 +610,7 @@ pub fn swap_atom(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationRes
                     *arity,
                     *level,
                     *variadic,
-                    fn_args,
+                    &fn_args,
                     should_evaluate,
                 );
                 interpreter.leave_scope();
@@ -617,21 +628,24 @@ pub fn swap_atom(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationRes
                 *inner = new_value.clone();
                 Ok(new_value)
             }
-            _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            ))),
+            other => Err(EvaluationError::WrongType {
+                expected: "Fn, FnWithCaptures, Primitive",
+                realized: other.clone(),
+            }),
         },
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Atom",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn cons(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     match &args[1] {
         Value::List(seq) => Ok(Value::List(seq.push_front(args[0].clone()))),
@@ -643,9 +657,10 @@ pub fn cons(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             inner.push_front_mut(args[0].clone());
             Ok(Value::List(inner))
         }
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "List, Vector",
+            realized: other.clone(),
+        }),
     }
 }
 
@@ -655,10 +670,11 @@ pub fn concat(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         match arg {
             Value::List(seq) => elems.extend(seq.iter().cloned()),
             Value::Vector(seq) => elems.extend(seq.iter().cloned()),
-            _ => {
-                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                    "incorrect argument".to_string(),
-                )));
+            other => {
+                return Err(EvaluationError::WrongType {
+                    expected: "List, Vector",
+                    realized: other.clone(),
+                });
             }
         }
     }
@@ -667,61 +683,62 @@ pub fn concat(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 
 pub fn vec(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::List(elems) => Ok(vector_with_values(elems.iter().cloned())),
         Value::Vector(elems) => Ok(vector_with_values(elems.iter().cloned())),
         Value::Nil => Ok(vector_with_values([].iter().cloned())),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "List, Vector, Nil",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn nth(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
-    match args[1] {
-        Value::Number(index) if index >= 0 => match &args[0] {
-            Value::List(seq) => seq
-                .iter()
-                .nth(index as usize)
-                .ok_or_else(|| {
-                    EvaluationError::List(ListEvaluationError::Failure(
-                        "collection does not have an element at this index".to_string(),
-                    ))
-                })
-                .map(|elem| elem.clone()),
-            Value::Vector(seq) => seq
-                .iter()
-                .nth(index as usize)
-                .ok_or_else(|| {
-                    EvaluationError::List(ListEvaluationError::Failure(
-                        "collection does not have an element at this index".to_string(),
-                    ))
-                })
-                .map(|elem| elem.clone()),
-            _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            ))),
-        },
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+    match &args[1] {
+        Value::Number(index) if *index >= 0 => {
+            let index = *index as usize;
+            match &args[0] {
+                Value::List(seq) => seq
+                    .iter()
+                    .nth(index)
+                    .ok_or_else(|| EvaluationError::IndexOutOfBounds(index, seq.len()))
+                    .map(|elem| elem.clone()),
+                Value::Vector(seq) => seq
+                    .iter()
+                    .nth(index)
+                    .ok_or_else(|| EvaluationError::IndexOutOfBounds(index, seq.len()))
+                    .map(|elem| elem.clone()),
+                other => Err(EvaluationError::WrongType {
+                    expected: "List, Vector",
+                    realized: other.clone(),
+                }),
+            }
+        }
+        other => Err(EvaluationError::WrongType {
+            expected: "Number",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn first(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::List(elems) => {
@@ -739,17 +756,19 @@ pub fn first(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             }
         }
         Value::Nil => Ok(Value::Nil),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "List, Vector, Nil",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn rest(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::List(elems) => {
@@ -767,31 +786,35 @@ pub fn rest(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             Ok(Value::List(result))
         }
         Value::Nil => Ok(Value::List(PersistentList::new())),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "List, Vector, Nil",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn ex_info(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::String(msg) => Ok(exception(msg, &args[1])),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "String",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn throw(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     let exc = match &args[0] {
         n @ Value::Nil => exception("", n),
@@ -805,10 +828,11 @@ pub fn throw(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         coll @ Value::Map(_) => exception("", coll),
         coll @ Value::Set(_) => exception("", coll),
         e @ Value::Exception(_) => e.clone(),
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )))
+        other => {
+            return Err(EvaluationError::WrongType {
+                expected: "...",
+                realized: other.clone(),
+            })
         }
     };
     Ok(exception_into_thrown(&exc))
@@ -816,9 +840,10 @@ pub fn throw(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 
 pub fn apply(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() < 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     let (last, prefix) = args.split_last().expect("has enough elements");
     let (first, middle) = prefix.split_first().expect("has enough elements");
@@ -837,13 +862,14 @@ pub fn apply(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<
             }
             fn_args
         }
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )))
+        other => {
+            return Err(EvaluationError::WrongType {
+                expected: "List, Vector",
+                realized: other.clone(),
+            })
         }
     };
-    match &first {
+    match first {
         Value::Fn(FnImpl {
             body,
             arity,
@@ -851,7 +877,7 @@ pub fn apply(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<
             variadic,
         }) => {
             let fn_args = PersistentList::from_iter(fn_args);
-            interpreter.apply_fn_inner(body, *arity, *level, *variadic, fn_args, false)
+            interpreter.apply_fn_inner(body, *arity, *level, *variadic, &fn_args, false)
         }
         Value::FnWithCaptures(FnWithCapturesImpl {
             f:
@@ -866,30 +892,33 @@ pub fn apply(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<
             interpreter.extend_from_captures(captures)?;
             let fn_args = PersistentList::from_iter(fn_args);
             let result =
-                interpreter.apply_fn_inner(body, *arity, *level, *variadic, fn_args, false);
+                interpreter.apply_fn_inner(body, *arity, *level, *variadic, &fn_args, false);
             interpreter.leave_scope();
             result
         }
         Value::Primitive(native_fn) => native_fn(interpreter, &fn_args),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Fn, FnWithCaptures, Primitive",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     let fn_args: Vec<_> = match &args[1] {
         Value::List(elems) => elems.iter().collect(),
         Value::Vector(elems) => elems.iter().collect(),
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )));
+        other => {
+            return Err(EvaluationError::WrongType {
+                expected: "List, Vector",
+                realized: other.clone(),
+            })
         }
     };
     // Note: args should already be evaluated so can skip here...
@@ -910,7 +939,7 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
                     *arity,
                     *level,
                     *variadic,
-                    wrapped_arg,
+                    &wrapped_arg,
                     should_evaluate,
                 )?;
                 result.push_front_mut(mapped_arg);
@@ -935,7 +964,7 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
                     *arity,
                     *level,
                     *variadic,
-                    wrapped_arg,
+                    &wrapped_arg,
                     should_evaluate,
                 )?;
                 result.push_front_mut(mapped_arg);
@@ -950,7 +979,7 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
         }
         other => {
             return Err(EvaluationError::WrongType {
-                expected: "Fn, FnWithCaptures, Primitive".to_string(),
+                expected: "Fn, FnWithCaptures, Primitive",
                 realized: other.clone(),
             });
         }
@@ -958,92 +987,70 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
     Ok(Value::List(result))
 }
 
-pub fn is_nil(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
-    }
-    match &args[0] {
-        Value::Nil => Ok(Value::Bool(true)),
-        _ => Ok(Value::Bool(false)),
-    }
+macro_rules! is_type {
+    ($name:ident, $($target_type:pat) |*) => {
+        pub fn $name(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
+            if args.len() != 1 {
+                return Err(EvaluationError::WrongArity {
+                    expected: 1,
+                    realized: args.len(),
+                });
+            }
+            match &args[0] {
+                $($target_type) |* => Ok(Value::Bool(true)),
+                _ => Ok(Value::Bool(false)),
+            }
+        }
+    };
 }
 
-pub fn is_true(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
-    }
-    match &args[0] {
-        Value::Bool(true) => Ok(Value::Bool(true)),
-        _ => Ok(Value::Bool(false)),
-    }
-}
-
-pub fn is_false(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
-    }
-    match &args[0] {
-        Value::Bool(false) => Ok(Value::Bool(true)),
-        _ => Ok(Value::Bool(false)),
-    }
-}
-
-pub fn is_symbol(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
-    }
-    match &args[0] {
-        Value::Symbol(..) => Ok(Value::Bool(true)),
-        _ => Ok(Value::Bool(false)),
-    }
-}
+is_type!(is_nil, Value::Nil);
+is_type!(is_true, Value::Bool(true));
+is_type!(is_false, Value::Bool(false));
+is_type!(is_symbol, Value::Symbol(..));
+is_type!(is_keyword, Value::Keyword(..));
+is_type!(is_vector, Value::Vector(..));
+is_type!(is_sequential, Value::List(..) | Value::Vector(..));
+is_type!(is_map, Value::Map(..));
+is_type!(is_set, Value::Set(..));
+is_type!(is_string, Value::String(..));
+is_type!(is_number, Value::Number(..));
+is_type!(
+    is_fn,
+    Value::Fn(..) | Value::FnWithCaptures(..) | Value::Primitive(..) | Value::Macro(..)
+);
+is_type!(is_macro, Value::Macro(..));
 
 pub fn to_symbol(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::String(name) => Ok(Value::Symbol(name.clone(), None)),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "String",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn to_keyword(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::String(name) => Ok(Value::Keyword(name.clone(), None)),
         k @ Value::Keyword(..) => Ok(k.clone()),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
-    }
-}
-
-pub fn is_keyword(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
-    }
-    match &args[0] {
-        Value::Keyword(..) => Ok(Value::Bool(true)),
-        _ => Ok(Value::Bool(false)),
+        other => Err(EvaluationError::WrongType {
+            expected: "String, Keyword",
+            realized: other.clone(),
+        }),
     }
 }
 
@@ -1051,56 +1058,22 @@ pub fn to_vector(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value>
     Ok(vector_with_values(args.iter().cloned()))
 }
 
-pub fn is_vector(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
-    }
-    match &args[0] {
-        Value::Vector(..) => Ok(Value::Bool(true)),
-        _ => Ok(Value::Bool(false)),
-    }
-}
-
-pub fn is_sequential(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
-    }
-    match &args[0] {
-        Value::List(..) | Value::Vector(..) => Ok(Value::Bool(true)),
-        _ => Ok(Value::Bool(false)),
-    }
-}
-
 pub fn to_map(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() % 2 != 0 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "map needs an even number of arguments".to_string(),
-        )));
+        return Err(EvaluationError::MapRequiresPairs(
+            vector_with_values(args.iter().cloned()),
+            args.len(),
+        ));
     }
     Ok(map_with_values(args.iter().cloned().tuples()))
 }
 
-pub fn is_map(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
-    }
-    match &args[0] {
-        Value::Map(..) => Ok(Value::Bool(true)),
-        _ => Ok(Value::Bool(false)),
-    }
-}
-
 pub fn to_set(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::Nil => Ok(Value::Set(PersistentSet::new())),
@@ -1116,34 +1089,25 @@ pub fn to_set(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             Value::Vector(inner)
         }))),
         s @ Value::Set(..) => Ok(s.clone()),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
-    }
-}
-
-pub fn is_set(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
-    }
-    match &args[0] {
-        Value::Set(..) => Ok(Value::Bool(true)),
-        _ => Ok(Value::Bool(false)),
+        other => Err(EvaluationError::WrongType {
+            expected: "Nil, String, List, Vector, Map, Set",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn assoc(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() < 3 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 3,
+            realized: args.len(),
+        });
     }
     if (args.len() - 1) % 2 != 0 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "assoc needs keys and values to pair".to_string(),
-        )));
+        return Err(EvaluationError::MapRequiresPairs(
+            vector_with_values(args.iter().cloned()),
+            args.len(),
+        ));
     }
     match &args[0] {
         Value::Map(map) => {
@@ -1153,17 +1117,19 @@ pub fn assoc(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             }
             Ok(Value::Map(result))
         }
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Map",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn dissoc(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.is_empty() {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::Map(map) => {
@@ -1173,17 +1139,19 @@ pub fn dissoc(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             }
             Ok(Value::Map(result))
         }
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Map",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn get(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::Nil => Ok(Value::Nil),
@@ -1195,36 +1163,42 @@ pub fn get(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             };
             Ok(result)
         }
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Nil, Map",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn does_contain(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     match &args[0] {
+        Value::Nil => Ok(Value::Bool(false)),
         Value::Map(map) => {
             let contains = map.contains_key(&args[1]);
             Ok(Value::Bool(contains))
         }
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Nil, Map",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn to_keys(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     let result = match &args[0] {
+        Value::Nil => Value::Nil,
         Value::Map(map) => {
             if map.is_empty() {
                 Value::Nil
@@ -1232,10 +1206,11 @@ pub fn to_keys(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
                 list_with_values(map.keys().cloned())
             }
         }
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )))
+        other => {
+            return Err(EvaluationError::WrongType {
+                expected: "Nil, Map",
+                realized: other.clone(),
+            })
         }
     };
     Ok(result)
@@ -1243,11 +1218,13 @@ pub fn to_keys(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 
 pub fn to_vals(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     let result = match &args[0] {
+        Value::Nil => Value::Nil,
         Value::Map(map) => {
             if map.is_empty() {
                 Value::Nil
@@ -1255,10 +1232,11 @@ pub fn to_vals(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
                 list_with_values(map.values().cloned())
             }
         }
-        _ => {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "incorrect argument".to_string(),
-            )))
+        other => {
+            return Err(EvaluationError::WrongType {
+                expected: "Nil, Map",
+                realized: other.clone(),
+            })
         }
     };
     Ok(result)
@@ -1266,11 +1244,13 @@ pub fn to_vals(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 
 pub fn last(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
+        Value::Nil => Ok(Value::Nil),
         Value::List(elems) => {
             if let Some(elem) = elems.last() {
                 Ok(elem.clone())
@@ -1285,56 +1265,19 @@ pub fn last(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
                 Ok(Value::Nil)
             }
         }
-        Value::Nil => Ok(Value::Nil),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
-    }
-}
-
-pub fn is_string(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
-    }
-    match &args[0] {
-        Value::String(..) => Ok(Value::Bool(true)),
-        _ => Ok(Value::Bool(false)),
-    }
-}
-
-pub fn is_number(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
-    }
-    match &args[0] {
-        Value::Number(..) => Ok(Value::Bool(true)),
-        _ => Ok(Value::Bool(false)),
-    }
-}
-
-pub fn is_fn(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
-    }
-    match &args[0] {
-        Value::Fn(..) | Value::FnWithCaptures(..) | Value::Primitive(..) | Value::Macro(..) => {
-            Ok(Value::Bool(true))
-        }
-        _ => Ok(Value::Bool(false)),
+        other => Err(EvaluationError::WrongType {
+            expected: "Nil, List, Vector",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn conj(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() < 2 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 2,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::Nil => Ok(list_with_values(args[1..].iter().cloned())),
@@ -1366,10 +1309,11 @@ pub fn conj(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
                             inner.insert_mut(k.clone(), v.clone());
                         }
                     }
-                    _ => {
-                        return Err(EvaluationError::List(ListEvaluationError::Failure(
-                            "incorrect argument".to_string(),
-                        )))
+                    other => {
+                        return Err(EvaluationError::WrongType {
+                            expected: "Vector, Map",
+                            realized: other.clone(),
+                        })
                     }
                 }
             }
@@ -1382,29 +1326,19 @@ pub fn conj(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             }
             Ok(Value::Set(inner))
         }
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
-    }
-}
-
-pub fn is_macro(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
-    if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
-    }
-    match &args[0] {
-        Value::Macro(..) => Ok(Value::Bool(true)),
-        _ => Ok(Value::Bool(false)),
+        other => Err(EvaluationError::WrongType {
+            expected: "Nil, List, Vector, Map, Set",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn time_in_millis(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if !args.is_empty() {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 0,
+            realized: args.len(),
+        });
     }
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1414,9 +1348,10 @@ pub fn time_in_millis(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<V
 
 pub fn to_seq(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::Nil => Ok(Value::Nil),
@@ -1437,17 +1372,19 @@ pub fn to_seq(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         }))),
         Value::Set(coll) if coll.is_empty() => Ok(Value::Nil),
         Value::Set(coll) => Ok(list_with_values(coll.iter().cloned())),
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "Nil, String, List, Vector, Map, Set",
+            realized: other.clone(),
+        }),
     }
 }
 
 pub fn readline(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
-        return Err(EvaluationError::List(ListEvaluationError::Failure(
-            "wrong arity".to_string(),
-        )));
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
     }
     match &args[0] {
         Value::String(s) => {
@@ -1479,9 +1416,10 @@ pub fn readline(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> 
                 Ok(Value::String(input))
             }
         }
-        _ => Err(EvaluationError::List(ListEvaluationError::Failure(
-            "incorrect argument".to_string(),
-        ))),
+        other => Err(EvaluationError::WrongType {
+            expected: "String",
+            realized: other.clone(),
+        }),
     }
 }
 
@@ -1503,7 +1441,7 @@ pub fn is_zero(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     match &args[0] {
         Value::Number(n) => Ok(Value::Bool(*n == 0)),
         other => Err(EvaluationError::WrongType {
-            expected: "Number".to_string(),
+            expected: "Number",
             realized: other.clone(),
         }),
     }
@@ -2045,9 +1983,13 @@ mod tests {
             ("(contains? {:a 1} :b)", Bool(false)),
             ("(contains? {:a 1} :a)", Bool(true)),
             ("(contains? {:abc nil} :abc)", Bool(true)),
+            ("(contains? nil :abc)", Bool(false)),
+            ("(contains? nil 'abc)", Bool(false)),
+            ("(contains? nil [1 2 3])", Bool(false)),
             ("(keyword? (nth (keys {:abc 123 :def 456}) 0))", Bool(true)),
             ("(keyword? (nth (vals {123 :abc 456 :def}) 0))", Bool(true)),
             ("(keys {})", Nil),
+            ("(keys nil)", Nil),
             (
                 "(= (set '(:a :b :c)) (set (keys {:a 1 :b 2 :c 3})))",
                 Bool(true),
@@ -2057,6 +1999,7 @@ mod tests {
                 Bool(false),
             ),
             ("(vals {})", Nil),
+            ("(vals nil)", Nil),
             (
                 "(= (set '(1 2 3)) (set (vals {:a 1 :b 2 :c 3})))",
                 Bool(true),

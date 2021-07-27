@@ -2,9 +2,9 @@ use crate::lang::{prelude, CORE_SOURCE};
 use crate::namespace::{Namespace, NamespaceError, DEFAULT_NAME as DEFAULT_NAMESPACE};
 use crate::reader::{read, ReadError};
 use crate::value::{
-    exception_from_thrown, exception_is_thrown, list_with_values, var_impl_into_inner,
-    var_with_value, FnImpl, FnWithCapturesImpl, NativeFn, PersistentList, PersistentMap,
-    PersistentSet, PersistentVector, Value,
+    exception_from_thrown, exception_is_thrown, list_with_values, unbound_var, var_impl_into_inner,
+    FnImpl, FnWithCapturesImpl, NativeFn, PersistentList, PersistentMap, PersistentSet,
+    PersistentVector, Value,
 };
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
@@ -44,32 +44,6 @@ const SPECIAL_FORMS: &[&str] = &[
 ];
 
 #[derive(Debug, Error)]
-pub enum SymbolEvaluationError {
-    #[error("var `{0}` not found in namespace `{1}`")]
-    MissingVar(String, String),
-    #[error("symbol {0} could not be resolved")]
-    UnableToResolveSymbolToValue(String),
-}
-
-#[derive(Debug, Error)]
-pub enum ListEvaluationError {
-    #[error("cannot invoke the supplied value {0}")]
-    CannotInvoke(Value),
-    #[error("some failure: {0}")]
-    Failure(String),
-    #[error("error evaluating quasiquote: {0}")]
-    QuasiquoteError(String),
-    #[error("missing value for captured symbol `{0}`")]
-    MissingCapturedValue(String),
-}
-
-#[derive(Debug, Error)]
-pub enum PrimitiveEvaluationError {
-    #[error("something failed {0}")]
-    Failure(String),
-}
-
-#[derive(Debug, Error)]
 pub enum InterpreterError {
     #[error("requested the {0}th command line arg but only {1} supplied")]
     MissingCommandLineArg(usize, usize),
@@ -83,34 +57,55 @@ pub enum InterpreterError {
 
 #[derive(Debug, Error)]
 pub enum SyntaxError {
-    #[error("bindings in `let` form must be pairs of names and values")]
-    BindingsInLetMustBePaired(PersistentVector<Value>),
     #[error("expected further forms when parsing data")]
     MissingForms,
-    #[error("expected vector of lexical bindings instead of {0}")]
+    #[error("lexical bindings must be pairs of names and values but found unpaired set `{0}`")]
+    LexicalBindingsMustBePaired(PersistentVector<Value>),
+    #[error("expected vector of lexical bindings instead of `{0}`")]
     LexicalBindingsMustBeVector(Value),
-    #[error("names in `let` form must not be namespaced like {0}")]
-    NamesInLetMustNotBeNamespaced(Value),
-    #[error("names in `let` form must be symbols unlike {0}")]
-    NamesInLetMustBeSymbols(Value),
+    #[error("names in form must be non-namespaced symbols unlike `{0}`")]
+    LexicalBindingsMustHaveSymbolNames(Value),
+    #[error("missing argument for variadic binding")]
+    VariadicArgMissing,
+    #[error("found multiple variadic arguments in `{0}`; only one is allowed.")]
+    VariadicArgMustBeUnique(Value),
 }
 
 #[derive(Debug, Error)]
 pub enum EvaluationError {
     #[error("form invoked with an argument of the incorrect type: expected a value of type(s) `{expected}` but found value `{realized}`")]
-    WrongType { expected: String, realized: Value },
+    WrongType {
+        expected: &'static str,
+        realized: Value,
+    },
     #[error("form invoked with incorrect arity: provided {realized} arguments but expected {expected} arguments")]
     WrongArity { expected: usize, realized: usize },
+    #[error("var `{0}` not found in namespace `{1}`")]
+    MissingVar(String, String),
+    #[error("symbol `{0}` could not be resolved")]
+    UnableToResolveSymbolToValue(String),
+    #[error("cannot invoke the supplied value `{0}`")]
+    CannotInvoke(Value),
+    #[error("some failure: {0}")]
+    Failure(String),
+    #[error("error evaluating quasiquote: `{0}`")]
+    QuasiquoteError(String),
+    #[error("missing value for captured symbol `{0}`")]
+    MissingCapturedValue(String),
     #[error("cannot deref an unbound var `{0}`")]
     CannotDerefUnboundVar(Value),
-    #[error("symbol error: {0}")]
-    Symbol(SymbolEvaluationError),
-    #[error("list error: {0}")]
-    List(ListEvaluationError),
+    #[error("overflow detected when adding {0} and {1}")]
+    Overflow(i64, i64),
+    #[error("could not negate {0}")]
+    Negation(i64),
+    #[error("overflow detected when subtracting {0} and {1}")]
+    Underflow(i64, i64),
+    #[error("requested index {0} in collection with length {1}")]
+    IndexOutOfBounds(usize, usize),
+    #[error("map cannot be constructed with an odd number of arguments: `{0}` with length `{1}`")]
+    MapRequiresPairs(Value, usize),
     #[error("syntax error: {0}")]
     Syntax(#[from] SyntaxError),
-    #[error("primitive error: {0}")]
-    Primitive(PrimitiveEvaluationError),
     #[error("interpreter error: {0}")]
     Interpreter(#[from] InterpreterError),
     #[error("namespace error: {0}")]
@@ -175,11 +170,10 @@ fn eval_quasiquote_list_inner<'a>(
                                     ]);
                                 }
                             } else {
-                                return Err(EvaluationError::List(
-                                    ListEvaluationError::QuasiquoteError(
-                                        "type error to `splice-unquote`".to_string(),
-                                    ),
-                                ));
+                                return Err(EvaluationError::WrongArity {
+                                    expected: 1,
+                                    realized: 0,
+                                });
                             }
                         }
                         _ => {
@@ -219,9 +213,10 @@ fn eval_quasiquote_list(elems: &PersistentList<Value>) -> EvaluationResult<Value
                         return Ok(argument.clone());
                     }
                 }
-                return Err(EvaluationError::List(ListEvaluationError::QuasiquoteError(
-                    "type error to `unquote`".to_string(),
-                )));
+                return Err(EvaluationError::WrongArity {
+                    realized: 0,
+                    expected: 1,
+                });
             }
             _ => return eval_quasiquote_list_inner(elems.reverse().iter()),
         }
@@ -351,11 +346,11 @@ fn parse_let_bindings(bindings_form: &Value) -> EvaluationResult<LetBindings> {
                         Value::Symbol(s, None) => {
                             validated_bindings.push((s, value_form));
                         }
-                        s @ Value::Symbol(_, Some(_)) => {
-                            return Err(SyntaxError::NamesInLetMustNotBeNamespaced(s.clone()).into())
-                        }
                         other => {
-                            return Err(SyntaxError::NamesInLetMustBeSymbols(other.clone()).into());
+                            return Err(SyntaxError::LexicalBindingsMustHaveSymbolNames(
+                                other.clone(),
+                            )
+                            .into());
                         }
                     }
                 }
@@ -363,7 +358,7 @@ fn parse_let_bindings(bindings_form: &Value) -> EvaluationResult<LetBindings> {
                     bindings: validated_bindings,
                 })
             } else {
-                Err(SyntaxError::BindingsInLetMustBePaired(bindings.clone()).into())
+                Err(SyntaxError::LexicalBindingsMustBePaired(bindings.clone()).into())
             }
         }
         other => Err(SyntaxError::LexicalBindingsMustBeVector(other.clone()).into()),
@@ -386,33 +381,27 @@ fn analyze_let(let_forms: &PersistentList<Value>) -> EvaluationResult<LetForm> {
     Ok(let_form)
 }
 
-fn get_args(forms: &PersistentList<Value>) -> EvaluationResult<PersistentList<Value>> {
-    forms.drop_first().ok_or(EvaluationError::WrongArity {
-        expected: 1,
-        realized: 0,
-    })
-}
-
-fn do_to_exactly_one_arg<A>(forms: &PersistentList<Value>, mut action: A) -> EvaluationResult<Value>
+fn do_to_exactly_one_arg<A>(
+    operand_forms: PersistentList<Value>,
+    mut action: A,
+) -> EvaluationResult<Value>
 where
     A: FnMut(&Value) -> EvaluationResult<Value>,
 {
-    let args = get_args(forms)?;
-    let arg_count = args.len();
-    if arg_count != 1 {
+    if operand_forms.len() != 1 {
         return Err(EvaluationError::WrongArity {
             expected: 1,
-            realized: arg_count,
+            realized: operand_forms.len(),
         });
     }
-    let arg = args.first().unwrap();
+    let arg = operand_forms.first().unwrap();
     action(arg)
 }
 
 fn evaluate_from_string(interpreter: &mut Interpreter, source: &str) {
     let forms = read(source).expect("source is well-defined");
     for form in &forms {
-        let _ = interpreter.evaluate(form).expect("source is well-formed");
+        interpreter.evaluate(form).expect("source is well-formed");
     }
 }
 
@@ -424,9 +413,7 @@ fn update_captures(
         if value.is_none() {
             let captured_value = resolve_symbol_in_scopes(scopes.iter().rev(), capture)
                 .ok_or_else(|| {
-                    EvaluationError::Symbol(SymbolEvaluationError::UnableToResolveSymbolToValue(
-                        capture.to_string(),
-                    ))
+                    EvaluationError::UnableToResolveSymbolToValue(capture.to_string())
                 })?;
             *value = Some(captured_value.clone());
         }
@@ -622,10 +609,7 @@ impl Interpreter {
             })
             .and_then(|ns| {
                 ns.get(identifier).cloned().ok_or_else(|| {
-                    EvaluationError::Symbol(SymbolEvaluationError::MissingVar(
-                        identifier.to_string(),
-                        ns_desc.to_string(),
-                    ))
+                    EvaluationError::MissingVar(identifier.to_string(), ns_desc.to_string())
                 })
             })
     }
@@ -691,9 +675,9 @@ impl Interpreter {
                 analyzed_elems.push(Value::Symbol(s.to_string(), None));
                 if let Some(Value::Vector(bindings)) = iter.next() {
                     if bindings.len() % 2 != 0 {
-                        return Err(EvaluationError::List(ListEvaluationError::Failure(
-                            "could not analyze `let*`".to_string(),
-                        )));
+                        return Err(
+                            SyntaxError::LexicalBindingsMustBePaired(bindings.clone()).into()
+                        );
                     }
                     let mut scope = Scope::new();
                     let mut analyzed_bindings = PersistentVector::new();
@@ -702,10 +686,11 @@ impl Interpreter {
                             Value::Symbol(s, None) => {
                                 scope.insert(s.clone(), Value::Symbol(s.clone(), None));
                             }
-                            _ => {
-                                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                                    "could not analyze `let*`".to_string(),
-                                )));
+                            other => {
+                                return Err(SyntaxError::LexicalBindingsMustHaveSymbolNames(
+                                    other.clone(),
+                                )
+                                .into());
                             }
                         }
                     }
@@ -723,9 +708,9 @@ impl Interpreter {
                 analyzed_elems.push(Value::Symbol(s.to_string(), None));
                 if let Some(Value::Vector(bindings)) = iter.next() {
                     if bindings.len() % 2 != 0 {
-                        return Err(EvaluationError::List(ListEvaluationError::Failure(
-                            "could not analyze `loop*`".to_string(),
-                        )));
+                        return Err(
+                            SyntaxError::LexicalBindingsMustBePaired(bindings.clone()).into()
+                        );
                     }
                     let mut scope = Scope::new();
                     let mut analyzed_bindings = PersistentVector::new();
@@ -734,10 +719,11 @@ impl Interpreter {
                             Value::Symbol(s, None) => {
                                 scope.insert(s.clone(), Value::Symbol(s.clone(), None));
                             }
-                            _ => {
-                                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                                    "could not analyze `loop*`".to_string(),
-                                )));
+                            other => {
+                                return Err(SyntaxError::LexicalBindingsMustHaveSymbolNames(
+                                    other.clone(),
+                                )
+                                .into());
                             }
                         }
                     }
@@ -876,7 +862,8 @@ impl Interpreter {
                 }
 
                 let first = elems.first().unwrap();
-                if let Some(expansion) = self.get_macro_expansion(first, elems) {
+                let rest = elems.drop_first().expect("list is not empty");
+                if let Some(expansion) = self.get_macro_expansion(first, &rest) {
                     match expansion? {
                         Value::List(elems) => {
                             self.analyze_list_in_fn(&elems, scopes, captures, level)
@@ -955,17 +942,20 @@ impl Interpreter {
                                     let parameter = lambda_parameter_key(index - 1, level);
                                     parameters
                                         .insert(s.to_string(), Value::Symbol(parameter, None));
+                                    if iter.next().is_some() {
+                                        return Err(SyntaxError::VariadicArgMissing.into());
+                                    }
                                     break;
                                 }
-                                _ => {
-                                    return Err(EvaluationError::List(ListEvaluationError::Failure("could not evaluate `fn*`: variadic binding must be a symbol".to_string())));
+                                other => {
+                                    return Err(SyntaxError::LexicalBindingsMustHaveSymbolNames(
+                                        other.clone(),
+                                    )
+                                    .into());
                                 }
                             }
                         }
-                        return Err(EvaluationError::List(ListEvaluationError::Failure(
-                            "could not evaluate `fn*`: variadic binding missing after `&`"
-                                .to_string(),
-                        )));
+                        return Err(SyntaxError::VariadicArgMissing.into());
                     }
                     _ => {}
                 }
@@ -975,11 +965,10 @@ impl Interpreter {
                     let parameter = lambda_parameter_key(index, level);
                     parameters.insert(s.to_string(), Value::Symbol(parameter, None));
                 }
-                _ => {
-                    return Err(EvaluationError::List(ListEvaluationError::Failure(
-                        "could not evaluate `fn*`: parameters must be non-namespaced symbols"
-                            .to_string(),
-                    )));
+                other => {
+                    return Err(
+                        SyntaxError::LexicalBindingsMustHaveSymbolNames(other.clone()).into(),
+                    );
                 }
             }
         }
@@ -1012,31 +1001,22 @@ impl Interpreter {
             level,
             variadic,
         }: &FnImpl,
-        forms: &PersistentList<Value>,
+        operands: &PersistentList<Value>,
     ) -> EvaluationResult<Value> {
-        if let Some(forms) = forms.drop_first() {
-            let result = match self.apply_fn_inner(body, *arity, *level, *variadic, forms, false) {
-                Ok(Value::List(forms)) => self.expand_macro_if_present(&forms),
-                Ok(result) => Ok(result),
-                Err(e) => {
-                    let mut err = String::from("could not apply macro: ");
-                    err += &e.to_string();
-                    Err(EvaluationError::List(ListEvaluationError::Failure(err)))
-                }
-            };
-            return result;
+        let result = self.apply_fn_inner(body, *arity, *level, *variadic, operands, false)?;
+        if let Value::List(forms) = result {
+            return self.expand_macro_if_present(&forms);
         }
-        Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not apply macro".to_string(),
-        )))
+        Ok(result)
     }
 
     fn expand_macro_if_present(
         &mut self,
         forms: &PersistentList<Value>,
     ) -> EvaluationResult<Value> {
-        if let Some(form) = forms.first() {
-            if let Some(expansion) = self.get_macro_expansion(form, forms) {
+        if let Some(first) = forms.first() {
+            let rest = forms.drop_first().expect("list is not empty");
+            if let Some(expansion) = self.get_macro_expansion(first, &rest) {
                 expansion
             } else {
                 Ok(Value::List(forms.clone()))
@@ -1054,7 +1034,7 @@ impl Interpreter {
         arity: usize,
         level: usize,
         variadic: bool,
-        args: PersistentList<Value>,
+        args: &PersistentList<Value>,
         should_evaluate: bool,
     ) -> EvaluationResult<Value> {
         let correct_arity = if variadic {
@@ -1063,24 +1043,20 @@ impl Interpreter {
             args.len() == arity
         };
         if !correct_arity {
-            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                "could not apply `fn*`: incorrect arity".to_string(),
-            )));
+            return Err(EvaluationError::WrongArity {
+                expected: arity,
+                realized: args.len(),
+            });
         }
         self.enter_scope();
         let mut iter = args.iter().enumerate();
         if arity > 0 {
             while let Some((index, operand_form)) = iter.next() {
                 let operand = if should_evaluate {
-                    match self.evaluate(operand_form) {
-                        Ok(operand) => operand,
-                        Err(e) => {
-                            self.leave_scope();
-                            let mut error = String::from("could not apply `fn*`: ");
-                            error += &e.to_string();
-                            return Err(EvaluationError::List(ListEvaluationError::Failure(error)));
-                        }
-                    }
+                    self.evaluate(operand_form).map_err(|err| {
+                        self.leave_scope();
+                        err
+                    })?
                 } else {
                     operand_form.clone()
                 };
@@ -1094,21 +1070,16 @@ impl Interpreter {
         }
         if variadic {
             let mut variadic_args = vec![];
-            for (_, elem_form) in iter {
-                let elem = if should_evaluate {
-                    match self.evaluate(elem_form) {
-                        Ok(elem) => elem,
-                        Err(e) => {
-                            self.leave_scope();
-                            let mut error = String::from("could not apply `fn*`: ");
-                            error += &e.to_string();
-                            return Err(EvaluationError::List(ListEvaluationError::Failure(error)));
-                        }
-                    }
+            for (_, operand_form) in iter {
+                let arg = if should_evaluate {
+                    self.evaluate(operand_form).map_err(|err| {
+                        self.leave_scope();
+                        err
+                    })?
                 } else {
-                    elem_form.clone()
+                    operand_form.clone()
                 };
-                variadic_args.push(elem);
+                variadic_args.push(arg);
             }
             let operand = Value::List(variadic_args.into_iter().collect());
             let parameter = lambda_parameter_key(arity, level);
@@ -1131,27 +1102,20 @@ impl Interpreter {
             level,
             variadic,
         }: &FnImpl,
-        args: &PersistentList<Value>,
+        operand_forms: PersistentList<Value>,
     ) -> EvaluationResult<Value> {
-        if let Some(args) = args.drop_first() {
-            return self.apply_fn_inner(body, *arity, *level, *variadic, args, true);
-        }
-        Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not apply `fn*`".to_string(),
-        )))
+        self.apply_fn_inner(body, *arity, *level, *variadic, &operand_forms, true)
     }
 
     fn apply_primitive(
         &mut self,
-        native_fn: &NativeFn,
-        args: &PersistentList<Value>,
+        native_fn: NativeFn,
+        operand_forms: PersistentList<Value>,
     ) -> EvaluationResult<Value> {
         let mut operands = vec![];
-        if let Some(rest) = args.drop_first() {
-            for operand_form in rest.iter() {
-                let operand = self.evaluate(operand_form)?;
-                operands.push(operand);
-            }
+        for operand_form in &operand_forms {
+            let operand = self.evaluate(operand_form)?;
+            operands.push(operand);
         }
         native_fn(self, &operands)
     }
@@ -1166,92 +1130,94 @@ impl Interpreter {
                 self.insert_value_in_current_scope(&capture, value.clone());
             } else {
                 self.leave_scope();
-                return Err(EvaluationError::List(
-                    ListEvaluationError::MissingCapturedValue(capture.to_string()),
-                ));
+                return Err(EvaluationError::MissingCapturedValue(capture.to_string()));
             }
         }
         Ok(())
     }
 
-    fn eval_def(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        if let Some(rest) = forms.drop_first() {
-            if let Some(Value::Symbol(id, None)) = rest.first() {
-                if let Some(rest) = rest.drop_first() {
-                    if let Some(value_form) = rest.first() {
-                        // need to only adjust var if this `def!` is successful
-                        // also optimistically allocate in the interpreter so that
-                        // the def body can capture references to itself (e.g. for recursive fn)
-                        //
-                        // to address this:
-                        // get the existing var, or intern a sentinel value if it is missing
-                        let (var, var_already_exists) =
-                            match self.resolve_var_in_current_namespace(id) {
-                                Ok(v @ Value::Var(..)) => (v, true),
-                                Err(EvaluationError::Symbol(
-                                    SymbolEvaluationError::MissingVar(..),
-                                )) => (self.intern_unbound_var(id)?, false),
-                                e @ Err(_) => return e,
-                                _ => unreachable!(),
-                            };
-                        match self.evaluate(value_form) {
-                            Ok(value) => {
-                                // and if the evaluation is ok, unconditionally update the var
-                                match &var {
-                                    Value::Var(var) => var.update(value),
-                                    _ => unreachable!(),
-                                }
-                                return Ok(var);
-                            }
-                            Err(e) => {
-                                // and if the evaluation is not ok,
-                                if !var_already_exists {
-                                    // and the var did not already exist, unintern the sentinel allocation
-                                    self.unintern_var(id);
-                                }
-                                // (if the var did already exist, then simply leave alone)
-
-                                let mut error = String::from("could not evaluate `def!`: ");
-                                error += &e.to_string();
-                                return Err(EvaluationError::List(ListEvaluationError::Failure(
-                                    error,
-                                )));
-                            }
-                        }
-                    } else {
-                        return self.intern_unbound_var(id);
-                    }
-                }
+    fn eval_def_inner(&mut self, id: &str, value_form: &Value) -> EvaluationResult<Value> {
+        // need to only adjust var if this `def!` is successful
+        // also optimistically allocate in the interpreter so that
+        // the def body can capture references to itself (e.g. for recursive fn)
+        //
+        // to address this:
+        // get the existing var, or intern a sentinel value if it is missing
+        let (var, var_already_exists) = match self.resolve_var_in_current_namespace(id) {
+            Ok(v @ Value::Var(..)) => (v, true),
+            Err(EvaluationError::MissingVar(..)) => (self.intern_unbound_var(id)?, false),
+            e @ Err(_) => return e,
+            _ => unreachable!(),
+        };
+        let value = self.evaluate(value_form).map_err(|err| {
+            // and if the evaluation is not ok,
+            if !var_already_exists {
+                // and the var did not already exist, unintern the sentinel allocation
+                self.unintern_var(id);
             }
+            // (if the var did already exist, then simply leave alone)
+            err
+        })?;
+        // and if the evaluation is ok, unconditionally update the var
+        match &var {
+            Value::Var(var) => var.update(value),
+            _ => unreachable!(),
         }
-        Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not evaluate `def!`".to_string(),
-        )))
+        Ok(var)
     }
 
-    fn eval_var(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        if let Some(rest) = forms.drop_first() {
-            if let Some(Value::Symbol(s, ns_opt)) = rest.first() {
+    fn eval_def(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+        if !(operand_forms.len() == 1 || operand_forms.len() == 2) {
+            return Err(EvaluationError::WrongArity {
+                expected: 2,
+                realized: operand_forms.len(),
+            });
+        }
+        let name_form = operand_forms.first().unwrap();
+        let rest = operand_forms.drop_first().expect("list is not empty");
+        match name_form {
+            Value::Symbol(id, None) => {
+                if rest.is_empty() {
+                    return self.intern_unbound_var(id);
+                }
+                let value_form = rest.first().unwrap();
+                self.eval_def_inner(id, value_form)
+            }
+            other => Err(EvaluationError::WrongType {
+                expected: "SymbolWithoutNamespace",
+                realized: other.clone(),
+            }),
+        }
+    }
+
+    fn eval_var(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+        if operand_forms.len() != 1 {
+            return Err(EvaluationError::WrongArity {
+                expected: 1,
+                realized: operand_forms.len(),
+            });
+        }
+        let name_form = operand_forms.first().unwrap();
+        match name_form {
+            Value::Symbol(s, ns_opt) => {
                 if let Some(ns_desc) = ns_opt {
-                    return self.resolve_var_in_namespace(s, ns_desc);
+                    self.resolve_var_in_namespace(s, ns_desc)
                 } else {
-                    return self.resolve_var_in_current_namespace(s);
+                    self.resolve_var_in_current_namespace(s)
                 }
             }
+            other => Err(EvaluationError::WrongType {
+                expected: "Symbol",
+                realized: other.clone(),
+            }),
         }
-        Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not evaluate `var`".to_string(),
-        )))
     }
 
-    fn eval_let(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        let let_forms = forms
-            .drop_first()
-            .ok_or_else(|| -> EvaluationError { SyntaxError::MissingForms.into() })?;
-        let LetForm { bindings, body } = analyze_let(&let_forms)?;
+    fn eval_let(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+        let LetForm { bindings, body } = analyze_let(&operand_forms)?;
         self.enter_scope();
         for forward_identifier in bindings.resolve_forward_declarations() {
-            let var = var_with_value(Value::Nil, "", forward_identifier);
+            let var = unbound_var("", forward_identifier);
             self.insert_value_in_current_scope(forward_identifier, var);
         }
         for (identifier, value_form) in bindings {
@@ -1276,111 +1242,73 @@ impl Interpreter {
         result
     }
 
-    fn eval_loop(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        if let Some(rest) = forms.drop_first() {
-            if let Some(Value::Vector(elems)) = rest.first() {
-                if elems.len() % 2 == 0 {
-                    if let Some(body) = rest.drop_first() {
-                        if body.is_empty() {
-                            return Ok(Value::Nil);
-                        }
-                        // TODO: analyze loop*
-                        // if recur, must be in tail position
-                        self.enter_scope();
-                        let mut bindings_keys = vec![];
-                        for (name, value_form) in elems.iter().tuples() {
-                            match name {
-                                Value::Symbol(s, None) => {
-                                    let value = self.evaluate(value_form)?;
-                                    bindings_keys.push(s.clone());
-                                    self.insert_value_in_current_scope(s, value)
-                                }
-                                _ => {
-                                    self.leave_scope();
-                                    return Err(EvaluationError::List(
-                                        ListEvaluationError::Failure(
-                                            "could not evaluate `loop*`".to_string(),
-                                        ),
-                                    ));
-                                }
-                            }
-                        }
-                        let mut result = self.eval_do_inner(&body);
-                        while let Ok(Value::Recur(next_bindings)) = result {
-                            if next_bindings.len() != bindings_keys.len() {
-                                self.leave_scope();
-                                return Err(EvaluationError::List(
-                                                                    ListEvaluationError::Failure(
-                                                                        "could not evaluate `loop*`: recur with incorrect number of bindings"
-                                                                            .to_string(),
-                                                                    ),
-                                                                ));
-                            }
-                            for (key, value) in bindings_keys.iter().zip(next_bindings.iter()) {
-                                self.insert_value_in_current_scope(key, value.clone());
-                            }
-                            result = self.eval_do_inner(&body);
-                        }
-                        self.leave_scope();
-                        return result;
-                    }
-                }
-            }
+    fn eval_loop(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+        let LetForm { bindings, body } = analyze_let(&operand_forms)?;
+        self.enter_scope();
+        let mut bindings_keys = vec![];
+        for (name, value_form) in bindings.into_iter() {
+            let value = self.evaluate(value_form)?;
+            bindings_keys.push(name);
+            self.insert_value_in_current_scope(name, value)
         }
-        Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not evaluate `loop*`".to_string(),
-        )))
+        let mut result = self.eval_do_inner(&body);
+        while let Ok(Value::Recur(next_bindings)) = result {
+            if next_bindings.len() != bindings_keys.len() {
+                self.leave_scope();
+                return Err(EvaluationError::WrongArity {
+                    expected: bindings_keys.len(),
+                    realized: next_bindings.len(),
+                });
+            }
+            for (key, value) in bindings_keys.iter().zip(next_bindings.iter()) {
+                self.insert_value_in_current_scope(key, value.clone());
+            }
+            result = self.eval_do_inner(&body);
+        }
+        self.leave_scope();
+        result
     }
 
-    fn eval_recur(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        if let Some(rest) = forms.drop_first() {
-            let mut result = vec![];
-            for form in rest.into_iter() {
-                let value = self.evaluate(form)?;
-                result.push(value);
-            }
-            return Ok(Value::Recur(result.into_iter().collect()));
+    fn eval_recur(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+        let mut result = PersistentVector::new();
+        for form in operand_forms.into_iter() {
+            let value = self.evaluate(form)?;
+            result.push_back_mut(value);
         }
-        Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not evaluate `recur`".to_string(),
-        )))
+        Ok(Value::Recur(result))
     }
 
-    fn eval_if(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        if let Some(rest) = forms.drop_first() {
-            if let Some(predicate_form) = rest.first() {
-                if let Some(rest) = rest.drop_first() {
-                    if let Some(consequent_form) = rest.first() {
-                        match self.evaluate(predicate_form)? {
-                            Value::Bool(predicate) => {
-                                if predicate {
-                                    return self.evaluate(consequent_form);
-                                } else if let Some(rest) = rest.drop_first() {
-                                    if let Some(alternate) = rest.first() {
-                                        return self.evaluate(alternate);
-                                    } else {
-                                        return Ok(Value::Nil);
-                                    }
-                                }
-                            }
-                            Value::Nil => {
-                                if let Some(rest) = rest.drop_first() {
-                                    if let Some(alternate) = rest.first() {
-                                        return self.evaluate(alternate);
-                                    } else {
-                                        return Ok(Value::Nil);
-                                    }
-                                }
-                            }
-                            _ => return self.evaluate(consequent_form),
-                        }
-                    }
+    fn eval_if(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+        if !(operand_forms.len() == 2 || operand_forms.len() == 3) {
+            return Err(EvaluationError::WrongArity {
+                expected: 2,
+                realized: operand_forms.len(),
+            });
+        }
+        let predicate_form = operand_forms.first().unwrap();
+        let predicate = self.evaluate(predicate_form)?;
+        let falsey = matches!(predicate, Value::Nil | Value::Bool(false));
+        let rest = operand_forms.drop_first().expect("list is not empty");
+        let consequent_form = rest.first().unwrap();
+        match rest.len() {
+            2 => {
+                if !falsey {
+                    self.evaluate(consequent_form)
+                } else {
+                    let rest = rest.drop_first().expect("list is not empty");
+                    let alternate_form = rest.first().unwrap();
+                    self.evaluate(alternate_form)
                 }
             }
+            1 => {
+                if !falsey {
+                    self.evaluate(consequent_form)
+                } else {
+                    Ok(Value::Nil)
+                }
+            }
+            _ => unreachable!("validated len of `if` form"),
         }
-        Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not evaluate `if`".to_string(),
-        )))
     }
 
     fn eval_do_inner(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
@@ -1394,200 +1322,196 @@ impl Interpreter {
             .into_inner()
     }
 
-    fn eval_do(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        if let Some(rest) = forms.drop_first() {
-            return self.eval_do_inner(&rest);
-        }
-        Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not evaluate `do`".to_string(),
-        )))
+    fn eval_do(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+        self.eval_do_inner(&operand_forms)
     }
 
-    fn eval_fn(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        if let Some(rest) = forms.drop_first() {
-            if let Some(Value::Vector(params)) = rest.first() {
-                if let Some(body) = rest.drop_first() {
-                    let mut scopes = vec![];
-                    let mut captures = vec![];
-                    return self.analyze_symbols_in_fn(body, &params, &mut scopes, &mut captures);
-                }
+    fn eval_fn(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+        if operand_forms.is_empty() {
+            return Err(EvaluationError::WrongArity {
+                expected: 1,
+                realized: 0,
+            });
+        }
+        let params_form = operand_forms.first().unwrap();
+        let body = operand_forms.drop_first().expect("list is not empty");
+        match params_form {
+            Value::Vector(params) => {
+                let mut scopes = vec![];
+                let mut captures = vec![];
+                self.analyze_symbols_in_fn(body, &params, &mut scopes, &mut captures)
             }
+            other => Err(SyntaxError::LexicalBindingsMustBeVector(other.clone()).into()),
         }
-        Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not evaluate `fn*`".to_string(),
-        )))
     }
 
-    fn eval_quote(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        if let Some(rest) = forms.drop_first() {
-            if rest.len() == 1 {
-                if let Some(form) = rest.first() {
-                    return Ok(form.clone());
-                }
-            }
+    fn eval_quote(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+        if operand_forms.len() != 1 {
+            return Err(EvaluationError::WrongArity {
+                expected: 1,
+                realized: operand_forms.len(),
+            });
         }
-        Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not evaluate `quote`".to_string(),
-        )))
+        Ok(operand_forms.first().cloned().unwrap())
     }
 
-    fn eval_quasiquote(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        if let Some(rest) = forms.drop_first() {
-            if let Some(second) = rest.first() {
-                let expansion = eval_quasiquote(second)?;
-                return self.evaluate(&expansion);
-            }
+    fn eval_quasiquote(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+        if operand_forms.len() != 1 {
+            return Err(EvaluationError::WrongArity {
+                expected: 1,
+                realized: operand_forms.len(),
+            });
         }
-        Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not evaluate `quasiquote`".to_string(),
-        )))
+        let operand_form = operand_forms.first().unwrap();
+        let expansion = eval_quasiquote(operand_form)?;
+        self.evaluate(&expansion)
     }
 
-    fn eval_defmacro(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        match self.eval_def(forms) {
-            Ok(Value::Var(var)) => match var_impl_into_inner(&var) {
+    fn eval_defmacro(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+        match self.eval_def(operand_forms)? {
+            Value::Var(var) => match var_impl_into_inner(&var) {
                 Some(Value::Fn(f)) => {
                     var.update(Value::Macro(f));
                     Ok(Value::Var(var))
                 }
-                _ => {
+                Some(other) => {
                     self.unintern_var(&var.identifier);
-                    let error = String::from(
-                        "could not evaluate `defmacro!`: body must be `fn*` without captures",
-                    );
-                    Err(EvaluationError::List(ListEvaluationError::Failure(error)))
+                    Err(EvaluationError::WrongType {
+                        expected: "Fn",
+                        realized: other,
+                    })
+                }
+                None => {
+                    self.unintern_var(&var.identifier);
+                    Err(EvaluationError::WrongType {
+                        expected: "Fn",
+                        realized: Value::Var(var),
+                    })
                 }
             },
-            Err(e) => {
-                let mut error = String::from("could not evaluate `defmacro!`: ");
-                error += &e.to_string();
-                Err(EvaluationError::List(ListEvaluationError::Failure(error)))
-            }
-            _ => unreachable!(),
+            _ => unreachable!("eval def only returns Value::Var"),
         }
     }
 
-    fn eval_macroexpand(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        do_to_exactly_one_arg(forms, |arg| match self.evaluate(arg)? {
+    fn eval_macroexpand(
+        &mut self,
+        operand_forms: PersistentList<Value>,
+    ) -> EvaluationResult<Value> {
+        do_to_exactly_one_arg(operand_forms, |arg| match self.evaluate(arg)? {
             Value::List(elems) => self.expand_macro_if_present(&elems),
             other => Ok(other),
         })
     }
 
-    fn eval_try(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        if let Some(rest) = forms.drop_first() {
-            let catch_form = match rest.last() {
-                Some(Value::List(last_form)) => match last_form.first() {
-                    Some(Value::Symbol(s, None)) if s == "catch*" => {
-                        // FIXME: deduplicate analysis of `catch*` here...
-                        if let Some(catch_form) = last_form.drop_first() {
-                            if let Some(exception_symbol) = catch_form.first() {
-                                match exception_symbol {
-                                    s @ Value::Symbol(_, None) => {
-                                        if let Some(exception_body) = catch_form.drop_first() {
-                                            let mut exception_binding = PersistentVector::new();
-                                            exception_binding.push_back_mut(s.clone());
-                                            let mut scopes = vec![];
-                                            let mut captures = vec![];
-                                            let body = self.analyze_symbols_in_fn(
-                                                exception_body,
-                                                &exception_binding,
-                                                &mut scopes,
-                                                &mut captures,
-                                            )?;
-                                            Some(body)
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                    _ => {
-                                        return Err(EvaluationError::List(
-                                            ListEvaluationError::Failure(
-                                                "could not evaluate `catch*`".to_string(),
-                                            ),
-                                        ));
+    fn eval_try(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+        let catch_form = match operand_forms.last() {
+            Some(Value::List(last_form)) => match last_form.first() {
+                Some(Value::Symbol(s, None)) if s == "catch*" => {
+                    // FIXME: deduplicate analysis of `catch*` here...
+                    if let Some(catch_form) = last_form.drop_first() {
+                        if let Some(exception_symbol) = catch_form.first() {
+                            match exception_symbol {
+                                s @ Value::Symbol(_, None) => {
+                                    if let Some(exception_body) = catch_form.drop_first() {
+                                        let mut exception_binding = PersistentVector::new();
+                                        exception_binding.push_back_mut(s.clone());
+                                        let mut scopes = vec![];
+                                        let mut captures = vec![];
+                                        let body = self.analyze_symbols_in_fn(
+                                            exception_body,
+                                            &exception_binding,
+                                            &mut scopes,
+                                            &mut captures,
+                                        )?;
+                                        Some(body)
+                                    } else {
+                                        None
                                     }
                                 }
-                            } else {
-                                None
+                                other => {
+                                    return Err(SyntaxError::LexicalBindingsMustHaveSymbolNames(
+                                        other.clone(),
+                                    )
+                                    .into());
+                                }
                             }
                         } else {
-                            return Err(EvaluationError::List(ListEvaluationError::Failure(
-                                "could not evaluate `catch*`".to_string(),
-                            )));
+                            None
                         }
+                    } else {
+                        return Err(EvaluationError::WrongArity {
+                            expected: 2,
+                            realized: 0,
+                        });
                     }
-                    _ => None,
-                },
-                // FIXME: avoid clones here...
-                Some(f @ Value::Fn(..)) => Some(f.clone()),
-                Some(f @ Value::FnWithCaptures(..)) => Some(f.clone()),
-                _ => None,
-            };
-            let forms_to_eval = if catch_form.is_none() {
-                rest
-            } else {
-                let mut forms_to_eval = vec![];
-                for (index, form) in rest.iter().enumerate() {
-                    if index == rest.len() - 1 {
-                        break;
-                    }
-                    forms_to_eval.push(form.clone());
                 }
-                PersistentList::from_iter(forms_to_eval)
-            };
-            match self.eval_do_inner(&forms_to_eval)? {
-                e @ Value::Exception(_) if exception_is_thrown(&e) => match catch_form {
-                    Some(Value::Fn(FnImpl { body, level, .. })) => {
-                        self.enter_scope();
-                        let parameter = lambda_parameter_key(0, level);
-                        self.insert_value_in_current_scope(&parameter, exception_from_thrown(&e));
-                        let result = self.eval_do_inner(&body);
-                        self.leave_scope();
-                        return result;
-                    }
-                    Some(Value::FnWithCaptures(FnWithCapturesImpl {
-                        f: FnImpl { body, level, .. },
-                        mut captures,
-                    })) => {
-                        // FIXME: here we pull values from scopes just to turn around and put them back in a child scope.
-                        // Can we skip this?
-                        update_captures(&mut captures, &self.scopes)?;
-                        self.extend_from_captures(&captures)?;
-                        self.enter_scope();
-                        let parameter = lambda_parameter_key(0, level);
-                        self.insert_value_in_current_scope(&parameter, exception_from_thrown(&e));
-                        let result = self.eval_do_inner(&body);
-                        self.leave_scope();
-                        self.leave_scope();
-                        return result;
-                    }
-                    _ => return Ok(e),
-                },
-                result => return Ok(result),
+                _ => None,
+            },
+            // FIXME: avoid clones here...
+            Some(f @ Value::Fn(..)) => Some(f.clone()),
+            Some(f @ Value::FnWithCaptures(..)) => Some(f.clone()),
+            _ => None,
+        };
+        let forms_to_eval = if catch_form.is_none() {
+            operand_forms
+        } else {
+            let mut forms_to_eval = vec![];
+            for (index, form) in operand_forms.iter().enumerate() {
+                if index == operand_forms.len() - 1 {
+                    break;
+                }
+                forms_to_eval.push(form.clone());
             }
+            PersistentList::from_iter(forms_to_eval)
+        };
+        match self.eval_do_inner(&forms_to_eval)? {
+            e @ Value::Exception(_) if exception_is_thrown(&e) => match catch_form {
+                Some(Value::Fn(FnImpl { body, level, .. })) => {
+                    self.enter_scope();
+                    let parameter = lambda_parameter_key(0, level);
+                    self.insert_value_in_current_scope(&parameter, exception_from_thrown(&e));
+                    let result = self.eval_do_inner(&body);
+                    self.leave_scope();
+                    result
+                }
+                Some(Value::FnWithCaptures(FnWithCapturesImpl {
+                    f: FnImpl { body, level, .. },
+                    mut captures,
+                })) => {
+                    // FIXME: here we pull values from scopes just to turn around and put them back in a child scope.
+                    // Can we skip this?
+                    update_captures(&mut captures, &self.scopes)?;
+                    self.extend_from_captures(&captures)?;
+                    self.enter_scope();
+                    let parameter = lambda_parameter_key(0, level);
+                    self.insert_value_in_current_scope(&parameter, exception_from_thrown(&e));
+                    let result = self.eval_do_inner(&body);
+                    self.leave_scope();
+                    self.leave_scope();
+                    result
+                }
+                _ => Ok(e),
+            },
+            result => Ok(result),
         }
-        Err(EvaluationError::List(ListEvaluationError::Failure(
-            "could not evaluate `try*`".to_string(),
-        )))
     }
 
     fn get_macro_expansion(
         &mut self,
-        form: &Value,
-        forms: &PersistentList<Value>,
+        operator: &Value,
+        operands: &PersistentList<Value>,
     ) -> Option<EvaluationResult<Value>> {
-        match form {
+        match operator {
             Value::Symbol(identifier, ns_opt) => {
                 if let Ok(Value::Macro(f)) = self.resolve_symbol(identifier, ns_opt.as_ref()) {
-                    Some(self.apply_macro(&f, forms))
+                    Some(self.apply_macro(&f, operands))
                 } else {
                     None
                 }
             }
             Value::Var(v) => {
                 if let Some(Value::Macro(f)) = var_impl_into_inner(v) {
-                    Some(self.apply_macro(&f, forms))
+                    Some(self.apply_macro(&f, operands))
                 } else {
                     None
                 }
@@ -1602,36 +1526,37 @@ impl Interpreter {
         }
 
         let operator_form = forms.first().unwrap();
-        if let Some(expansion) = self.get_macro_expansion(operator_form, forms) {
+        let operand_forms = forms.drop_first().unwrap_or_default();
+        if let Some(expansion) = self.get_macro_expansion(operator_form, &operand_forms) {
             match expansion? {
                 Value::List(forms) => return self.eval_list(&forms),
                 other => return self.evaluate(&other),
             }
         }
         match operator_form {
-            Value::Symbol(s, None) if s == "def!" => self.eval_def(forms),
-            Value::Symbol(s, None) if s == "var" => self.eval_var(forms),
-            Value::Symbol(s, None) if s == "let*" => self.eval_let(forms),
-            Value::Symbol(s, None) if s == "loop*" => self.eval_loop(forms),
-            Value::Symbol(s, None) if s == "recur" => self.eval_recur(forms),
-            Value::Symbol(s, None) if s == "if" => self.eval_if(forms),
-            Value::Symbol(s, None) if s == "do" => self.eval_do(forms),
-            Value::Symbol(s, None) if s == "fn*" => self.eval_fn(forms),
-            Value::Symbol(s, None) if s == "quote" => self.eval_quote(forms),
-            Value::Symbol(s, None) if s == "quasiquote" => self.eval_quasiquote(forms),
-            Value::Symbol(s, None) if s == "defmacro!" => self.eval_defmacro(forms),
-            Value::Symbol(s, None) if s == "macroexpand" => self.eval_macroexpand(forms),
-            Value::Symbol(s, None) if s == "try*" => self.eval_try(forms),
+            Value::Symbol(s, None) if s == "def!" => self.eval_def(operand_forms),
+            Value::Symbol(s, None) if s == "var" => self.eval_var(operand_forms),
+            Value::Symbol(s, None) if s == "let*" => self.eval_let(operand_forms),
+            Value::Symbol(s, None) if s == "loop*" => self.eval_loop(operand_forms),
+            Value::Symbol(s, None) if s == "recur" => self.eval_recur(operand_forms),
+            Value::Symbol(s, None) if s == "if" => self.eval_if(operand_forms),
+            Value::Symbol(s, None) if s == "do" => self.eval_do(operand_forms),
+            Value::Symbol(s, None) if s == "fn*" => self.eval_fn(operand_forms),
+            Value::Symbol(s, None) if s == "quote" => self.eval_quote(operand_forms),
+            Value::Symbol(s, None) if s == "quasiquote" => self.eval_quasiquote(operand_forms),
+            Value::Symbol(s, None) if s == "defmacro!" => self.eval_defmacro(operand_forms),
+            Value::Symbol(s, None) if s == "macroexpand" => self.eval_macroexpand(operand_forms),
+            Value::Symbol(s, None) if s == "try*" => self.eval_try(operand_forms),
             operator_form => match self.evaluate(operator_form)? {
-                Value::Fn(f) => self.apply_fn(&f, forms),
+                Value::Fn(f) => self.apply_fn(&f, operand_forms),
                 Value::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
                     self.extend_from_captures(&captures)?;
-                    let result = self.apply_fn(&f, forms);
+                    let result = self.apply_fn(&f, operand_forms);
                     self.leave_scope();
                     result
                 }
-                Value::Primitive(native_fn) => self.apply_primitive(&native_fn, forms),
-                v => Err(EvaluationError::List(ListEvaluationError::CannotInvoke(v))),
+                Value::Primitive(native_fn) => self.apply_primitive(native_fn, operand_forms),
+                v => Err(EvaluationError::CannotInvoke(v)),
             },
         }
     }
@@ -1717,7 +1642,7 @@ mod test {
     };
 
     #[test]
-    fn test_self_evaluating() {
+    fn test_basic_self_evaluating() {
         let test_cases = vec![
             ("nil", Nil),
             ("true", Bool(true)),
@@ -1901,6 +1826,7 @@ mod test {
     #[test]
     fn test_basic_fn() {
         let test_cases = vec![
+            ("((fn* []))", Nil),
             ("((fn* [a] (+ a 1)) 23)", Number(24)),
             ("((fn* [a b] (+ a b)) 23 1)", Number(24)),
             ("((fn* [] (+ 4 3)) )", Number(7)),
@@ -1958,6 +1884,7 @@ mod test {
         let test_cases = vec![
             ("(loop* [i 12] i)", Number(12)),
             ("(loop* [i 12])", Nil),
+            ("(loop* [])", Nil),
             ("(loop* [i 0] (if (< i 5) (recur (+ i 1)) i))", Number(5)),
             ("(def! factorial (fn* [n] (loop* [n n acc 1] (if (< n 1) acc (recur (- n 1) (* acc n)))))) (factorial 20)", Number(2432902008176640000)),
             (
