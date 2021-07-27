@@ -1003,7 +1003,8 @@ impl Interpreter {
         }: &FnImpl,
         operands: &PersistentList<Value>,
     ) -> EvaluationResult<Value> {
-        let result = self.apply_fn_inner(body, *arity, *level, *variadic, operands, false)?;
+        let result =
+            self.apply_fn_inner(body, *arity, *level, *variadic, operands, operands.len())?;
         if let Value::List(forms) = result {
             return self.expand_macro_if_present(&forms);
         }
@@ -1028,40 +1029,32 @@ impl Interpreter {
 
     /// Apply the given `Fn` to the supplied `args`.
     /// Exposed for various `prelude` functions.
-    pub(crate) fn apply_fn_inner(
+    pub(crate) fn apply_fn_inner<'a>(
         &mut self,
         body: &PersistentList<Value>,
         arity: usize,
         level: usize,
         variadic: bool,
-        args: &PersistentList<Value>,
-        should_evaluate: bool,
+        args: impl IntoIterator<Item = &'a Value>,
+        args_count: usize,
     ) -> EvaluationResult<Value> {
         let correct_arity = if variadic {
-            args.len() >= arity
+            args_count >= arity
         } else {
-            args.len() == arity
+            args_count == arity
         };
         if !correct_arity {
             return Err(EvaluationError::WrongArity {
                 expected: arity,
-                realized: args.len(),
+                realized: args_count,
             });
         }
         self.enter_scope();
-        let mut iter = args.iter().enumerate();
+        let mut iter = args.into_iter().enumerate();
         if arity > 0 {
-            while let Some((index, operand_form)) = iter.next() {
-                let operand = if should_evaluate {
-                    self.evaluate(operand_form).map_err(|err| {
-                        self.leave_scope();
-                        err
-                    })?
-                } else {
-                    operand_form.clone()
-                };
+            while let Some((index, arg)) = iter.next() {
                 let parameter = lambda_parameter_key(index, level);
-                self.insert_value_in_current_scope(&parameter, operand);
+                self.insert_value_in_current_scope(&parameter, arg.clone());
 
                 if index == arity - 1 {
                     break;
@@ -1069,19 +1062,7 @@ impl Interpreter {
             }
         }
         if variadic {
-            let mut variadic_args = vec![];
-            for (_, operand_form) in iter {
-                let arg = if should_evaluate {
-                    self.evaluate(operand_form).map_err(|err| {
-                        self.leave_scope();
-                        err
-                    })?
-                } else {
-                    operand_form.clone()
-                };
-                variadic_args.push(arg);
-            }
-            let operand = Value::List(variadic_args.into_iter().collect());
+            let operand = Value::List(iter.map(|(_, arg)| arg.clone()).collect());
             let parameter = lambda_parameter_key(arity, level);
             self.insert_value_in_current_scope(&parameter, operand);
         }
@@ -1104,7 +1085,12 @@ impl Interpreter {
         }: &FnImpl,
         operand_forms: PersistentList<Value>,
     ) -> EvaluationResult<Value> {
-        self.apply_fn_inner(body, *arity, *level, *variadic, &operand_forms, true)
+        let mut args = Vec::with_capacity(operand_forms.len());
+        for form in &operand_forms {
+            let result = self.evaluate(form)?;
+            args.push(result);
+        }
+        self.apply_fn_inner(body, *arity, *level, *variadic, &args, args.len())
     }
 
     fn apply_primitive(

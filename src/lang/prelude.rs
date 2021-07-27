@@ -9,7 +9,6 @@ use crate::value::{
 use itertools::Itertools;
 use std::fmt::Write;
 use std::io::{BufRead, Write as IOWrite};
-use std::iter::FromIterator;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{fs, io};
 
@@ -512,20 +511,17 @@ pub fn swap_atom(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationRes
                 level,
                 variadic,
             }) => {
-                // Note: args should already be evaluated so can skip here...
-                let should_evaluate = false;
                 let mut inner = cell.borrow_mut();
                 let original_value = inner.clone();
-                let mut elems = vec![original_value];
-                elems.extend_from_slice(&args[2..]);
-                let fn_args = PersistentList::from_iter(elems);
+                let mut fn_args = vec![original_value];
+                fn_args.extend_from_slice(&args[2..]);
                 let new_value = interpreter.apply_fn_inner(
                     body,
                     *arity,
                     *level,
                     *variadic,
                     &fn_args,
-                    should_evaluate,
+                    fn_args.len(),
                 )?;
                 *inner = new_value.clone();
                 Ok(new_value)
@@ -541,20 +537,17 @@ pub fn swap_atom(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationRes
                 captures,
             }) => {
                 interpreter.extend_from_captures(captures)?;
-                // Note: args should already be evaluated so can skip here...
-                let should_evaluate = false;
                 let mut inner = cell.borrow_mut();
                 let original_value = inner.clone();
-                let mut elems = vec![original_value];
-                elems.extend_from_slice(&args[2..]);
-                let fn_args = PersistentList::from_iter(elems);
+                let mut fn_args = vec![original_value];
+                fn_args.extend_from_slice(&args[2..]);
                 let new_value = interpreter.apply_fn_inner(
                     body,
                     *arity,
                     *level,
                     *variadic,
                     &fn_args,
-                    should_evaluate,
+                    fn_args.len(),
                 );
                 interpreter.leave_scope();
 
@@ -818,10 +811,7 @@ pub fn apply(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<
             arity,
             level,
             variadic,
-        }) => {
-            let fn_args = PersistentList::from_iter(fn_args);
-            interpreter.apply_fn_inner(body, *arity, *level, *variadic, &fn_args, false)
-        }
+        }) => interpreter.apply_fn_inner(body, *arity, *level, *variadic, &fn_args, fn_args.len()),
         Value::FnWithCaptures(FnWithCapturesImpl {
             f:
                 FnImpl {
@@ -833,9 +823,14 @@ pub fn apply(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<
             captures,
         }) => {
             interpreter.extend_from_captures(captures)?;
-            let fn_args = PersistentList::from_iter(fn_args);
-            let result =
-                interpreter.apply_fn_inner(body, *arity, *level, *variadic, &fn_args, false);
+            let result = interpreter.apply_fn_inner(
+                body,
+                *arity,
+                *level,
+                *variadic,
+                &fn_args,
+                fn_args.len(),
+            );
             interpreter.leave_scope();
             result
         }
@@ -864,8 +859,6 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
             })
         }
     };
-    // Note: args should already be evaluated so can skip here...
-    let should_evaluate = false;
     let mut result = PersistentList::new();
     match &args[0] {
         Value::Fn(FnImpl {
@@ -875,16 +868,8 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
             variadic,
         }) => {
             for arg in fn_args.into_iter().rev() {
-                let mut wrapped_arg = PersistentList::new();
-                wrapped_arg.push_front_mut(arg.clone());
-                let mapped_arg = interpreter.apply_fn_inner(
-                    body,
-                    *arity,
-                    *level,
-                    *variadic,
-                    &wrapped_arg,
-                    should_evaluate,
-                )?;
+                let mapped_arg =
+                    interpreter.apply_fn_inner(body, *arity, *level, *variadic, [arg], 1)?;
                 result.push_front_mut(mapped_arg);
             }
         }
@@ -900,16 +885,8 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
         }) => {
             interpreter.extend_from_captures(captures)?;
             for arg in fn_args.into_iter().rev() {
-                let mut wrapped_arg = PersistentList::new();
-                wrapped_arg.push_front_mut(arg.clone());
-                let mapped_arg = interpreter.apply_fn_inner(
-                    body,
-                    *arity,
-                    *level,
-                    *variadic,
-                    &wrapped_arg,
-                    should_evaluate,
-                )?;
+                let mapped_arg =
+                    interpreter.apply_fn_inner(body, *arity, *level, *variadic, [arg], 1)?;
                 result.push_front_mut(mapped_arg);
             }
             interpreter.leave_scope();
