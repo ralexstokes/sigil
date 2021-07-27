@@ -995,16 +995,10 @@ impl Interpreter {
 
     fn apply_macro(
         &mut self,
-        FnImpl {
-            body,
-            arity,
-            level,
-            variadic,
-        }: &FnImpl,
+        f: &FnImpl,
         operands: &PersistentList<Value>,
     ) -> EvaluationResult<Value> {
-        let result =
-            self.apply_fn_inner(body, *arity, *level, *variadic, operands, operands.len())?;
+        let result = self.apply_fn_inner(f, operands, operands.len())?;
         if let Value::List(forms) = result {
             return self.expand_macro_if_present(&forms);
         }
@@ -1031,13 +1025,19 @@ impl Interpreter {
     /// Exposed for various `prelude` functions.
     pub(crate) fn apply_fn_inner<'a>(
         &mut self,
-        body: &PersistentList<Value>,
-        arity: usize,
-        level: usize,
-        variadic: bool,
+        FnImpl {
+            body,
+            arity,
+            level,
+            variadic,
+        }: &FnImpl,
         args: impl IntoIterator<Item = &'a Value>,
         args_count: usize,
     ) -> EvaluationResult<Value> {
+        let arity = *arity;
+        let level = *level;
+        let variadic = *variadic;
+
         let correct_arity = if variadic {
             args_count >= arity
         } else {
@@ -1077,12 +1077,7 @@ impl Interpreter {
 
     fn apply_fn(
         &mut self,
-        FnImpl {
-            body,
-            arity,
-            level,
-            variadic,
-        }: &FnImpl,
+        f: &FnImpl,
         operand_forms: PersistentList<Value>,
     ) -> EvaluationResult<Value> {
         let mut args = Vec::with_capacity(operand_forms.len());
@@ -1090,7 +1085,7 @@ impl Interpreter {
             let result = self.evaluate(form)?;
             args.push(result);
         }
-        self.apply_fn_inner(body, *arity, *level, *variadic, &args, args.len())
+        self.apply_fn_inner(f, &args, args.len())
     }
 
     fn apply_primitive(

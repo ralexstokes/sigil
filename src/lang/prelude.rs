@@ -3,8 +3,8 @@ use crate::namespace::{Namespace, DEFAULT_NAME};
 use crate::reader::read;
 use crate::value::{
     atom_impl_into_inner, atom_with_value, exception, exception_into_thrown, list_with_values,
-    map_with_values, set_with_values, var_impl_into_inner, vector_with_values, FnImpl,
-    FnWithCapturesImpl, PersistentList, PersistentSet, PersistentVector, Value,
+    map_with_values, set_with_values, var_impl_into_inner, vector_with_values, FnWithCapturesImpl,
+    PersistentList, PersistentSet, PersistentVector, Value,
 };
 use itertools::Itertools;
 use std::fmt::Write;
@@ -505,50 +505,22 @@ pub fn swap_atom(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationRes
     }
     match &args[0] {
         Value::Atom(cell) => match &args[1] {
-            Value::Fn(FnImpl {
-                body,
-                arity,
-                level,
-                variadic,
-            }) => {
+            Value::Fn(f) => {
                 let mut inner = cell.borrow_mut();
                 let original_value = inner.clone();
                 let mut fn_args = vec![original_value];
                 fn_args.extend_from_slice(&args[2..]);
-                let new_value = interpreter.apply_fn_inner(
-                    body,
-                    *arity,
-                    *level,
-                    *variadic,
-                    &fn_args,
-                    fn_args.len(),
-                )?;
+                let new_value = interpreter.apply_fn_inner(f, &fn_args, fn_args.len())?;
                 *inner = new_value.clone();
                 Ok(new_value)
             }
-            Value::FnWithCaptures(FnWithCapturesImpl {
-                f:
-                    FnImpl {
-                        body,
-                        arity,
-                        level,
-                        variadic,
-                    },
-                captures,
-            }) => {
+            Value::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
                 interpreter.extend_from_captures(captures)?;
                 let mut inner = cell.borrow_mut();
                 let original_value = inner.clone();
                 let mut fn_args = vec![original_value];
                 fn_args.extend_from_slice(&args[2..]);
-                let new_value = interpreter.apply_fn_inner(
-                    body,
-                    *arity,
-                    *level,
-                    *variadic,
-                    &fn_args,
-                    fn_args.len(),
-                );
+                let new_value = interpreter.apply_fn_inner(f, &fn_args, fn_args.len());
                 interpreter.leave_scope();
 
                 let new_value = new_value?;
@@ -806,31 +778,10 @@ pub fn apply(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<
         }
     };
     match first {
-        Value::Fn(FnImpl {
-            body,
-            arity,
-            level,
-            variadic,
-        }) => interpreter.apply_fn_inner(body, *arity, *level, *variadic, &fn_args, fn_args.len()),
-        Value::FnWithCaptures(FnWithCapturesImpl {
-            f:
-                FnImpl {
-                    body,
-                    arity,
-                    level,
-                    variadic,
-                },
-            captures,
-        }) => {
+        Value::Fn(f) => interpreter.apply_fn_inner(f, &fn_args, fn_args.len()),
+        Value::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
             interpreter.extend_from_captures(captures)?;
-            let result = interpreter.apply_fn_inner(
-                body,
-                *arity,
-                *level,
-                *variadic,
-                &fn_args,
-                fn_args.len(),
-            );
+            let result = interpreter.apply_fn_inner(f, &fn_args, fn_args.len());
             interpreter.leave_scope();
             result
         }
@@ -861,32 +812,16 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
     };
     let mut result = PersistentList::new();
     match &args[0] {
-        Value::Fn(FnImpl {
-            body,
-            arity,
-            level,
-            variadic,
-        }) => {
+        Value::Fn(f) => {
             for arg in fn_args.into_iter().rev() {
-                let mapped_arg =
-                    interpreter.apply_fn_inner(body, *arity, *level, *variadic, [arg], 1)?;
+                let mapped_arg = interpreter.apply_fn_inner(f, [arg], 1)?;
                 result.push_front_mut(mapped_arg);
             }
         }
-        Value::FnWithCaptures(FnWithCapturesImpl {
-            f:
-                FnImpl {
-                    body,
-                    arity,
-                    level,
-                    variadic,
-                },
-            captures,
-        }) => {
+        Value::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
             interpreter.extend_from_captures(captures)?;
             for arg in fn_args.into_iter().rev() {
-                let mapped_arg =
-                    interpreter.apply_fn_inner(body, *arity, *level, *variadic, [arg], 1)?;
+                let mapped_arg = interpreter.apply_fn_inner(f, [arg], 1)?;
                 result.push_front_mut(mapped_arg);
             }
             interpreter.leave_scope();
