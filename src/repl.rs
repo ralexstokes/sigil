@@ -119,11 +119,8 @@ impl<'a> StdRepl<'a> {
             Ok(forms) => forms,
             Err(err) => {
                 let context = err.context(&contents);
-                println!(
-                    "error reading source: {} at {}",
-                    err,
-                    &context[..DEFAULT_SOURCE_SPAN_LEN],
-                );
+                let span_len = std::cmp::min(context.len(), DEFAULT_SOURCE_SPAN_LEN);
+                println!("error reading source: {} at {}", err, &context[..span_len],);
                 return Ok(());
             }
         };
@@ -154,11 +151,12 @@ impl<'a> StdRepl<'a> {
                         Ok(forms) => forms,
                         Err(err) => {
                             let context = err.context(&line);
+                            let span_len = std::cmp::min(context.len(), DEFAULT_SOURCE_SPAN_LEN);
                             println!(
                                 "error reading `{}`: {} while reading {}",
                                 &line,
                                 err,
-                                &context[..DEFAULT_SOURCE_SPAN_LEN]
+                                &context[..span_len]
                             );
                             continue;
                         }
