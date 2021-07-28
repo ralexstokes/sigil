@@ -94,11 +94,11 @@ pub enum EvaluationError {
     MissingCapturedValue(String),
     #[error("cannot deref an unbound var `{0}`")]
     CannotDerefUnboundVar(Value),
-    #[error("overflow detected when adding {0} and {1}")]
+    #[error("overflow detected during arithmetic operation of {0} and {1}")]
     Overflow(i64, i64),
     #[error("could not negate {0}")]
     Negation(i64),
-    #[error("overflow detected when subtracting {0} and {1}")]
+    #[error("underflow detected during arithmetic operation of {0} and {1}")]
     Underflow(i64, i64),
     #[error("requested index {0} in collection with length {1}")]
     IndexOutOfBounds(usize, usize),

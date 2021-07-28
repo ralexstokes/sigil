@@ -175,7 +175,7 @@ pub fn divide(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         1 => match &args[0] {
             Value::Number(first) => 1_i64
                 .checked_div_euclid(*first)
-                .ok_or_else(|| EvaluationError::Underflow(1, *first))
+                .ok_or_else(|| EvaluationError::Overflow(1, *first))
                 .map(Value::Number),
             other => Err(EvaluationError::WrongType {
                 expected: "Number",
@@ -191,7 +191,7 @@ pub fn divide(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
                     .try_fold(*first, |acc, x| match x {
                         Value::Number(next) => acc
                             .checked_div_euclid(*next)
-                            .ok_or_else(|| EvaluationError::Underflow(acc, *next)),
+                            .ok_or_else(|| EvaluationError::Overflow(acc, *next)),
                         other => Err(EvaluationError::WrongType {
                             expected: "Number",
                             realized: other.clone(),
@@ -720,7 +720,7 @@ pub fn ex_info(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 pub fn throw(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     if args.len() != 1 {
         return Err(EvaluationError::WrongArity {
-            expected: 2,
+            expected: 1,
             realized: args.len(),
         });
     }
