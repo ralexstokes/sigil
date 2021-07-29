@@ -487,6 +487,11 @@ pub struct Interpreter {
     // stack of scopes
     // contains at least one scope, the "default" scope
     scopes: Vec<Scope>,
+
+    // low-res backtrace
+    apply_stack: Vec<Value>,
+    // index into `apply_stack` pointing at the first form to error
+    failed_form: Option<usize>,
 }
 
 impl Default for Interpreter {
@@ -503,6 +508,8 @@ impl Default for Interpreter {
             namespaces: HashMap::new(),
             scopes: vec![default_scope],
             symbol_index: None,
+            apply_stack: vec![],
+            failed_form: None,
         };
 
         interpreter.load_namespace(Namespace::new(DEFAULT_NAMESPACE));
@@ -1091,7 +1098,7 @@ impl Interpreter {
     ) -> EvaluationResult<Value> {
         let mut args = Vec::with_capacity(operand_forms.len());
         for form in &operand_forms {
-            let result = self.evaluate(form)?;
+            let result = self.evaluate_form(form)?;
             args.push(result);
         }
         self.apply_fn_inner(f, &args, args.len())
@@ -1104,7 +1111,7 @@ impl Interpreter {
     ) -> EvaluationResult<Value> {
         let mut operands = vec![];
         for operand_form in &operand_forms {
-            let operand = self.evaluate(operand_form)?;
+            let operand = self.evaluate_form(operand_form)?;
             operands.push(operand);
         }
         native_fn(self, &operands)
@@ -1139,7 +1146,7 @@ impl Interpreter {
             e @ Err(_) => return e,
             _ => unreachable!(),
         };
-        let value = self.evaluate(value_form).map_err(|err| {
+        let value = self.evaluate_form(value_form).map_err(|err| {
             // and if the evaluation is not ok,
             if !var_already_exists {
                 // and the var did not already exist, unintern the sentinel allocation
@@ -1211,7 +1218,7 @@ impl Interpreter {
             self.insert_value_in_current_scope(forward_identifier, var);
         }
         for (identifier, value_form) in bindings {
-            match self.evaluate(value_form) {
+            match self.evaluate_form(value_form) {
                 Ok(value) => {
                     if let Some(Value::Var(var)) =
                         resolve_symbol_in_scopes(self.scopes.iter().rev(), identifier)
@@ -1237,7 +1244,7 @@ impl Interpreter {
         self.enter_scope();
         let mut bindings_keys = vec![];
         for (name, value_form) in bindings.into_iter() {
-            let value = self.evaluate(value_form)?;
+            let value = self.evaluate_form(value_form)?;
             bindings_keys.push(name);
             self.insert_value_in_current_scope(name, value)
         }
@@ -1262,7 +1269,7 @@ impl Interpreter {
     fn eval_recur(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
         let mut result = PersistentVector::new();
         for form in operand_forms.into_iter() {
-            let value = self.evaluate(form)?;
+            let value = self.evaluate_form(form)?;
             result.push_back_mut(value);
         }
         Ok(Value::Recur(result))
@@ -1276,23 +1283,23 @@ impl Interpreter {
             });
         }
         let predicate_form = operand_forms.first().unwrap();
-        let predicate = self.evaluate(predicate_form)?;
+        let predicate = self.evaluate_form(predicate_form)?;
         let falsey = matches!(predicate, Value::Nil | Value::Bool(false));
         let rest = operand_forms.drop_first().expect("list is not empty");
         let consequent_form = rest.first().unwrap();
         match rest.len() {
             2 => {
                 if !falsey {
-                    self.evaluate(consequent_form)
+                    self.evaluate_form(consequent_form)
                 } else {
                     let rest = rest.drop_first().expect("list is not empty");
                     let alternate_form = rest.first().unwrap();
-                    self.evaluate(alternate_form)
+                    self.evaluate_form(alternate_form)
                 }
             }
             1 => {
                 if !falsey {
-                    self.evaluate(consequent_form)
+                    self.evaluate_form(consequent_form)
                 } else {
                     Ok(Value::Nil)
                 }
@@ -1304,7 +1311,7 @@ impl Interpreter {
     fn eval_do_inner(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         forms
             .iter()
-            .try_fold(Value::Nil, |_, next| self.evaluate(next))
+            .try_fold(Value::Nil, |_, next| self.evaluate_form(next))
     }
 
     fn eval_do(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -1349,7 +1356,7 @@ impl Interpreter {
         }
         let operand_form = operand_forms.first().unwrap();
         let expansion = eval_quasiquote(operand_form)?;
-        self.evaluate(&expansion)
+        self.evaluate_form(&expansion)
     }
 
     fn eval_defmacro(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -1382,7 +1389,7 @@ impl Interpreter {
         &mut self,
         operand_forms: PersistentList<Value>,
     ) -> EvaluationResult<Value> {
-        do_to_exactly_one_arg(operand_forms, |arg| match self.evaluate(arg)? {
+        do_to_exactly_one_arg(operand_forms, |arg| match self.evaluate_form(arg)? {
             Value::List(elems) => self.expand_macro_if_present(&elems),
             other => Ok(other),
         })
@@ -1449,10 +1456,13 @@ impl Interpreter {
             }
             PersistentList::from_iter(forms_to_eval)
         };
+        let apply_stack_pointer = self.apply_stack.len();
         match self.eval_do_inner(&forms_to_eval) {
             Ok(result) => Ok(result),
             Err(err) => match catch_form {
                 Some(Value::Fn(FnImpl { body, level, .. })) => {
+                    self.failed_form.take();
+                    self.apply_stack.truncate(apply_stack_pointer);
                     self.enter_scope();
                     let parameter = lambda_parameter_key(0, level);
                     self.insert_value_in_current_scope(&parameter, exception_from_system_err(err));
@@ -1464,6 +1474,8 @@ impl Interpreter {
                     f: FnImpl { body, level, .. },
                     mut captures,
                 })) => {
+                    self.failed_form.take();
+                    self.apply_stack.truncate(apply_stack_pointer);
                     // FIXME: here we pull values from scopes just to turn around and put them back in a child scope.
                     // Can we skip this?
                     update_captures(&mut captures, &self.scopes)?;
@@ -1516,7 +1528,7 @@ impl Interpreter {
         if let Some(expansion) = self.get_macro_expansion(operator_form, &operand_forms) {
             match expansion? {
                 Value::List(forms) => return self.eval_list(&forms),
-                other => return self.evaluate(&other),
+                other => return self.evaluate_form(&other),
             }
         }
         match operator_form {
@@ -1533,7 +1545,7 @@ impl Interpreter {
             Value::Symbol(s, None) if s == "defmacro!" => self.eval_defmacro(operand_forms),
             Value::Symbol(s, None) if s == "macroexpand" => self.eval_macroexpand(operand_forms),
             Value::Symbol(s, None) if s == "try*" => self.eval_try(operand_forms),
-            operator_form => match self.evaluate(operator_form)? {
+            operator_form => match self.evaluate_form(operator_form)? {
                 Value::Fn(f) => self.apply_fn(&f, operand_forms),
                 Value::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
                     self.extend_from_captures(&captures)?;
@@ -1541,7 +1553,21 @@ impl Interpreter {
                     self.leave_scope();
                     result
                 }
-                Value::Primitive(native_fn) => self.apply_primitive(native_fn, operand_forms),
+                Value::Primitive(native_fn) => {
+                    self.apply_stack.push(operator_form.clone());
+                    match self.apply_primitive(native_fn, operand_forms) {
+                        result @ Ok(..) => {
+                            self.apply_stack.pop().unwrap();
+                            result
+                        }
+                        err @ Err(..) => {
+                            if self.failed_form.is_none() {
+                                self.failed_form = Some(self.apply_stack.len() - 1);
+                            }
+                            err
+                        }
+                    }
+                }
                 v => Err(EvaluationError::CannotInvoke(v)),
             },
         }
@@ -1549,6 +1575,13 @@ impl Interpreter {
 
     /// Evaluate the `form` according to the semantics of the language.
     pub fn evaluate(&mut self, form: &Value) -> EvaluationResult<Value> {
+        let result = self.evaluate_form(form);
+        self.failed_form.take();
+        self.apply_stack.clear();
+        result
+    }
+
+    fn evaluate_form(&mut self, form: &Value) -> EvaluationResult<Value> {
         match form {
             Value::Nil => Ok(Value::Nil),
             Value::Bool(b) => Ok(Value::Bool(*b)),
@@ -1563,7 +1596,7 @@ impl Interpreter {
             Value::Vector(forms) => {
                 let mut result = PersistentVector::new();
                 for form in forms {
-                    let value = self.evaluate(form)?;
+                    let value = self.evaluate_form(form)?;
                     result.push_back_mut(value);
                 }
                 Ok(Value::Vector(result))
@@ -1571,8 +1604,8 @@ impl Interpreter {
             Value::Map(forms) => {
                 let mut result = PersistentMap::new();
                 for (k, v) in forms {
-                    let key = self.evaluate(k)?;
-                    let value = self.evaluate(v)?;
+                    let key = self.evaluate_form(k)?;
+                    let value = self.evaluate_form(v)?;
                     result.insert_mut(key, value);
                 }
                 Ok(Value::Map(result))
@@ -1580,7 +1613,7 @@ impl Interpreter {
             Value::Set(forms) => {
                 let mut result = PersistentSet::new();
                 for form in forms {
-                    let value = self.evaluate(form)?;
+                    let value = self.evaluate_form(form)?;
                     result.insert_mut(value);
                 }
                 Ok(Value::Set(result))
@@ -1611,7 +1644,7 @@ impl Interpreter {
     /// has these semantics.
     pub(crate) fn evaluate_in_global_scope(&mut self, form: &Value) -> EvaluationResult<Value> {
         let mut child_scopes: Vec<_> = self.scopes.drain(1..).collect();
-        let result = self.evaluate(form);
+        let result = self.evaluate_form(form);
         self.scopes.append(&mut child_scopes);
         result
     }
