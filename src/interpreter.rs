@@ -58,8 +58,6 @@ pub enum InterpreterError {
 
 #[derive(Debug, Error)]
 pub enum SyntaxError {
-    #[error("expected further forms when parsing data")]
-    MissingForms,
     #[error("lexical bindings must be pairs of names and values but found unpaired set `{0}`")]
     LexicalBindingsMustBePaired(PersistentVector<Value>),
     #[error("expected vector of lexical bindings instead of `{0}`")]
@@ -87,10 +85,6 @@ pub enum EvaluationError {
     UnableToResolveSymbolToValue(String),
     #[error("cannot invoke the supplied value `{0}`")]
     CannotInvoke(Value),
-    #[error("some failure: {0}")]
-    Failure(String),
-    #[error("error evaluating quasiquote: `{0}`")]
-    QuasiquoteError(String),
     #[error("missing value for captured symbol `{0}`")]
     MissingCapturedValue(String),
     #[error("cannot deref an unbound var `{0}`")]
@@ -367,12 +361,16 @@ fn parse_let_bindings(bindings_form: &Value) -> EvaluationResult<LetBindings> {
 }
 
 fn parse_let(forms: &PersistentList<Value>) -> EvaluationResult<LetForm> {
-    let bindings_form = forms
-        .first()
-        .ok_or_else(|| -> EvaluationError { SyntaxError::MissingForms.into() })?;
+    let bindings_form = forms.first().ok_or_else(|| EvaluationError::WrongArity {
+        expected: 1,
+        realized: 0,
+    })?;
     let body = forms
         .drop_first()
-        .ok_or_else(|| -> EvaluationError { SyntaxError::MissingForms.into() })?;
+        .ok_or_else(|| EvaluationError::WrongArity {
+            expected: 2,
+            realized: 1,
+        })?;
     let bindings = parse_let_bindings(bindings_form)?;
     Ok(LetForm { bindings, body })
 }
