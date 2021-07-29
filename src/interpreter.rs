@@ -23,6 +23,7 @@ use std::time::SystemTimeError;
 use std::{fs, io};
 use thiserror::Error;
 
+const MIN_VARIADIC_PARAM_COUNT: usize = 2;
 const COMMAND_LINE_ARGS_SYMBOL: &str = "*command-line-args*";
 const SPECIAL_FORMS: &[&str] = &[
     "def!",           // (def! symbol form)
@@ -927,43 +928,32 @@ impl Interpreter {
         // level of lambda nesting
         let level = lambda_scopes.len();
         // build parameter index
-        let mut variadic = false;
         let mut parameters = Scope::new();
-        let param_count = params.len();
-        let mut iter = params.iter().enumerate();
-        while let Some((index, param)) = iter.next() {
-            if param_count >= 2 && index == param_count - 2 {
-                match param {
-                    Value::Symbol(s, None) if s == "&" => {
-                        if let Some((index, last_symbol)) = iter.next() {
-                            match last_symbol {
-                                Value::Symbol(s, None) => {
-                                    variadic = true;
-                                    let parameter = lambda_parameter_key(index - 1, level);
-                                    parameters
-                                        .insert(s.to_string(), Value::Symbol(parameter, None));
-                                    if iter.next().is_some() {
-                                        return Err(SyntaxError::VariadicArgMissing.into());
-                                    }
-                                    break;
-                                }
-                                other => {
-                                    return Err(SyntaxError::LexicalBindingsMustHaveSymbolNames(
-                                        other.clone(),
-                                    )
-                                    .into());
-                                }
-                            }
-                        }
+        let mut variadic = false;
+        let params_count = params.len();
+        for (index, param) in params.iter().enumerate() {
+            match param {
+                Value::Symbol(s, None) if s == "&" => {
+                    if index + MIN_VARIADIC_PARAM_COUNT > params_count {
                         return Err(SyntaxError::VariadicArgMissing.into());
                     }
-                    _ => {}
+                    variadic = true;
                 }
-            }
-            match param {
                 Value::Symbol(s, None) => {
-                    let parameter = lambda_parameter_key(index, level);
-                    parameters.insert(s.to_string(), Value::Symbol(parameter, None));
+                    if variadic {
+                        if index + 1 != params_count {
+                            return Err(SyntaxError::VariadicArgMustBeUnique(Value::Vector(
+                                params.clone(),
+                            ))
+                            .into());
+                        }
+
+                        let parameter = lambda_parameter_key(index - 1, level);
+                        parameters.insert(s.to_string(), Value::Symbol(parameter, None));
+                    } else {
+                        let parameter = lambda_parameter_key(index, level);
+                        parameters.insert(s.to_string(), Value::Symbol(parameter, None));
+                    }
                 }
                 other => {
                     return Err(
@@ -972,6 +962,7 @@ impl Interpreter {
                 }
             }
         }
+
         let arity = if variadic {
             parameters.len() - 1
         } else {
