@@ -11,7 +11,7 @@ use itertools::Itertools;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::convert::{AsRef, From};
+use std::convert::AsRef;
 use std::default::Default;
 use std::env::Args;
 use std::fmt::Write;
