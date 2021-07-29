@@ -383,16 +383,14 @@ fn parse_let_bindings(bindings_form: &Value) -> EvaluationResult<LetBindings> {
 }
 
 fn parse_let(forms: &PersistentList<Value>) -> EvaluationResult<LetForm> {
-    let bindings_form = forms.first().ok_or_else(|| EvaluationError::WrongArity {
+    let bindings_form = forms.first().ok_or(EvaluationError::WrongArity {
         expected: 1,
         realized: 0,
     })?;
-    let body = forms
-        .drop_first()
-        .ok_or_else(|| EvaluationError::WrongArity {
-            expected: 2,
-            realized: 1,
-        })?;
+    let body = forms.drop_first().ok_or(EvaluationError::WrongArity {
+        expected: 2,
+        realized: 1,
+    })?;
     let bindings = parse_let_bindings(bindings_form)?;
     Ok(LetForm { bindings, body })
 }
