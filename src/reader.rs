@@ -157,7 +157,7 @@ enum Range {
     Slice(usize, usize),
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum ReaderError {
     #[error("error parsing number: {0}")]
     CouldNotParseNumber(#[from] ParseIntError),
@@ -189,7 +189,7 @@ pub enum ReaderError {
     Internal(&'static str),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// A `ReadError` wraps a `ReaderError` with information
 /// contextualizing the source of the error in the input data.
 pub struct ReadError(ReaderError, usize);

@@ -2,11 +2,10 @@ use crate::lang::{prelude, CORE_SOURCE};
 use crate::namespace::{Namespace, NamespaceError, DEFAULT_NAME as DEFAULT_NAMESPACE};
 use crate::reader::{read, ReadError};
 use crate::value::{
-    exception_from_thrown, exception_is_thrown, list_with_values, unbound_var, var_impl_into_inner,
-    FnImpl, FnWithCapturesImpl, NativeFn, PersistentList, PersistentMap, PersistentSet,
-    PersistentVector, Value,
+    exception_from_system_err, list_with_values, unbound_var, var_impl_into_inner, FnImpl,
+    FnWithCapturesImpl, NativeFn, PersistentList, PersistentMap, PersistentSet, PersistentVector,
+    UserException, Value,
 };
-use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -20,7 +19,7 @@ use std::iter::IntoIterator;
 use std::path::Path;
 use std::rc::Rc;
 use std::time::SystemTimeError;
-use std::{fs, io};
+use std::{fmt, fs, io};
 use thiserror::Error;
 
 const MIN_VARIADIC_PARAM_COUNT: usize = 2;
@@ -44,7 +43,7 @@ const SPECIAL_FORMS: &[&str] = &[
     "catch*",         // (catch* exc-symbol form*)
 ];
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum InterpreterError {
     #[error("requested the {0}th command line arg but only {1} supplied")]
     MissingCommandLineArg(usize, usize),
@@ -53,10 +52,31 @@ pub enum InterpreterError {
     #[error("system time error: {0}")]
     SystemTimeError(#[from] SystemTimeError),
     #[error("io error: {0}")]
-    IOError(#[from] io::Error),
+    IOError(IOErrorKindExt),
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone)]
+// `IOErrorKindExt` exists to facilitate cloning of errors,
+// which is necessary when wrapping system-level errors into
+// user-level exceptions; `std::io::Error` does not implement
+// `Clone` so we use the inner `std::io::ErrorKind` but hoist
+// back into `std::io::Error` when implementing `std::fmt::Display`.
+pub struct IOErrorKindExt(io::ErrorKind);
+
+impl fmt::Display for IOErrorKindExt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let err: io::Error = self.0.into();
+        write!(f, "{}", err)
+    }
+}
+
+impl From<io::Error> for InterpreterError {
+    fn from(err: io::Error) -> Self {
+        InterpreterError::IOError(IOErrorKindExt(err.kind()))
+    }
+}
+
+#[derive(Debug, Error, Clone)]
 pub enum SyntaxError {
     #[error("lexical bindings must be pairs of names and values but found unpaired set `{0}`")]
     LexicalBindingsMustBePaired(PersistentVector<Value>),
@@ -70,7 +90,7 @@ pub enum SyntaxError {
     VariadicArgMustBeUnique(Value),
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum EvaluationError {
     #[error("form invoked with an argument of the incorrect type: expected a value of type(s) `{expected}` but found value `{realized}`")]
     WrongType {
@@ -99,6 +119,8 @@ pub enum EvaluationError {
     IndexOutOfBounds(usize, usize),
     #[error("map cannot be constructed with an odd number of arguments: `{0}` with length `{1}`")]
     MapRequiresPairs(Value, usize),
+    #[error("exception: {0}")]
+    Exception(UserException),
     #[error("syntax error: {0}")]
     Syntax(#[from] SyntaxError),
     #[error("interpreter error: {0}")]
@@ -1284,12 +1306,7 @@ impl Interpreter {
     fn eval_do_inner(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
         forms
             .iter()
-            .fold_while(Ok(Value::Nil), |_, next| match self.evaluate(next) {
-                Ok(e @ Value::Exception(_)) if exception_is_thrown(&e) => Done(Ok(e)),
-                e @ Err(_) => Done(e),
-                value => Continue(value),
-            })
-            .into_inner()
+            .try_fold(Value::Nil, |_, next| self.evaluate(next))
     }
 
     fn eval_do(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -1434,12 +1451,13 @@ impl Interpreter {
             }
             PersistentList::from_iter(forms_to_eval)
         };
-        match self.eval_do_inner(&forms_to_eval)? {
-            e @ Value::Exception(_) if exception_is_thrown(&e) => match catch_form {
+        match self.eval_do_inner(&forms_to_eval) {
+            Ok(result) => Ok(result),
+            Err(err) => match catch_form {
                 Some(Value::Fn(FnImpl { body, level, .. })) => {
                     self.enter_scope();
                     let parameter = lambda_parameter_key(0, level);
-                    self.insert_value_in_current_scope(&parameter, exception_from_thrown(&e));
+                    self.insert_value_in_current_scope(&parameter, exception_from_system_err(err));
                     let result = self.eval_do_inner(&body);
                     self.leave_scope();
                     result
@@ -1454,15 +1472,15 @@ impl Interpreter {
                     self.extend_from_captures(&captures)?;
                     self.enter_scope();
                     let parameter = lambda_parameter_key(0, level);
-                    self.insert_value_in_current_scope(&parameter, exception_from_thrown(&e));
+                    self.insert_value_in_current_scope(&parameter, exception_from_system_err(err));
                     let result = self.eval_do_inner(&body);
                     self.leave_scope();
                     self.leave_scope();
                     result
                 }
-                _ => Ok(e),
+                None => Err(err),
+                _ => unreachable!("`catch*` form yields callable or nothing via syntax analysis"),
             },
-            result => Ok(result),
         }
     }
 
@@ -1608,7 +1626,8 @@ mod test {
     use crate::testing::run_eval_test;
     use crate::value::{
         atom_with_value, exception, list_with_values, map_with_values, var_with_value,
-        vector_with_values, PersistentList, PersistentMap, PersistentVector, Value::*,
+        vector_with_values, ExceptionImpl, PersistentList, PersistentMap, PersistentVector,
+        Value::{self, *},
     };
 
     #[test]
@@ -2385,8 +2404,11 @@ mod test {
 
     #[test]
     fn test_basic_try_catch() {
-        let basic_exc = exception("", &String("test".to_string()));
-        let exc = exception(
+        fn exception_value(msg: &str, data: &Value) -> Value {
+            Value::Exception(ExceptionImpl::User(exception(msg, data)))
+        }
+
+        let exc = exception_value(
             "test",
             &map_with_values(vec![(
                 Keyword("cause".to_string(), None),
@@ -2394,32 +2416,29 @@ mod test {
             )]),
         );
         let test_cases = vec![
-            ( "(throw \"test\")", basic_exc),
-            ( "(throw {:msg :foo})", exception("", &map_with_values(vec![(Keyword("msg".to_string(), None), Keyword("foo".to_string(), None))]))),
-            ( "(try* (throw '(1 2 3)) (catch* e e))", exception("", &list_with_values(vec![Number(1), Number(2), Number(3)]))),
+            // NOTE: these are errors from uncaught exceptions now...
+            // TODO: map to evaluation error test cases
+            // let basic_exc = exception_value("", &String("test".to_string()));
+            // ( "(throw \"test\")", basic_exc),
+            // ( "(throw {:msg :foo})", exception_value("", &map_with_values(vec![(Keyword("msg".to_string(), None), Keyword("foo".to_string(), None))]))),
             (
-                "(try* 22)",
-                Number(22),
+                "(try* (throw '(1 2 3)) (catch* e e))",
+                exception_value("", &list_with_values(vec![Number(1), Number(2), Number(3)])),
             ),
-            (
-                "(try* (prn 222) 22)",
-                Number(22),
-            ),
+            ("(try* 22)", Number(22)),
+            ("(try* (prn 222) 22)", Number(22)),
             (
                 "(try* (ex-info \"test\" {:cause \"no memory\"}))",
                 exc.clone(),
             ),
-            (
-                "(try* 123 (catch* e 0))",
-                Number(123),
-            ),
+            ("(try* 123 (catch* e 0))", Number(123)),
             (
                 "(try* (ex-info \"test\" {:cause \"no memory\"}) (catch* e 0))",
                 exc,
             ),
             (
                 "(try* (throw (ex-info \"test\" {:cause \"no memory\"})) (catch* e (str e)))",
-                String("exception: test, {:cause \"no memory\"}".to_string()),
+                String("test, {:cause \"no memory\"}".to_string()),
             ),
             (
                 "(try* (throw (ex-info \"test\" {:cause \"no memory\"})) (catch* e 999))",
@@ -2433,7 +2452,7 @@ mod test {
             (
                 // must throw exception to change control flow
                 "(try* (ex-info \"first\" {}) (ex-info \"test\" {:cause \"no memory\"}) (catch* e 22))",
-                exception(
+                exception_value(
                     "test",
                     &map_with_values(
                         [(
@@ -2447,7 +2466,7 @@ mod test {
             ),
             (
                 "(try* (throw (ex-info \"first\" {})) (ex-info \"test\" {:cause \"no memory\"}) (catch* e e))",
-                exception(
+                exception_value(
                     "first",
                     &Map(PersistentMap::new()),
                 ),
@@ -2483,6 +2502,18 @@ mod test {
             (
                 "(((fn* [a] (fn* [] (try* (throw (ex-info \"\" {:foo 2})) (catch* e (prn e) a)))) 2222))",
                 Number(2222),
+            ),
+            (
+                "(try* abc (catch* exc (prn exc) 2222))",
+                Number(2222),
+            ),
+            (
+                "(try* (abc 1 2) (catch* exc (prn exc)))",
+                Nil,
+            ),
+            (
+                "(try* (nth () 1) (catch* exc (prn exc)))",
+                Nil,
             ),
         ];
         run_eval_test(&test_cases);

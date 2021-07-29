@@ -1,4 +1,4 @@
-use crate::interpreter::{EvaluationResult, Interpreter};
+use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter};
 use itertools::{join, sorted, Itertools};
 pub use rpds::{
     HashTrieMap as PersistentMap, HashTrieSet as PersistentSet, List as PersistentList,
@@ -58,39 +58,19 @@ pub fn atom_impl_into_inner(atom: &AtomImpl) -> Value {
     atom.borrow().clone()
 }
 
-pub fn exception(msg: &str, data: &Value) -> Value {
-    Value::Exception(ExceptionImpl {
+pub fn exception(msg: &str, data: &Value) -> UserException {
+    UserException {
         message: msg.to_string(),
         data: Box::new(data.clone()),
-        thrown: false,
-    })
-}
-
-pub fn exception_into_thrown(exception: &Value) -> Value {
-    match exception {
-        Value::Exception(e @ ExceptionImpl { .. }) => Value::Exception(ExceptionImpl {
-            thrown: true,
-            ..e.clone()
-        }),
-        _ => unreachable!("programmer error to call with value other than exception"),
     }
 }
 
-pub fn exception_from_thrown(exception: &Value) -> Value {
-    match exception {
-        Value::Exception(e @ ExceptionImpl { .. }) => Value::Exception(ExceptionImpl {
-            thrown: false,
-            ..e.clone()
-        }),
-        _ => unreachable!("programmer error to call with value other than exception"),
-    }
-}
-
-pub fn exception_is_thrown(exception: &Value) -> bool {
-    match exception {
-        Value::Exception(ExceptionImpl { thrown, .. }) => *thrown,
-        _ => unreachable!("programmer error to call with value other than exception"),
-    }
+pub fn exception_from_system_err(err: EvaluationError) -> Value {
+    let inner = match err {
+        EvaluationError::Exception(exc) => ExceptionImpl::User(exc),
+        err => ExceptionImpl::System(Box::new(err)),
+    };
+    Value::Exception(inner)
 }
 
 pub type NativeFn = fn(&mut Interpreter, &[Value]) -> EvaluationResult<Value>;
@@ -168,26 +148,126 @@ impl VarImpl {
 
 type AtomImpl = Rc<RefCell<Value>>;
 
-#[derive(Clone, Eq, PartialOrd, Ord)]
-pub struct ExceptionImpl {
+#[derive(Clone, Debug)]
+pub struct UserException {
     message: String,
     data: Box<Value>,
-    // indicates if this exception has been thrown or not
-    // exceptions can be created but only influence control flow
-    // if "thrown"
-    thrown: bool,
+}
+
+impl UserException {
+    fn to_readable_string(&self) -> String {
+        let mut result = String::new();
+        if !self.message.is_empty() {
+            write!(&mut result, "{}, ", self.message).expect("can write to string")
+        }
+        write!(&mut result, "{}", self.data.to_readable_string()).expect("can write to string");
+        result
+    }
+}
+
+impl fmt::Display for UserException {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !self.message.is_empty() {
+            write!(f, "{}, ", self.message)?;
+        }
+        write!(f, "{}", self.data)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum ExceptionImpl {
+    User(UserException),
+    System(Box<EvaluationError>),
+}
+
+impl ExceptionImpl {
+    fn to_readable_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            ExceptionImpl::User(exc) => {
+                write!(&mut result, "{}", exc.to_readable_string()).expect("can write to string")
+            }
+            ExceptionImpl::System(err) => write!(
+                &mut result,
+                "{}",
+                Value::String(err.to_string()).to_readable_string()
+            )
+            .expect("can write to string"),
+        }
+        result
+    }
 }
 
 impl PartialEq for ExceptionImpl {
     fn eq(&self, other: &Self) -> bool {
-        (&self.message, &self.data) == (&other.message, &other.data)
+        match (self, other) {
+            (
+                ExceptionImpl::User(UserException { message, data }),
+                ExceptionImpl::User(UserException {
+                    message: other_message,
+                    data: other_data,
+                }),
+            ) => message == other_message && data == other_data,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ExceptionImpl {}
+
+impl PartialOrd for ExceptionImpl {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ExceptionImpl {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (
+                ExceptionImpl::User(UserException { message, data }),
+                ExceptionImpl::User(UserException {
+                    message: other_message,
+                    data: other_data,
+                }),
+            ) => (message, data).cmp(&(other_message, other_data)),
+            (ExceptionImpl::User(..), ExceptionImpl::System(..)) => Ordering::Less,
+            (ExceptionImpl::System(..), ExceptionImpl::User(..)) => Ordering::Greater,
+            (ExceptionImpl::System(a), ExceptionImpl::System(b)) => {
+                a.to_string().cmp(&b.to_string())
+            }
+        }
     }
 }
 
 impl Hash for ExceptionImpl {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.message.hash(state);
-        self.data.hash(state);
+        discriminant(self).hash(state);
+        match self {
+            ExceptionImpl::User(UserException { message, data }) => {
+                message.hash(state);
+                data.hash(state);
+            }
+            ExceptionImpl::System(err) => {
+                err.to_string().hash(state);
+            }
+        }
+    }
+}
+
+impl fmt::Display for ExceptionImpl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ExceptionImpl::User(UserException { message, data }) => {
+                if !message.is_empty() {
+                    write!(f, "{}, ", message)?;
+                }
+                write!(f, "{}", data)
+            }
+            ExceptionImpl::System(err) => {
+                write!(f, "{}", err)
+            }
+        }
     }
 }
 
@@ -668,12 +748,8 @@ impl fmt::Debug for Value {
             Recur(elems) => write!(f, "Recur({:?})", elems.iter().format(" ")),
             Atom(v) => write!(f, "Atom({:?})", *v.borrow()),
             Macro(_) => write!(f, "Macro(..)"),
-            Exception(ExceptionImpl {
-                message,
-                data,
-                thrown,
-            }) => {
-                write!(f, "Exception({:?}, {:?}, {:?})", message, data, thrown)
+            Exception(exception) => {
+                write!(f, "Exception({:?})", exception)
             }
         }
     }
@@ -730,8 +806,8 @@ impl fmt::Display for Value {
             Recur(elems) => write!(f, "[{}]", join(elems, " ")),
             Atom(v) => write!(f, "(atom {})", *v.borrow()),
             Macro(_) => write!(f, "<macro>"),
-            Exception(ExceptionImpl { message, data, .. }) => {
-                write!(f, "exception: {}, {}", message, data)
+            Exception(exception) => {
+                write!(f, "{}", exception)
             }
         }
     }
@@ -818,13 +894,9 @@ impl Value {
             }
             Value::Atom(v) => write!(&mut f, "(atom {})", v.borrow().to_readable_string())
                 .expect("can write to string"),
-            Value::Exception(ExceptionImpl { message, data, .. }) => write!(
-                &mut f,
-                "exception: {}, {}",
-                message,
-                data.to_readable_string()
-            )
-            .expect("can write to string"),
+            Value::Exception(e) => {
+                write!(&mut f, "{}", e.to_readable_string()).expect("can write to string")
+            }
             other => {
                 write!(&mut f, "{}", other).expect("can write to string");
             }

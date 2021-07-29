@@ -4,7 +4,7 @@ use thiserror::Error;
 
 pub(crate) const DEFAULT_NAME: &str = "core";
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum NamespaceError {
     #[error("value found in namespace was not a Value::Var, instead {0}")]
     ValueInNamespaceWasNotVar(Value),
