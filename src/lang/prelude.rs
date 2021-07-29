@@ -806,11 +806,12 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
         });
     }
     let fn_args: Vec<_> = match &args[1] {
+        Value::Nil => return Ok(Value::List(PersistentList::new())),
         Value::List(elems) => elems.iter().collect(),
         Value::Vector(elems) => elems.iter().collect(),
         other => {
             return Err(EvaluationError::WrongType {
-                expected: "List, Vector",
+                expected: "Nil, List, Vector",
                 realized: other.clone(),
             })
         }
