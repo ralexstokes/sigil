@@ -396,7 +396,7 @@ fn parse_let(forms: &PersistentList<Value>) -> EvaluationResult<LetForm> {
 }
 
 fn analyze_let(let_forms: &PersistentList<Value>) -> EvaluationResult<LetForm> {
-    let let_form = parse_let(&let_forms)?;
+    let let_form = parse_let(let_forms)?;
     Ok(let_form)
 }
 
@@ -776,7 +776,7 @@ impl Interpreter {
                         if let Value::Fn(f) = analyzed_fn {
                             // Note: need to hoist captures if there are intervening functions along the way...
                             for capture in &captures_at_this_level {
-                                if let Some(level) = get_lambda_parameter_level(&capture) {
+                                if let Some(level) = get_lambda_parameter_level(capture) {
                                     if level < current_fn_level {
                                         let captures_at_hoisted_level =
                                             captures.get_mut(level).expect("already pushed scope");
@@ -812,7 +812,7 @@ impl Interpreter {
                         if let Value::Fn(f) = analyzed_fn {
                             // Note: need to hoist captures if there are intervening functions along the way...
                             for capture in &captures_at_this_level {
-                                if let Some(level) = get_lambda_parameter_level(&capture) {
+                                if let Some(level) = get_lambda_parameter_level(capture) {
                                     if level < current_fn_level {
                                         let captures_at_hoisted_level =
                                             captures.get_mut(level).expect("already pushed scope");
@@ -1068,7 +1068,7 @@ impl Interpreter {
         self.enter_scope();
         let mut iter = args.into_iter().enumerate();
         if arity > 0 {
-            while let Some((index, arg)) = iter.next() {
+            for (index, arg) in &mut iter {
                 let parameter = lambda_parameter_key(index, level);
                 self.insert_value_in_current_scope(&parameter, arg.clone());
 
@@ -1124,7 +1124,7 @@ impl Interpreter {
         self.enter_scope();
         for (capture, value) in captures {
             if let Some(value) = value {
-                self.insert_value_in_current_scope(&capture, value.clone());
+                self.insert_value_in_current_scope(capture, value.clone());
             } else {
                 self.leave_scope();
                 return Err(EvaluationError::MissingCapturedValue(capture.to_string()));
@@ -1331,7 +1331,7 @@ impl Interpreter {
             Value::Vector(params) => {
                 let mut scopes = vec![];
                 let mut captures = vec![];
-                self.analyze_symbols_in_fn(body, &params, &mut scopes, &mut captures)
+                self.analyze_symbols_in_fn(body, params, &mut scopes, &mut captures)
             }
             other => Err(SyntaxError::LexicalBindingsMustBeVector(other.clone()).into()),
         }

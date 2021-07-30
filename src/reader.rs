@@ -283,12 +283,12 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
-    fn read_comment(&mut self, stream: &mut Stream) -> Result<(), ReaderError> {
+    fn read_comment(&mut self, mut stream: &mut Stream) -> Result<(), ReaderError> {
         let (start, _) = stream.next().expect("from peek");
         let mut end = None;
         self.cursor = start;
 
-        while let Some((_, ch)) = stream.next() {
+        for (_, ch) in &mut stream {
             if is_newline(ch) {
                 self.line_count += 1;
                 break;
