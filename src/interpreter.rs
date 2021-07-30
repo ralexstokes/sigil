@@ -266,75 +266,24 @@ struct LetBindings<'a> {
     bindings: Vec<BindingRef<'a>>,
 }
 
-fn resolve_forward_declarations_in_let_form<'a>(
-    forward_declarations: &mut Vec<&'a String>,
-    names: &HashSet<&String>,
-    value: &'a Value,
-) {
+fn binding_declares_fn((name, value): &BindingRef) -> Option<String> {
     match value {
-        Value::Symbol(s, None) if names.contains(s) => {
-            forward_declarations.push(s);
-        }
-        Value::List(elems) => {
-            for elem in elems {
-                resolve_forward_declarations_in_let_form(forward_declarations, names, elem);
-            }
-        }
-        Value::Vector(elems) => {
-            for elem in elems {
-                resolve_forward_declarations_in_let_form(forward_declarations, names, elem);
-            }
-        }
-        Value::Map(elems) => {
-            for (k, v) in elems {
-                resolve_forward_declarations_in_let_form(forward_declarations, names, k);
-                resolve_forward_declarations_in_let_form(forward_declarations, names, v);
-            }
-        }
-        Value::Set(elems) => {
-            for elem in elems {
-                resolve_forward_declarations_in_let_form(forward_declarations, names, elem);
-            }
-        }
-        Value::Fn(FnImpl { body, .. }) => {
-            for form in body {
-                resolve_forward_declarations_in_let_form(forward_declarations, names, form);
-            }
-        }
-        Value::FnWithCaptures(FnWithCapturesImpl {
-            f: FnImpl { body, .. },
-            ..
-        }) => {
-            for form in body {
-                resolve_forward_declarations_in_let_form(forward_declarations, names, form);
-            }
-        }
-        // these variants cannot capture
-        // local names in let bindings
-        Value::Nil
-        | Value::Bool(_)
-        | Value::Number(_)
-        | Value::String(_)
-        | Value::Keyword(_, _)
-        | Value::Symbol(..)
-        | Value::Primitive(_)
-        | Value::Var(..)
-        | Value::Recur(_)
-        | Value::Atom(_)
-        | Value::Exception(_)
-        | Value::Macro(_) => {}
+        Value::List(elems) => match elems.first() {
+            Some(Value::Symbol(s, None)) if s == "fn*" => Some(name.to_string()),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
 impl<'a> LetBindings<'a> {
-    fn resolve_forward_declarations(&self) -> Vec<&String> {
-        let names: HashSet<_> = self.bindings.iter().map(|(name, _)| *name).collect();
-
-        let mut forward_declarations = vec![];
-        for value in self.bindings.iter().map(|(_, value)| value) {
-            resolve_forward_declarations_in_let_form(&mut forward_declarations, &names, *value)
-        }
-        forward_declarations
+    // allow let bindings that declare `fn*`s to capture other
+    // let bindings that declare `fn*`s
+    fn resolve_forward_declarations(&self) -> HashSet<String> {
+        self.bindings
+            .iter()
+            .filter_map(binding_declares_fn)
+            .collect()
     }
 }
 
@@ -684,6 +633,62 @@ impl Interpreter {
         let _ = self.scopes.pop().expect("no underflow in scope stack");
     }
 
+    fn analyze_lexical_bindings_in_fn(
+        &mut self,
+        scopes: &mut Vec<Scope>,
+        captures: &mut Vec<HashSet<String>>,
+        // `level` helps implement lifetime analysis for captured parameters
+        level: usize,
+        bindings: &PersistentVector<Value>,
+        analyzed_elems: &mut Vec<Value>,
+    ) -> EvaluationResult<()> {
+        if bindings.len() % 2 != 0 {
+            return Err(SyntaxError::LexicalBindingsMustBePaired(bindings.clone()).into());
+        }
+        let mut analyzed_bindings = PersistentVector::new();
+        // NOTE: this is duplicated w/ `let*` analysis elsewhere...
+        // TODO: consolidate to one analysis phase
+        let mut forward_declarations = Scope::new();
+        for (name, value) in bindings.iter().tuples() {
+            match name {
+                Value::Symbol(s, None) => {
+                    // scope.insert(s.clone(), Value::Symbol(s.clone(), None));
+                    if binding_declares_fn(&(s, value)).is_some() {
+                        forward_declarations.insert(s.clone(), Value::Symbol(s.clone(), None));
+                    }
+                }
+                other => {
+                    return Err(
+                        SyntaxError::LexicalBindingsMustHaveSymbolNames(other.clone()).into(),
+                    );
+                }
+            }
+        }
+        // add a scope for local bindings...
+        scopes.push(Scope::new());
+        let bindings_scope = scopes.len() - 1;
+        // and then push forward declarations so they take precedence
+        scopes.push(forward_declarations);
+        for (name, value) in bindings.iter().tuples() {
+            let analyzed_value = self.analyze_form_in_fn(value, scopes, captures, level)?;
+            analyzed_bindings.push_back_mut(name.clone());
+            analyzed_bindings.push_back_mut(analyzed_value);
+            // lexcial bindings serially extend scope per binding:
+            match name {
+                Value::Symbol(s, None) => {
+                    let scope = scopes
+                        .get_mut(bindings_scope)
+                        .expect("did push bindings scope");
+                    scope.insert(s.clone(), Value::Symbol(s.clone(), None));
+                }
+                _ => unreachable!("already verified symbol names"),
+            }
+        }
+        scopes.pop().expect("remove forward declarations");
+        analyzed_elems.push(Value::Vector(analyzed_bindings));
+        Ok(())
+    }
+
     fn analyze_list_in_fn(
         &mut self,
         elems: &PersistentList<Value>,
@@ -700,67 +705,25 @@ impl Interpreter {
             Some(Value::Symbol(s, None)) if s == "let*" => {
                 analyzed_elems.push(Value::Symbol(s.to_string(), None));
                 if let Some(Value::Vector(bindings)) = iter.next() {
-                    if bindings.len() % 2 != 0 {
-                        return Err(
-                            SyntaxError::LexicalBindingsMustBePaired(bindings.clone()).into()
-                        );
-                    }
-                    let mut scope = Scope::new();
-                    let mut analyzed_bindings = PersistentVector::new();
-                    for (name, _) in bindings.iter().tuples() {
-                        match name {
-                            Value::Symbol(s, None) => {
-                                scope.insert(s.clone(), Value::Symbol(s.clone(), None));
-                            }
-                            other => {
-                                return Err(SyntaxError::LexicalBindingsMustHaveSymbolNames(
-                                    other.clone(),
-                                )
-                                .into());
-                            }
-                        }
-                    }
-                    scopes.push(scope);
-                    for (name, value) in bindings.iter().tuples() {
-                        let analyzed_value =
-                            self.analyze_form_in_fn(value, scopes, captures, level)?;
-                        analyzed_bindings.push_back_mut(name.clone());
-                        analyzed_bindings.push_back_mut(analyzed_value);
-                    }
-                    analyzed_elems.push(Value::Vector(analyzed_bindings));
+                    self.analyze_lexical_bindings_in_fn(
+                        scopes,
+                        captures,
+                        level,
+                        bindings,
+                        &mut analyzed_elems,
+                    )?
                 }
             }
             Some(Value::Symbol(s, None)) if s == "loop*" => {
                 analyzed_elems.push(Value::Symbol(s.to_string(), None));
                 if let Some(Value::Vector(bindings)) = iter.next() {
-                    if bindings.len() % 2 != 0 {
-                        return Err(
-                            SyntaxError::LexicalBindingsMustBePaired(bindings.clone()).into()
-                        );
-                    }
-                    let mut scope = Scope::new();
-                    let mut analyzed_bindings = PersistentVector::new();
-                    for (name, _) in bindings.iter().tuples() {
-                        match name {
-                            Value::Symbol(s, None) => {
-                                scope.insert(s.clone(), Value::Symbol(s.clone(), None));
-                            }
-                            other => {
-                                return Err(SyntaxError::LexicalBindingsMustHaveSymbolNames(
-                                    other.clone(),
-                                )
-                                .into());
-                            }
-                        }
-                    }
-                    for (name, value) in bindings.iter().tuples() {
-                        let analyzed_value =
-                            self.analyze_form_in_fn(value, scopes, captures, level)?;
-                        analyzed_bindings.push_back_mut(name.clone());
-                        analyzed_bindings.push_back_mut(analyzed_value);
-                    }
-                    analyzed_elems.push(Value::Vector(analyzed_bindings));
-                    scopes.push(scope);
+                    self.analyze_lexical_bindings_in_fn(
+                        scopes,
+                        captures,
+                        level,
+                        bindings,
+                        &mut analyzed_elems,
+                    )?
                 }
             }
             Some(Value::Symbol(s, None)) if s == "fn*" => {
@@ -843,7 +806,7 @@ impl Interpreter {
             let analyzed_elem = self.analyze_form_in_fn(elem, scopes, captures, level)?;
             analyzed_elems.push(analyzed_elem);
         }
-        if scopes_len != scopes.len() {
+        while scopes.len() > scopes_len {
             let _ = scopes
                 .pop()
                 .expect("only pop if we pushed local to this function");
@@ -1212,11 +1175,15 @@ impl Interpreter {
 
     fn eval_let(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
         let LetForm { bindings, body } = analyze_let(&operand_forms)?;
-        self.enter_scope();
-        for forward_identifier in bindings.resolve_forward_declarations() {
-            let var = unbound_var("", forward_identifier);
-            self.insert_value_in_current_scope(forward_identifier, var);
+        let forward_declarations = bindings.resolve_forward_declarations();
+        if !forward_declarations.is_empty() {
+            self.enter_scope();
+            for identifier in &forward_declarations {
+                let var = unbound_var("", identifier);
+                self.insert_value_in_current_scope(identifier, var);
+            }
         }
+        self.enter_scope();
         for (identifier, value_form) in bindings {
             match self.evaluate_form(value_form) {
                 Ok(value) => {
@@ -1230,12 +1197,18 @@ impl Interpreter {
                 }
                 e @ Err(_) => {
                     self.leave_scope();
+                    if !forward_declarations.is_empty() {
+                        self.leave_scope();
+                    }
                     return e;
                 }
             }
         }
         let result = self.eval_do_inner(&body);
         self.leave_scope();
+        if !forward_declarations.is_empty() {
+            self.leave_scope();
+        }
         result
     }
 
@@ -1770,6 +1743,7 @@ mod test {
             ("(let* [] )", Nil),
             ("(let* [a 1] )", Nil),
             ("(let* [a 3] a)", Number(3)),
+            ("(let* [_ 30 a _] a)", Number(30)),
             ("(let* [b 3] (+ b 5))", Number(8)),
             ("(let* [a 3] (+ a (let* [c 5] c)))", Number(8)),
             ("(let* [a (+ 1 2)] (+ a (let* [c 5] c)))", Number(8)),
@@ -1809,6 +1783,8 @@ mod test {
                 "(defn f [] (let* [cst (fn* [n] (if (= n 0) :success (cst (- n 1))))] (cst 10))) (f)",
                 Keyword("success".to_string(), None),
             ),
+            ("(def! f (fn* [ast] (let* [ast ast] ast))) (f 22)", Number(22)),
+            ("(def! f (fn* [ast] (let* [ast (inc ast) bar (inc ast)] bar))) (f 22)", Number(24)),
         ];
         run_eval_test(&test_cases);
     }
