@@ -3,8 +3,8 @@ use crate::namespace::{Namespace, DEFAULT_NAME};
 use crate::reader::read;
 use crate::value::{
     atom_impl_into_inner, atom_with_value, exception, list_with_values, map_with_values,
-    set_with_values, var_impl_into_inner, vector_with_values, ExceptionImpl, FnWithCapturesImpl,
-    PersistentList, PersistentSet, PersistentVector, Value,
+    set_with_values, var_impl_into_inner, vector_with_values, FnWithCapturesImpl, PersistentList,
+    PersistentSet, PersistentVector, Value,
 };
 use itertools::Itertools;
 use std::fmt::Write;
@@ -709,9 +709,7 @@ pub fn ex_info(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         });
     }
     match &args[0] {
-        Value::String(msg) => Ok(Value::Exception(ExceptionImpl::User(exception(
-            msg, &args[1],
-        )))),
+        Value::String(msg) => Ok(Value::Exception(exception(msg, &args[1]))),
         other => Err(EvaluationError::WrongType {
             expected: "String",
             realized: other.clone(),
@@ -738,10 +736,7 @@ pub fn throw(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             coll @ Value::Vector(_) => exception("", coll),
             coll @ Value::Map(_) => exception("", coll),
             coll @ Value::Set(_) => exception("", coll),
-            Value::Exception(e) => match e {
-                ExceptionImpl::User(inner) => inner.clone(),
-                _ => unreachable!("invariant to not nest system errors"),
-            },
+            Value::Exception(e) => e.clone(),
             other => return Err(EvaluationError::WrongType {
                 expected:
                     "Nil, Bool, Number, String, Keyword, Symbol, List, Vector, Map, Set, Exception",

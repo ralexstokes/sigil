@@ -58,16 +58,16 @@ pub fn atom_impl_into_inner(atom: &AtomImpl) -> Value {
     atom.borrow().clone()
 }
 
-pub fn exception(msg: &str, data: &Value) -> UserException {
-    UserException {
+pub fn exception(msg: &str, data: &Value) -> ExceptionImpl {
+    ExceptionImpl::User(UserException {
         message: msg.to_string(),
         data: Box::new(data.clone()),
-    }
+    })
 }
 
 pub fn exception_from_system_err(err: EvaluationError) -> Value {
     let inner = match err {
-        EvaluationError::Exception(exc) => ExceptionImpl::User(exc),
+        EvaluationError::Exception(exc) => exc,
         err => ExceptionImpl::System(Box::new(err)),
     };
     Value::Exception(inner)

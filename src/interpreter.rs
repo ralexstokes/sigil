@@ -2,9 +2,9 @@ use crate::lang::{prelude, CORE_SOURCE};
 use crate::namespace::{Namespace, NamespaceError, DEFAULT_NAME as DEFAULT_NAMESPACE};
 use crate::reader::{read, ReadError};
 use crate::value::{
-    exception_from_system_err, list_with_values, unbound_var, var_impl_into_inner, FnImpl,
-    FnWithCapturesImpl, NativeFn, PersistentList, PersistentMap, PersistentSet, PersistentVector,
-    UserException, Value,
+    exception_from_system_err, list_with_values, unbound_var, var_impl_into_inner, ExceptionImpl,
+    FnImpl, FnWithCapturesImpl, NativeFn, PersistentList, PersistentMap, PersistentSet,
+    PersistentVector, Value,
 };
 use itertools::Itertools;
 use std::cell::RefCell;
@@ -120,7 +120,7 @@ pub enum EvaluationError {
     #[error("map cannot be constructed with an odd number of arguments: `{0}` with length `{1}`")]
     MapRequiresPairs(Value, usize),
     #[error("exception: {0}")]
-    Exception(UserException),
+    Exception(ExceptionImpl),
     #[error("syntax error: {0}")]
     Syntax(#[from] SyntaxError),
     #[error("interpreter error: {0}")]
@@ -1657,7 +1657,7 @@ mod test {
     use crate::testing::run_eval_test;
     use crate::value::{
         atom_with_value, exception, list_with_values, map_with_values, var_with_value,
-        vector_with_values, ExceptionImpl, PersistentList, PersistentMap, PersistentVector,
+        vector_with_values, PersistentList, PersistentMap, PersistentVector,
         Value::{self, *},
     };
 
@@ -2436,7 +2436,7 @@ mod test {
     #[test]
     fn test_basic_try_catch() {
         fn exception_value(msg: &str, data: &Value) -> Value {
-            Value::Exception(ExceptionImpl::User(exception(msg, data)))
+            Value::Exception(exception(msg, data))
         }
 
         let exc = exception_value(
@@ -2545,6 +2545,10 @@ mod test {
             (
                 "(try* (nth () 1) (catch* exc (prn exc)))",
                 Nil,
+            ),
+            (
+                "(try* (try* (nth () 1) (catch* exc (prn exc) (throw exc))) (catch* exc (prn exc) 33))",
+                Number(33),
             ),
         ];
         run_eval_test(&test_cases);
