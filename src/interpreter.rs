@@ -486,10 +486,10 @@ pub struct Interpreter {
 
     // stack of scopes
     // contains at least one scope, the "default" scope
-    scopes: Vec<Scope>,
+    pub(crate) scopes: Vec<Scope>,
 
     // low-res backtrace
-    apply_stack: Vec<Value>,
+    pub(crate) apply_stack: Vec<Value>,
     // index into `apply_stack` pointing at the first form to error
     failed_form: Option<usize>,
 }

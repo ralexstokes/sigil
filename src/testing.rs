@@ -2,6 +2,8 @@ use crate::interpreter::InterpreterBuilder;
 use crate::reader::read;
 use crate::value::Value;
 
+const EXPECTED_STARTING_SCOPE_LEN: usize = 1;
+
 pub fn run_eval_test(test_cases: &[(&str, Value)]) {
     let mut has_err = false;
     for (input, expected) in test_cases {
@@ -20,6 +22,9 @@ pub fn run_eval_test(test_cases: &[(&str, Value)]) {
 
         let mut interpreter = InterpreterBuilder::default().build();
         let mut final_result: Option<Value> = None;
+        let original_scope_len = interpreter.scopes.len();
+        assert!(original_scope_len == EXPECTED_STARTING_SCOPE_LEN);
+        assert!(interpreter.apply_stack.is_empty());
         for form in &forms {
             match interpreter.evaluate(form) {
                 Ok(result) => {
@@ -34,6 +39,8 @@ pub fn run_eval_test(test_cases: &[(&str, Value)]) {
                 }
             }
         }
+        assert!(interpreter.scopes.len() == original_scope_len);
+        assert!(interpreter.apply_stack.is_empty());
         if let Some(final_result) = final_result {
             if final_result != *expected {
                 has_err = true;
