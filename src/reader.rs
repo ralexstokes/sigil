@@ -163,7 +163,7 @@ pub enum ReaderError {
     CouldNotParseNumber(#[from] ParseIntError),
     #[error("error negating number: {0}")]
     CouldNotNegateNumber(i64),
-    #[error("unexpected input {0}")]
+    #[error("unexpected input `{0}`")]
     UnexpectedInput(char),
     #[error("expected further input but found EOF")]
     ExpectedMoreInput,
