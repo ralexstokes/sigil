@@ -14,13 +14,20 @@
 (defmacro declare [& names]
   `(do ~@(map (fn* [name] (list 'def name)) names)))
 
+;; numeric
 (defn inc [x]
   (+ x 1))
 (defn dec [x]
   (- x 1))
+
+;; functions
 (defn not [x]
   (if x false true))
+(defn identity [x] x)
 
+;; lang
+(defmacro comment [& forms]
+  nil)
 
 ;; io
 (def! load-file (fn* [f]
