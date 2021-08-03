@@ -33,11 +33,15 @@ pub fn run_eval_test(test_cases: &[(&str, Value)]) {
                 Err(e) => {
                     has_err = true;
                     println!(
-                        "failure: evaluating `{}` should give `{}` but errored: {}",
-                        input, expected, e
+                        "failure: evaluating `{}` from `{}` should give `{}` but errored: {}",
+                        form, input, expected, e
                     );
+                    break;
                 }
             }
+        }
+        if has_err {
+            continue;
         }
         assert!(interpreter.scopes.len() == original_scope_len);
         assert!(interpreter.apply_stack.is_empty());
