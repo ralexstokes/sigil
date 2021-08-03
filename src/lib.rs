@@ -1,3 +1,4 @@
+mod analyzer;
 mod interpreter;
 mod lang;
 mod namespace;

@@ -1,3 +1,4 @@
+use crate::analyzer::{analyze_fn, analyze_let, lambda_parameter_key, LetForm};
 use crate::lang::{prelude, CORE_SOURCE};
 use crate::namespace::{Namespace, NamespaceError, DEFAULT_NAME as DEFAULT_NAMESPACE};
 use crate::reader::{read, ReadError};
@@ -6,7 +7,6 @@ use crate::value::{
     FnImpl, FnWithCapturesImpl, NativeFn, PersistentList, PersistentMap, PersistentSet,
     PersistentVector, Value,
 };
-use itertools::Itertools;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -22,7 +22,6 @@ use std::time::SystemTimeError;
 use std::{fmt, fs, io};
 use thiserror::Error;
 
-const MIN_VARIADIC_PARAM_COUNT: usize = 2;
 const COMMAND_LINE_ARGS_SYMBOL: &str = "*command-line-args*";
 const SPECIAL_FORMS: &[&str] = &[
     "def!",           // (def! symbol form)
@@ -133,24 +132,9 @@ pub enum EvaluationError {
 
 pub type EvaluationResult<T> = Result<T, EvaluationError>;
 pub type SymbolIndex = HashSet<String>;
-type Scope = HashMap<String, Value>;
-
-fn lambda_parameter_key(index: usize, level: usize) -> String {
-    let mut key = String::new();
-    let _ = write!(&mut key, ":system-fn-%{}/{}", index, level);
-    key
-}
-
-fn get_lambda_parameter_level(key: &str) -> Option<usize> {
-    if key.starts_with(":system-fn-%") {
-        return key
-            .chars()
-            .last()
-            .and_then(|level| level.to_digit(10))
-            .map(|level| level as usize);
-    }
-    None
-}
+// maps identifiers to {Value::Symbol, Value::Var}
+// `Var` variant is to allow for recursive fns in `let*`
+pub type Scope = HashMap<String, Value>;
 
 // `scopes` from most specific to least specific
 fn resolve_symbol_in_scopes<'a>(
@@ -258,95 +242,6 @@ fn eval_quasiquote(value: &Value) -> EvaluationResult<Value> {
         }
         v => Ok(v.clone()),
     }
-}
-
-type BindingRef<'a> = (&'a String, &'a Value);
-
-struct LetBindings<'a> {
-    bindings: Vec<BindingRef<'a>>,
-}
-
-fn binding_declares_fn((name, value): &BindingRef) -> Option<String> {
-    match value {
-        Value::List(elems) => match elems.first() {
-            Some(Value::Symbol(s, None)) if s == "fn*" => Some(name.to_string()),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-impl<'a> LetBindings<'a> {
-    // allow let bindings that declare `fn*`s to capture other
-    // let bindings that declare `fn*`s
-    fn resolve_forward_declarations(&self) -> HashSet<String> {
-        self.bindings
-            .iter()
-            .filter_map(binding_declares_fn)
-            .collect()
-    }
-}
-
-impl<'a> IntoIterator for LetBindings<'a> {
-    type Item = BindingRef<'a>;
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.bindings.into_iter()
-    }
-}
-
-struct LetForm<'a> {
-    bindings: LetBindings<'a>,
-    body: PersistentList<Value>,
-}
-
-fn parse_let_bindings(bindings_form: &Value) -> EvaluationResult<LetBindings> {
-    match bindings_form {
-        Value::Vector(bindings) => {
-            let bindings_count = bindings.len();
-            if bindings_count % 2 == 0 {
-                let mut validated_bindings = Vec::with_capacity(bindings_count);
-                for (name, value_form) in bindings.iter().tuples() {
-                    match name {
-                        Value::Symbol(s, None) => {
-                            validated_bindings.push((s, value_form));
-                        }
-                        other => {
-                            return Err(SyntaxError::LexicalBindingsMustHaveSymbolNames(
-                                other.clone(),
-                            )
-                            .into());
-                        }
-                    }
-                }
-                Ok(LetBindings {
-                    bindings: validated_bindings,
-                })
-            } else {
-                Err(SyntaxError::LexicalBindingsMustBePaired(bindings.clone()).into())
-            }
-        }
-        other => Err(SyntaxError::LexicalBindingsMustBeVector(other.clone()).into()),
-    }
-}
-
-fn parse_let(forms: &PersistentList<Value>) -> EvaluationResult<LetForm> {
-    let bindings_form = forms.first().ok_or(EvaluationError::WrongArity {
-        expected: 1,
-        realized: 0,
-    })?;
-    let body = forms.drop_first().ok_or(EvaluationError::WrongArity {
-        expected: 2,
-        realized: 1,
-    })?;
-    let bindings = parse_let_bindings(bindings_form)?;
-    Ok(LetForm { bindings, body })
-}
-
-fn analyze_let(let_forms: &PersistentList<Value>) -> EvaluationResult<LetForm> {
-    let let_form = parse_let(let_forms)?;
-    Ok(let_form)
 }
 
 fn do_to_exactly_one_arg<A>(
@@ -590,7 +485,7 @@ impl Interpreter {
     }
 
     // symbol -> namespace -> var
-    fn resolve_symbol_to_var(
+    pub(crate) fn resolve_symbol_to_var(
         &self,
         identifier: &str,
         ns_opt: Option<&String>,
@@ -631,345 +526,6 @@ impl Interpreter {
     /// NOTE: exposed for some prelude functionality.
     pub fn leave_scope(&mut self) {
         let _ = self.scopes.pop().expect("no underflow in scope stack");
-    }
-
-    fn analyze_lexical_bindings_in_fn(
-        &mut self,
-        scopes: &mut Vec<Scope>,
-        captures: &mut Vec<HashSet<String>>,
-        // `level` helps implement lifetime analysis for captured parameters
-        level: usize,
-        bindings: &PersistentVector<Value>,
-        analyzed_elems: &mut Vec<Value>,
-    ) -> EvaluationResult<()> {
-        if bindings.len() % 2 != 0 {
-            return Err(SyntaxError::LexicalBindingsMustBePaired(bindings.clone()).into());
-        }
-        let mut analyzed_bindings = PersistentVector::new();
-        // NOTE: this is duplicated w/ `let*` analysis elsewhere...
-        // TODO: consolidate to one analysis phase
-        let mut forward_declarations = Scope::new();
-        for (name, value) in bindings.iter().tuples() {
-            match name {
-                Value::Symbol(s, None) => {
-                    // scope.insert(s.clone(), Value::Symbol(s.clone(), None));
-                    if binding_declares_fn(&(s, value)).is_some() {
-                        forward_declarations.insert(s.clone(), Value::Symbol(s.clone(), None));
-                    }
-                }
-                other => {
-                    return Err(
-                        SyntaxError::LexicalBindingsMustHaveSymbolNames(other.clone()).into(),
-                    );
-                }
-            }
-        }
-        // add a scope for local bindings...
-        scopes.push(Scope::new());
-        let bindings_scope = scopes.len() - 1;
-        // and then push forward declarations so they take precedence
-        scopes.push(forward_declarations);
-        for (name, value) in bindings.iter().tuples() {
-            let analyzed_value = self.analyze_form_in_fn(value, scopes, captures, level)?;
-            analyzed_bindings.push_back_mut(name.clone());
-            analyzed_bindings.push_back_mut(analyzed_value);
-            // lexcial bindings serially extend scope per binding:
-            match name {
-                Value::Symbol(s, None) => {
-                    let scope = scopes
-                        .get_mut(bindings_scope)
-                        .expect("did push bindings scope");
-                    scope.insert(s.clone(), Value::Symbol(s.clone(), None));
-                }
-                _ => unreachable!("already verified symbol names"),
-            }
-        }
-        scopes.pop().expect("remove forward declarations");
-        analyzed_elems.push(Value::Vector(analyzed_bindings));
-        Ok(())
-    }
-
-    fn analyze_list_in_fn(
-        &mut self,
-        elems: &PersistentList<Value>,
-        scopes: &mut Vec<Scope>,
-        captures: &mut Vec<HashSet<String>>,
-        // `level` helps implement lifetime analysis for captured parameters
-        level: usize,
-    ) -> EvaluationResult<Value> {
-        // if first elem introduces a new lexical scope...
-        let mut iter = elems.iter();
-        let scopes_len = scopes.len();
-        let mut analyzed_elems = vec![];
-        match iter.next() {
-            Some(Value::Symbol(s, None)) if s == "let*" => {
-                analyzed_elems.push(Value::Symbol(s.to_string(), None));
-                if let Some(Value::Vector(bindings)) = iter.next() {
-                    self.analyze_lexical_bindings_in_fn(
-                        scopes,
-                        captures,
-                        level,
-                        bindings,
-                        &mut analyzed_elems,
-                    )?
-                }
-            }
-            Some(Value::Symbol(s, None)) if s == "loop*" => {
-                analyzed_elems.push(Value::Symbol(s.to_string(), None));
-                if let Some(Value::Vector(bindings)) = iter.next() {
-                    self.analyze_lexical_bindings_in_fn(
-                        scopes,
-                        captures,
-                        level,
-                        bindings,
-                        &mut analyzed_elems,
-                    )?
-                }
-            }
-            Some(Value::Symbol(s, None)) if s == "fn*" => {
-                if let Some(Value::Vector(bindings)) = iter.next() {
-                    let rest = iter.cloned().collect();
-                    // Note: can only have captures over enclosing fns if we have recursive nesting of fns
-                    let current_fn_level = captures.len();
-                    captures.push(HashSet::new());
-                    let analyzed_fn =
-                        self.analyze_symbols_in_fn(rest, bindings, scopes, captures)?;
-                    let captures_at_this_level = captures.pop().expect("did push");
-                    if !captures_at_this_level.is_empty() {
-                        if let Value::Fn(f) = analyzed_fn {
-                            // Note: need to hoist captures if there are intervening functions along the way...
-                            for capture in &captures_at_this_level {
-                                if let Some(level) = get_lambda_parameter_level(capture) {
-                                    if level < current_fn_level {
-                                        let captures_at_hoisted_level =
-                                            captures.get_mut(level).expect("already pushed scope");
-                                        captures_at_hoisted_level.insert(capture.to_string());
-                                    }
-                                }
-                            }
-                            let captures = captures_at_this_level
-                                .iter()
-                                .map(|capture| (capture.to_string(), None))
-                                .collect();
-                            return Ok(Value::FnWithCaptures(FnWithCapturesImpl { f, captures }));
-                        }
-                    }
-                    return Ok(analyzed_fn);
-                }
-            }
-            Some(Value::Symbol(s, None)) if s == "catch*" => {
-                if let Some(Value::Symbol(s, None)) = iter.next() {
-                    // Note: to allow for captures inside `catch*`,
-                    // treat the form as a lambda of one parameter
-                    let mut bindings = PersistentVector::new();
-                    bindings.push_back_mut(Value::Symbol(s.clone(), None));
-
-                    let rest = iter.cloned().collect();
-                    // Note: can only have captures over enclosing fns if we have recursive nesting of fns
-                    let current_fn_level = captures.len();
-                    captures.push(HashSet::new());
-                    let analyzed_fn =
-                        self.analyze_symbols_in_fn(rest, &bindings, scopes, captures)?;
-                    let captures_at_this_level = captures.pop().expect("did push");
-                    if !captures_at_this_level.is_empty() {
-                        if let Value::Fn(f) = analyzed_fn {
-                            // Note: need to hoist captures if there are intervening functions along the way...
-                            for capture in &captures_at_this_level {
-                                if let Some(level) = get_lambda_parameter_level(capture) {
-                                    if level < current_fn_level {
-                                        let captures_at_hoisted_level =
-                                            captures.get_mut(level).expect("already pushed scope");
-                                        captures_at_hoisted_level.insert(capture.to_string());
-                                    }
-                                }
-                            }
-                            let captures = captures_at_this_level
-                                .iter()
-                                .map(|capture| (capture.to_string(), None))
-                                .collect();
-                            return Ok(Value::FnWithCaptures(FnWithCapturesImpl { f, captures }));
-                        }
-                    }
-                    return Ok(analyzed_fn);
-                }
-            }
-            Some(Value::Symbol(s, None)) if s == "quote" => {
-                if let Some(Value::Symbol(s, None)) = iter.next() {
-                    let mut scope = Scope::new();
-                    scope.insert(s.to_string(), Value::Symbol(s.to_string(), None));
-                    scopes.push(scope);
-                }
-            }
-            _ => {}
-        }
-        for elem in elems.iter().skip(analyzed_elems.len()) {
-            let analyzed_elem = self.analyze_form_in_fn(elem, scopes, captures, level)?;
-            analyzed_elems.push(analyzed_elem);
-        }
-        while scopes.len() > scopes_len {
-            let _ = scopes
-                .pop()
-                .expect("only pop if we pushed local to this function");
-        }
-        Ok(Value::List(PersistentList::from_iter(analyzed_elems)))
-    }
-
-    // Analyze symbols (recursively) in `form`:
-    // 1. Rewrite lambda parameters
-    // 2. Capture references to external vars
-    fn analyze_form_in_fn(
-        &mut self,
-        form: &Value,
-        scopes: &mut Vec<Scope>,
-        captures: &mut Vec<HashSet<String>>,
-        // `level` helps implement lifetime analysis for captured parameters
-        level: usize,
-    ) -> EvaluationResult<Value> {
-        match form {
-            Value::Symbol(identifier, ns_opt) => {
-                if let Some(value) = resolve_symbol_in_scopes(scopes.iter().rev(), identifier) {
-                    if let Value::Symbol(resolved_identifier, None) = value {
-                        if let Some(requested_level) =
-                            get_lambda_parameter_level(resolved_identifier)
-                        {
-                            if requested_level < level {
-                                let captures_at_level = captures
-                                    .last_mut()
-                                    .expect("already pushed scope for captures");
-                                // TODO: work through lifetimes here to avoid cloning...
-                                captures_at_level.insert(resolved_identifier.to_string());
-                            }
-                        }
-                    }
-                    return Ok(value.clone());
-                }
-                self.resolve_symbol_to_var(identifier, ns_opt.as_ref())
-            }
-            Value::List(elems) => {
-                if elems.is_empty() {
-                    return Ok(Value::List(PersistentList::new()));
-                }
-
-                let first = elems.first().unwrap();
-                let rest = elems.drop_first().expect("list is not empty");
-                if let Some(expansion) = self.get_macro_expansion(first, &rest) {
-                    match expansion? {
-                        Value::List(elems) => {
-                            self.analyze_list_in_fn(&elems, scopes, captures, level)
-                        }
-                        other => self.analyze_form_in_fn(&other, scopes, captures, level),
-                    }
-                } else {
-                    self.analyze_list_in_fn(elems, scopes, captures, level)
-                }
-            }
-            Value::Vector(elems) => {
-                let mut analyzed_elems = PersistentVector::new();
-                for elem in elems.iter() {
-                    let analyzed_elem = self.analyze_form_in_fn(elem, scopes, captures, level)?;
-                    analyzed_elems.push_back_mut(analyzed_elem);
-                }
-                Ok(Value::Vector(analyzed_elems))
-            }
-            Value::Map(elems) => {
-                let mut analyzed_elems = PersistentMap::new();
-                for (k, v) in elems.iter() {
-                    let analyzed_k = self.analyze_form_in_fn(k, scopes, captures, level)?;
-                    let analyzed_v = self.analyze_form_in_fn(v, scopes, captures, level)?;
-                    analyzed_elems.insert_mut(analyzed_k, analyzed_v);
-                }
-                Ok(Value::Map(analyzed_elems))
-            }
-            Value::Set(elems) => {
-                let mut analyzed_elems = PersistentSet::new();
-                for elem in elems.iter() {
-                    let analyzed_elem = self.analyze_form_in_fn(elem, scopes, captures, level)?;
-                    analyzed_elems.insert_mut(analyzed_elem);
-                }
-                Ok(Value::Set(analyzed_elems))
-            }
-            Value::Fn(_) => unreachable!(),
-            Value::FnWithCaptures(_) => unreachable!(),
-            Value::Primitive(_) => unreachable!(),
-            Value::Recur(_) => unreachable!(),
-            Value::Macro(_) => unreachable!(),
-            Value::Exception(_) => unreachable!(),
-            // Nil, Bool, Number, String, Keyword, Var, Atom
-            other => Ok(other.clone()),
-        }
-    }
-
-    // Non-local symbols should:
-    // 1. resolve to a parameter
-    // 2. resolve to a value in the enclosing environment, which is captured
-    // otherwise, the lambda is an error
-    //
-    // Note: parameters are resolved to (ordinal) reserved symbols
-    fn analyze_symbols_in_fn(
-        &mut self,
-        body: PersistentList<Value>,
-        params: &PersistentVector<Value>,
-        lambda_scopes: &mut Vec<Scope>,
-        // record any values captured from the environment that would outlive the lifetime of this particular lambda
-        captures: &mut Vec<HashSet<String>>,
-    ) -> EvaluationResult<Value> {
-        // level of lambda nesting
-        let level = lambda_scopes.len();
-        // build parameter index
-        let mut parameters = Scope::new();
-        let mut variadic = false;
-        let params_count = params.len();
-        for (index, param) in params.iter().enumerate() {
-            match param {
-                Value::Symbol(s, None) if s == "&" => {
-                    if index + MIN_VARIADIC_PARAM_COUNT > params_count {
-                        return Err(SyntaxError::VariadicArgMissing.into());
-                    }
-                    variadic = true;
-                }
-                Value::Symbol(s, None) => {
-                    if variadic {
-                        if index + 1 != params_count {
-                            return Err(SyntaxError::VariadicArgMustBeUnique(Value::Vector(
-                                params.clone(),
-                            ))
-                            .into());
-                        }
-
-                        let parameter = lambda_parameter_key(index - 1, level);
-                        parameters.insert(s.to_string(), Value::Symbol(parameter, None));
-                    } else {
-                        let parameter = lambda_parameter_key(index, level);
-                        parameters.insert(s.to_string(), Value::Symbol(parameter, None));
-                    }
-                }
-                other => {
-                    return Err(
-                        SyntaxError::LexicalBindingsMustHaveSymbolNames(other.clone()).into(),
-                    );
-                }
-            }
-        }
-
-        let arity = if variadic {
-            parameters.len() - 1
-        } else {
-            parameters.len()
-        };
-        // walk the `body`, resolving symbols where possible...
-        lambda_scopes.push(parameters);
-        let mut analyzed_body = Vec::with_capacity(body.len());
-        for form in body.iter() {
-            let analyzed_form = self.analyze_form_in_fn(form, lambda_scopes, captures, level)?;
-            analyzed_body.push(analyzed_form);
-        }
-        lambda_scopes.pop();
-        Ok(Value::Fn(FnImpl {
-            body: analyzed_body.into_iter().collect(),
-            arity,
-            level,
-            variadic,
-        }))
     }
 
     fn apply_macro(
@@ -1301,11 +857,7 @@ impl Interpreter {
         let params_form = operand_forms.first().unwrap();
         let body = operand_forms.drop_first().expect("list is not empty");
         match params_form {
-            Value::Vector(params) => {
-                let mut scopes = vec![];
-                let mut captures = vec![];
-                self.analyze_symbols_in_fn(body, params, &mut scopes, &mut captures)
-            }
+            Value::Vector(params) => analyze_fn(self, body, params),
             other => Err(SyntaxError::LexicalBindingsMustBeVector(other.clone()).into()),
         }
     }
@@ -1380,14 +932,8 @@ impl Interpreter {
                                     if let Some(exception_body) = catch_form.drop_first() {
                                         let mut exception_binding = PersistentVector::new();
                                         exception_binding.push_back_mut(s.clone());
-                                        let mut scopes = vec![];
-                                        let mut captures = vec![];
-                                        let body = self.analyze_symbols_in_fn(
-                                            exception_body,
-                                            &exception_binding,
-                                            &mut scopes,
-                                            &mut captures,
-                                        )?;
+                                        let body =
+                                            analyze_fn(self, exception_body, &exception_binding)?;
                                         Some(body)
                                     } else {
                                         None
@@ -1467,7 +1013,7 @@ impl Interpreter {
         }
     }
 
-    fn get_macro_expansion(
+    pub(crate) fn get_macro_expansion(
         &mut self,
         operator: &Value,
         operands: &PersistentList<Value>,
@@ -1739,7 +1285,8 @@ mod test {
 
     #[test]
     fn test_basic_let() {
-        let test_cases = vec![
+        let test_cases =
+            vec![
             ("(let* [] )", Nil),
             ("(let* [a 1] )", Nil),
             ("(let* [a 3] a)", Number(3)),
@@ -1779,12 +1326,11 @@ mod test {
                 "(let* [f (fn* [n] (if (= n 0) :success (g (- n 1)))) g (fn* [n] (f n))] (f 2))",
                 Keyword("success".to_string(), None),
             ),
-            (
-                "(defn f [] (let* [cst (fn* [n] (if (= n 0) :success (cst (- n 1))))] (cst 10))) (f)",
-                Keyword("success".to_string(), None),
-            ),
-            ("(def! f (fn* [ast] (let* [ast ast] ast))) (f 22)", Number(22)),
-            ("(def! f (fn* [ast] (let* [ast (inc ast) bar (inc ast)] bar))) (f 22)", Number(24)),
+            // test captures inside `let*`
+            ("(let* [y (let* [x 12] (fn* [] x))] (y))", Number(12)),
+            ("(let* [y (let* [x 12] (fn* [] (fn* [] x)))] ((y)))", Number(12)),
+            ("(let* [y (let* [x 12] ((fn* [x] (fn* [] (inc x))) x))] (y))", Number(13)),
+            ("(let* [y (let* [y 12] ((fn* [y] (fn* [] (inc y))) y))] (y))", Number(13)),
         ];
         run_eval_test(&test_cases);
     }
@@ -1870,7 +1416,20 @@ mod test {
             ("(def! gen-plus-x (fn* [x] (fn* [b] (+ x b)))) (def! plus7 (gen-plus-x 7)) (plus7 8)", Number(15)),
             ("((((fn* [a] (fn* [b] (fn* [c] (+ a b c)))) 1) 2) 3)", Number(6)),
             ("(((fn* [a] (fn* [b] (* b ((fn* [c] (+ a c)) 32)))) 1) 2)", Number(66)),
-            ("(def! f (fn* [a] (fn* [b] (+ a b)))) ((first (let* [x 12] (map (fn* [_] (f x)) '(10000000)))) 27)", Number(39))
+            ("(def! f (fn* [a] (fn* [b] (+ a b)))) ((first (let* [x 12] (map (fn* [_] (f x)) '(10000000)))) 27)", Number(39)),
+            // test `let*` bindings inside a `fn*`
+            (
+                "(defn f [] (let* [cst (fn* [n] (if (= n 0) :success (cst (- n 1))))] (cst 10))) (f)",
+                Keyword("success".to_string(), None),
+            ),
+            (
+                "(def! f (fn* [ast] (let* [ast ast] ast))) (f 22)",
+                Number(22),
+            ),
+            ("(def! f (fn* [ast] (let* [ast (inc ast) bar (inc ast)] bar))) (f 22)", Number(24)),
+            // test capturing let* bindings
+            ("(def f (fn* [x] (let* [x x] (if (list? (first x)) (f (first x)) (fn* [] x))))) (first ((eval (f '(3)))))", Number(3)),
+            ("(def f (fn* [x] (let* [x '((fn* [] 4))] (if (list? (first x)) (f (first x)) (fn* [] x))))) ((first ((eval (f '((fn* [] 3)))))))", Number(4)),
         ];
         run_eval_test(&test_cases);
     }
