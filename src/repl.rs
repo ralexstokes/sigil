@@ -1,5 +1,6 @@
 use crate::interpreter::{Interpreter, InterpreterBuilder, SymbolIndex};
 use crate::reader::{is_structural, is_symbolic, is_token, read};
+use crate::value::Value;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::{Highlighter, MatchingBracketHighlighter};
@@ -113,26 +114,39 @@ impl<'a> StdRepl<'a> {
         self
     }
 
-    pub fn run_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
-        let contents = fs::read_to_string(path)?;
-        let forms = match read(&contents) {
+    pub fn run_from_source(&mut self, source: &str) -> Vec<Value> {
+        let mut results = vec![];
+        let forms = match read(&source) {
             Ok(forms) => forms,
             Err(err) => {
-                let context = err.context(&contents);
+                let context = err.context(&source);
                 let span_len = std::cmp::min(context.len(), DEFAULT_SOURCE_SPAN_LEN);
-                println!("error reading source: {} at {}", err, &context[..span_len],);
-                return Ok(());
+                println!(
+                    "error reading: {} at {} from input:\n{}",
+                    err,
+                    &context[..span_len],
+                    source
+                );
+                return results;
             }
         };
         for form in forms.iter() {
             match self.interpreter.evaluate(form) {
-                Ok(..) => {}
+                Ok(result) => {
+                    results.push(result);
+                }
                 Err(err) => {
                     println!("error evaluating `{}`: {}", form.to_readable_string(), err);
                     continue;
                 }
             }
         }
+        results
+    }
+
+    pub fn run_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+        let contents = fs::read_to_string(path)?;
+        let _ = self.run_from_source(&contents);
         Ok(())
     }
 
@@ -147,29 +161,8 @@ impl<'a> StdRepl<'a> {
             match next_line {
                 Ok(line) => {
                     self.editor.add_history_entry(line.as_str());
-                    let forms = match read(&line) {
-                        Ok(forms) => forms,
-                        Err(err) => {
-                            let context = err.context(&line);
-                            let span_len = std::cmp::min(context.len(), DEFAULT_SOURCE_SPAN_LEN);
-                            println!(
-                                "error reading `{}`: {} while reading {}",
-                                &line,
-                                err,
-                                &context[..span_len]
-                            );
-                            continue;
-                        }
-                    };
-                    for form in forms.iter() {
-                        match self.interpreter.evaluate(form) {
-                            Ok(result) => {
-                                println!("{}", result.to_readable_string());
-                            }
-                            Err(e) => {
-                                println!("error evaluating `{}`: {}", form.to_readable_string(), e);
-                            }
-                        }
+                    for result in self.run_from_source(&line) {
+                        println!("{}", result.to_readable_string());
                     }
                 }
                 Err(ReadlineError::Interrupted) => {
