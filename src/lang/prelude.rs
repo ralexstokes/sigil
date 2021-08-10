@@ -811,26 +811,26 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
             })
         }
     };
-    let mut result = PersistentList::new();
+    let mut result = Vec::with_capacity(fn_args.len());
     match &args[0] {
         Value::Fn(f) => {
-            for arg in fn_args.into_iter().rev() {
+            for arg in fn_args {
                 let mapped_arg = interpreter.apply_fn_inner(f, [arg], 1)?;
-                result.push_front_mut(mapped_arg);
+                result.push(mapped_arg);
             }
         }
         Value::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
             interpreter.extend_from_captures(captures)?;
-            for arg in fn_args.into_iter().rev() {
+            for arg in fn_args {
                 let mapped_arg = interpreter.apply_fn_inner(f, [arg], 1)?;
-                result.push_front_mut(mapped_arg);
+                result.push(mapped_arg);
             }
             interpreter.leave_scope();
         }
         Value::Primitive(native_fn) => {
-            for arg in fn_args.into_iter().rev() {
+            for arg in fn_args {
                 let mapped_arg = native_fn(interpreter, &[arg.clone()])?;
-                result.push_front_mut(mapped_arg);
+                result.push(mapped_arg);
             }
         }
         other => {
@@ -840,7 +840,7 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
             });
         }
     };
-    Ok(Value::List(result))
+    Ok(Value::List(result.into_iter().collect()))
 }
 
 macro_rules! is_type {
@@ -1714,6 +1714,10 @@ mod tests {
             (
                 "(def! f (fn* [a] (fn* [b] (+ a b)))) (map (f 23) (list 1 2))",
                 list_with_values(vec![Number(24), Number(25)]),
+            ),
+            (
+                "(def! state (atom 0)) (def! f (fn* [a] (swap! state (fn* [state a] (let [x (+ a state)] (/ 1 x))) a))) (map f '(1 0))",
+                list_with_values(vec![Number(1), Number(1)]),
             ),
             ("(= () (map str ()))", Bool(true)),
             ("(nil? nil)", Bool(true)),
