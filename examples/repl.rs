@@ -6,8 +6,8 @@ use std::error::Error;
 #[derive(Clap)]
 #[clap(setting = AppSettings::ColoredHelp)]
 struct Options {
-    #[clap(long)]
     /// Points to a file containing the "core" source
+    #[clap(long)]
     with_core_source: Option<String>,
     #[clap(subcommand)]
     from_file: Option<FromFileCommand>,
