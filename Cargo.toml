@@ -8,10 +8,9 @@ license = "MIT OR Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-thiserror = "1.0.24"
-combine = "4.5.2"
-itertools = "0.10.0"
-rpds = "0.9.0"
+thiserror = "1.0"
+itertools = "0.10"
+rpds = "0.11"
 
 rustyline = { version =  "9.1", optional = true }
 rustyline-derive = { version = "0.6", optional = true }
