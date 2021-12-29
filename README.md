@@ -18,11 +18,11 @@ contributions are very welcome! if you are keen to join, i'd suggest messaging m
 
 To open a repl:
 
-`cargo run --example repl`
+`cargo run --features repl`
 
 To run a file:
 
-`cargo run --example repl -- from-file $FILE_PATH`
+`cargo run --features repl -- from-file $FILE_PATH`
 
 # status
 

@@ -3,10 +3,15 @@ mod interpreter;
 mod lang;
 mod namespace;
 mod reader;
-mod repl;
-#[cfg(test)]
-mod testing;
 mod value;
 
-pub use interpreter::{Interpreter, InterpreterBuilder};
+#[cfg(test)]
+mod testing;
+
+#[cfg(feature = "repl")]
+mod repl;
+#[cfg(feature = "repl")]
 pub use repl::{repl_with_interpreter, StdRepl};
+
+pub use interpreter::{Interpreter, InterpreterBuilder};
+pub use reader::read;

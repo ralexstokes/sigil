@@ -7,3 +7,5 @@ lint: fmt
 build:
     cargo build
 run-ci: lint build test
+repl:
+    cargo run --features repl

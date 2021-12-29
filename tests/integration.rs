@@ -1,11 +1,16 @@
-use core::panic;
-use sigil::{InterpreterBuilder, StdRepl};
+use sigil::{read, Interpreter, InterpreterBuilder};
 use std::env;
 use std::thread;
-use tempfile::NamedTempFile;
 
 const STACK_SIZE: usize = 4194304; // 4 MiB
 const SELF_HOSTING_REPL_SOURCE: &str = include_str!("./self-hosted.sigil");
+
+fn run_from_source(mut interpreter: Interpreter, source: &str) {
+    let forms = read(source).expect("can read");
+    forms.iter().for_each(|form| {
+        interpreter.evaluate(form).expect("can eval");
+    });
+}
 
 // Run some test code but from the context of the self-hosted interpreter
 fn run_tests_as_self_hosted() {
@@ -13,11 +18,7 @@ fn run_tests_as_self_hosted() {
     let mut args = env::args().into_iter().collect::<Vec<String>>();
     args.push(String::from("tests/tests.sigil"));
     interpreter.intern_args(args.into_iter());
-    let temp_file = NamedTempFile::new().expect("can make temp file on host");
-    let mut repl = StdRepl::new(interpreter, temp_file.path());
-    if let Err(err) = repl.run_from_source(SELF_HOSTING_REPL_SOURCE) {
-        panic!("{}", err);
-    }
+    run_from_source(interpreter, SELF_HOSTING_REPL_SOURCE)
 }
 
 #[test]
@@ -30,7 +31,10 @@ fn verify_tests_self_hosted() {
     // NOTE: the test performs fine with the `release` build.
     // NOTE: the self-hosted implementation assumes TCO; determine if the interpreter
     // still consumes this much stack space after TCO is implemented.
-    let builder = thread::Builder::new().stack_size(STACK_SIZE);
-    let handler = builder.spawn(run_tests_as_self_hosted).unwrap();
-    handler.join().unwrap();
+    thread::Builder::new()
+        .stack_size(STACK_SIZE)
+        .spawn(run_tests_as_self_hosted)
+        .unwrap()
+        .join()
+        .unwrap();
 }
