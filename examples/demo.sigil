@@ -1,0 +1,46 @@
+(def! c '(1 :b :d))
+
+(prn `[~@c])
+
+(defn foo [x] (+ x 12))
+
+(def y 33)
+
+(prn (foo (inc y)))
+
+(defn f [a] ; comment here!
+  (+ a 1))
+
+(prn (f 222))
+
+(defn f [x]    ;; some comment
+               ;; more comments in this fn
+  (let* [y 12] ;; let context
+        (+ x y)))  ;; final result!
+
+(defn assert-equal! [a b]
+  (if (not (= a b))
+    (throw (ex-info "assertion failed: values were not equal" {:a a :b b}))))
+
+(def expected-result 34)
+
+(defn -run []
+  (try*
+   (let* [x 22
+          result (f x)]
+         (assert-equal! result expected-result))
+   (catch* exc (prn exc))))
+
+(-run)
+
+(def f (fn* [x]
+            (let* [x '((fn* [] 4))]
+                  (if (list? (first x))
+                    (f (first x))
+                    (fn* [] x)))))
+
+(assert-equal! 4 ((first ((eval (f '((fn* [] 3))))))))
+
+(def! state (atom 0))
+(def! f (fn* [a] (swap! state (fn* [state a] (let [x (+ a state)] (/ 1 x))) a)))
+(map f '(1 0))
