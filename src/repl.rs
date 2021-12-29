@@ -1,5 +1,5 @@
-use crate::interpreter::{Interpreter, InterpreterBuilder, SymbolIndex};
-use crate::reader::{is_structural, is_symbolic, is_token, read};
+use crate::interpreter::{EvaluationError, Interpreter, InterpreterBuilder, SymbolIndex};
+use crate::reader::{is_structural, is_symbolic, is_token, read, ReadError};
 use crate::value::Value;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
@@ -10,25 +10,46 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::default::Default;
 use std::env::Args;
-use std::error::Error;
-use std::fmt::Write;
+use std::fmt::{self, Debug, Write};
 use std::fs;
+use std::io;
 use std::path::Path;
 use std::rc::Rc;
+use thiserror::Error;
 
 const DEFAULT_HISTORY_PATH: &str = ".sigil.history";
 const DEFAULT_SOURCE_SPAN_LEN: usize = 64;
 
-pub struct StdRepl<'a> {
-    editor: Editor<EditorHelper>,
-    interpreter: Interpreter,
-    history_path: &'a str,
+#[derive(Error, Debug)]
+pub enum ReplError<'a> {
+    #[error("error reading: {0}")]
+    Read(ReadError, &'a str),
+    #[error("error evaluating: {0}")]
+    Eval(EvaluationError, Value),
+    #[error("error with I/O: {0}")]
+    IO(#[from] io::Error),
+    #[error("error with formatting: {0}")]
+    Fmt(#[from] fmt::Error),
+    #[error("error with readline: {0}")]
+    Readline(#[from] ReadlineError),
 }
 
-impl<'a> Default for StdRepl<'a> {
+pub struct StdRepl<P: AsRef<Path>> {
+    editor: Editor<EditorHelper>,
+    interpreter: Interpreter,
+    history_path: P,
+}
+
+impl Default for StdRepl<&'static str> {
     fn default() -> Self {
         let interpreter = InterpreterBuilder::default().build();
-        Self::with_interpreter(interpreter)
+        Self::new(interpreter, DEFAULT_HISTORY_PATH)
+    }
+}
+
+impl<P: AsRef<Path>> Debug for StdRepl<P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "StdRepl {{ .. }}")
     }
 }
 
@@ -86,8 +107,31 @@ impl Completer for EditorHelper {
     }
 }
 
-impl<'a> StdRepl<'a> {
-    pub fn new(mut interpreter: Interpreter, history_path: &'a str) -> Self {
+pub fn repl_with_interpreter(interpreter: Interpreter) -> StdRepl<&'static str> {
+    StdRepl::new(interpreter, DEFAULT_HISTORY_PATH)
+}
+
+fn consume_error(err: ReplError) {
+    match err {
+        ReplError::Read(err, source) => {
+            let context = err.context(&source);
+            let span_len = std::cmp::min(context.len(), DEFAULT_SOURCE_SPAN_LEN);
+            println!(
+                "error reading: {} at {} from input:\n{}",
+                err,
+                &context[..span_len],
+                source,
+            );
+        }
+        ReplError::Eval(err, form) => {
+            println!("error evaluating `{}`: {}", form.to_readable_string(), err);
+        }
+        other => println!("{}", other),
+    }
+}
+
+impl<P: AsRef<Path>> StdRepl<P> {
+    pub fn new(mut interpreter: Interpreter, history_path: P) -> Self {
         let symbol_index = Rc::new(RefCell::new(SymbolIndex::new()));
         interpreter.register_symbol_index(symbol_index.clone());
 
@@ -105,52 +149,36 @@ impl<'a> StdRepl<'a> {
         }
     }
 
-    pub fn with_interpreter(interpreter: Interpreter) -> Self {
-        Self::new(interpreter, DEFAULT_HISTORY_PATH)
-    }
-
     pub fn with_command_line_args(mut self, args: Args) -> Self {
         self.interpreter.intern_args(args);
         self
     }
 
-    pub fn run_from_source(&mut self, source: &str) -> Vec<Value> {
+    pub fn run_from_source<'a>(&mut self, source: &'a str) -> Result<Vec<Value>, ReplError<'a>> {
+        let forms = read(&source).map_err(|err| ReplError::Read(err, source))?;
         let mut results = vec![];
-        let forms = match read(&source) {
-            Ok(forms) => forms,
-            Err(err) => {
-                let context = err.context(&source);
-                let span_len = std::cmp::min(context.len(), DEFAULT_SOURCE_SPAN_LEN);
-                println!(
-                    "error reading: {} at {} from input:\n{}",
-                    err,
-                    &context[..span_len],
-                    source
-                );
-                return results;
-            }
-        };
         for form in forms.iter() {
             match self.interpreter.evaluate(form) {
                 Ok(result) => {
                     results.push(result);
                 }
                 Err(err) => {
-                    println!("error evaluating `{}`: {}", form.to_readable_string(), err);
-                    continue;
+                    return Err(ReplError::Eval(err, form.clone()));
                 }
             }
         }
-        results
+        Ok(results)
     }
 
-    pub fn run_from_file<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Box<dyn Error>> {
+    pub fn run_from_file<Q: AsRef<Path>>(&mut self, path: Q) -> Result<(), ReplError> {
         let contents = fs::read_to_string(path)?;
-        let _ = self.run_from_source(&contents);
+        if let Err(err) = self.run_from_source(&contents) {
+            consume_error(err);
+        }
         Ok(())
     }
 
-    pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn run(&mut self) -> Result<(), ReplError> {
         let _ = self.editor.load_history(&self.history_path);
 
         let mut prompt_buffer = String::new();
@@ -161,8 +189,16 @@ impl<'a> StdRepl<'a> {
             match next_line {
                 Ok(line) => {
                     self.editor.add_history_entry(line.as_str());
-                    for result in self.run_from_source(&line) {
-                        println!("{}", result.to_readable_string());
+                    match self.run_from_source(&line) {
+                        Ok(results) => {
+                            for result in results {
+                                println!("{}", result.to_readable_string());
+                            }
+                        }
+                        Err(err) => {
+                            consume_error(err);
+                            continue;
+                        }
                     }
                 }
                 Err(ReadlineError::Interrupted) => {

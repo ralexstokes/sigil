@@ -9,4 +9,4 @@ mod testing;
 mod value;
 
 pub use interpreter::{Interpreter, InterpreterBuilder};
-pub use repl::StdRepl;
+pub use repl::{repl_with_interpreter, StdRepl};

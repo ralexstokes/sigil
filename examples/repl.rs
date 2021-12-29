@@ -1,5 +1,5 @@
 use clap::{AppSettings, Clap};
-use sigil::{InterpreterBuilder, StdRepl};
+use sigil::{repl_with_interpreter, InterpreterBuilder};
 use std::env;
 use std::error::Error;
 
@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let interpreter = builder.build();
 
-    let mut repl = StdRepl::with_interpreter(interpreter).with_command_line_args(env::args());
+    let mut repl = repl_with_interpreter(interpreter).with_command_line_args(env::args());
 
     let result = if let Some(FromFileCommand::FromFile { path }) = options.from_file {
         repl.run_from_file(path)

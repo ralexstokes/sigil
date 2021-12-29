@@ -379,7 +379,7 @@ pub fn spit(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
         Value::String(path) => {
             let mut contents = String::new();
             let _ = write!(&mut contents, "{}", &args[1]);
-            let _ = fs::write(path, contents).unwrap();
+            let _ = fs::write(path, contents).map_err(|err| -> InterpreterError { err.into() })?;
             Ok(Value::Nil)
         }
         other => Err(EvaluationError::WrongType {
@@ -398,7 +398,8 @@ pub fn slurp(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
     }
     match &args[0] {
         Value::String(path) => {
-            let contents = fs::read_to_string(path).unwrap();
+            let contents =
+                fs::read_to_string(path).map_err(|err| -> InterpreterError { err.into() })?;
             Ok(Value::String(contents))
         }
         other => Err(EvaluationError::WrongType {
