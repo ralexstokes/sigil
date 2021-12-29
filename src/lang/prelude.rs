@@ -845,7 +845,7 @@ pub fn map(interpreter: &mut Interpreter, args: &[Value]) -> EvaluationResult<Va
 }
 
 macro_rules! is_type {
-    ($name:ident, $($target_type:pat) |*) => {
+    ($name:ident, $($target_type:pat) ,*) => {
         pub fn $name(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             if args.len() != 1 {
                 return Err(EvaluationError::WrongArity {
@@ -867,14 +867,17 @@ is_type!(is_false, Value::Bool(false));
 is_type!(is_symbol, Value::Symbol(..));
 is_type!(is_keyword, Value::Keyword(..));
 is_type!(is_vector, Value::Vector(..));
-is_type!(is_sequential, Value::List(..) | Value::Vector(..));
+is_type!(is_sequential, Value::List(..), Value::Vector(..));
 is_type!(is_map, Value::Map(..));
 is_type!(is_set, Value::Set(..));
 is_type!(is_string, Value::String(..));
 is_type!(is_number, Value::Number(..));
 is_type!(
     is_fn,
-    Value::Fn(..) | Value::FnWithCaptures(..) | Value::Primitive(..) | Value::Macro(..)
+    Value::Fn(..),
+    Value::FnWithCaptures(..),
+    Value::Primitive(..),
+    Value::Macro(..)
 );
 is_type!(is_macro, Value::Macro(..));
 
