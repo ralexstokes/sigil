@@ -12,7 +12,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::AsRef;
 use std::default::Default;
-use std::env::Args;
 use std::fmt::Write;
 use std::iter::FromIterator;
 use std::iter::IntoIterator;
@@ -394,7 +393,7 @@ impl Interpreter {
     }
 
     /// Store `args` in the var referenced by `COMMAND_LINE_ARGS_SYMBOL`.
-    pub fn intern_args(&mut self, args: Args) {
+    pub fn intern_args(&mut self, args: impl Iterator<Item = String>) {
         let form = args.map(Value::String).collect();
         self.intern_var(COMMAND_LINE_ARGS_SYMBOL, Value::List(form))
             .expect("'*command-line-args* constructed correctly");
