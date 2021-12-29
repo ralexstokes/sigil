@@ -11,6 +11,7 @@ use std::iter::FromIterator;
 const MIN_VARIADIC_PARAM_COUNT: usize = 2;
 
 type BindingRef<'a> = (&'a String, &'a Value);
+
 // each new `fn*` introduces a new "frame"
 // forms within a `fn*` can introduce a new "scope"
 #[derive(Default, Debug)]
@@ -18,6 +19,7 @@ struct Frame {
     scopes: Vec<Scope>,
     forward_declarations: Vec<Scope>,
 }
+
 // ref to a Frame in set of Frames and an identifier within that Frame
 type CaptureSet = HashSet<(usize, String)>;
 
