@@ -114,7 +114,7 @@ pub fn repl_with_interpreter(interpreter: Interpreter) -> StdRepl<&'static str> 
 fn consume_error(err: ReplError) {
     match err {
         ReplError::Read(err, source) => {
-            let context = err.context(&source);
+            let context = err.context(source);
             let span_len = std::cmp::min(context.len(), DEFAULT_SOURCE_SPAN_LEN);
             println!(
                 "error reading: {} at {} from input:\n{}",
@@ -155,7 +155,7 @@ impl<P: AsRef<Path>> StdRepl<P> {
     }
 
     pub fn run_from_source<'a>(&mut self, source: &'a str) -> Result<Vec<Value>, ReplError<'a>> {
-        let forms = read(&source).map_err(|err| ReplError::Read(err, source))?;
+        let forms = read(source).map_err(|err| ReplError::Read(err, source))?;
         let mut results = vec![];
         for form in forms.iter() {
             match self.interpreter.evaluate(form) {
