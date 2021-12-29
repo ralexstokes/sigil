@@ -1,10 +1,10 @@
-use clap::{AppSettings, Clap};
+use clap::{Parser, Subcommand};
 use sigil::{repl_with_interpreter, InterpreterBuilder};
 use std::env;
 use std::error::Error;
 
-#[derive(Clap)]
-#[clap(setting = AppSettings::ColoredHelp)]
+#[derive(Parser)]
+#[clap(about, version, author)]
 struct Options {
     /// Points to a file containing the "core" source
     #[clap(long)]
@@ -13,7 +13,7 @@ struct Options {
     from_file: Option<FromFileCommand>,
 }
 
-#[derive(Clap)]
+#[derive(Subcommand)]
 enum FromFileCommand {
     /// Evaluates source from a file
     FromFile {
