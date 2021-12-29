@@ -1,0 +1,25 @@
+(def! assert-eq! (fn* [a b]
+                      (if (not (= a b))
+                        (throw (ex-info "assertion failed" [a b])))))
+
+(def! run-test (fn* [test-case]
+                    (let* [input-source (nth test-case 0)
+                           expected-result (nth test-case 1)
+                           result (eval (read-string input-source))]
+                          (assert-eq! expected-result result))))
+
+(def! run-suite (fn* [suite]
+                     (map run-test some-suite)))
+
+(def! some-suite [["(+ 1 2)" 3]
+                  ["(+ 4 4)" 8]
+                  ["(+ 2 3)" 5]
+                  ["(let* [x 5] (+ 2 x))" 7]
+                  ["(do (def! a 3) (+ a 33))" 36]
+                  ["(do (def! inc (fn* [x] (+ x 1))) (inc 4))" 5]
+                  ["(if true 1 2)" 1]
+                  ["(if nil :a :b)" :b]
+                  ["(map (fn* [x] (+ x 1)) [1 2 3])" [2 3 4]]
+                  ["(try* (/ 1 0) (catch* _ :foo))" :foo]])
+
+(run-suite some-suite)
