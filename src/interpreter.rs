@@ -260,13 +260,6 @@ where
     action(arg)
 }
 
-fn evaluate_from_string(interpreter: &mut Interpreter, source: &str) {
-    let forms = read(source).expect("source is well-defined");
-    for form in &forms {
-        interpreter.evaluate(form).expect("source is well-formed");
-    }
-}
-
 fn update_captures(
     captures: &mut HashMap<String, Option<Value>>,
     scopes: &[Scope],
@@ -312,10 +305,17 @@ impl<P: AsRef<Path>> InterpreterBuilder<P> {
         match self.core_file_path {
             Some(core_file_path) => {
                 let source = fs::read_to_string(core_file_path).expect("file exists");
-                evaluate_from_string(&mut interpreter, &source);
+                interpreter
+                    .evaluate_from_source(&source)
+                    .expect("is valid source");
             }
-            None => evaluate_from_string(&mut interpreter, CORE_SOURCE),
-        }
+            None => {
+                let source = CORE_SOURCE;
+                interpreter
+                    .evaluate_from_source(source)
+                    .expect("is valid source");
+            }
+        };
 
         interpreter
     }
@@ -360,8 +360,9 @@ impl Default for Interpreter {
         let mut buffer = String::new();
         let _ = write!(&mut buffer, "(def! {} '())", COMMAND_LINE_ARGS_SYMBOL)
             .expect("can write to string");
-        evaluate_from_string(&mut interpreter, &buffer);
-        buffer.clear();
+        interpreter
+            .evaluate_from_source(&buffer)
+            .expect("valid source");
 
         // load the "prelude"
         prelude::register(&mut interpreter);
@@ -1165,6 +1166,14 @@ impl Interpreter {
         let result = self.evaluate_form(form);
         self.scopes.append(&mut child_scopes);
         result
+    }
+
+    pub fn evaluate_from_source(&mut self, source: &str) -> EvaluationResult<Vec<Value>> {
+        read(source)
+            .map_err(|err| EvaluationError::ReaderError(err, source.to_string()))?
+            .iter()
+            .map(|form| self.evaluate(form))
+            .collect()
     }
 }
 
