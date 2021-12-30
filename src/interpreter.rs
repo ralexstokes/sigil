@@ -1166,6 +1166,17 @@ impl Interpreter {
         self.scopes.append(&mut child_scopes);
         result
     }
+
+    pub fn evaluate_from_source(&mut self, source: &str) -> EvaluationResult<Vec<Value>> {
+        let forms =
+            read(source).map_err(|err| EvaluationError::ReaderError(err, source.to_string()))?;
+        let mut results = vec![];
+        for form in forms.iter() {
+            let result = self.evaluate(form)?;
+            results.push(result);
+        }
+        Ok(results)
+    }
 }
 
 #[cfg(test)]
