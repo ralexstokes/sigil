@@ -22,8 +22,27 @@ impl From<&Value> for ExampleContainer {
     }
 }
 
+fn ssz_deserialize_example_container(
+    _: &mut Interpreter,
+    args: &[Value],
+) -> EvaluationResult<Value> {
+    let data = &args[0];
+    // bytes from data
+    let bytes = &[];
+    let container = ExampleContainer::deserialize(bytes).expect("can deserialize");
+    Ok(container.into())
+}
+
 fn main() {
-    let mut interpreter = InterpreterBuilder::default().build();
+    let ssz_rs_bindings = [(
+        "deserialize-example-container",
+        Value::Primitive(ssz_deserialize_example_container),
+    )];
+    let ssz_rs_namespace = Namespace::from(ssz_rs_bindings);
+    let namespaces = [("github.com/ralexstokes/ssz_rs", ssz_rs_namespace)];
+    let mut interpreter = InterpreterBuilder::default()
+        .with_namespaces(namespaces)
+        .build();
 
     let source = r#"
     (ns
@@ -32,9 +51,11 @@ fn main() {
         [std/io :as io]))
 
 
+    (defn load-ssz-example-container [path]
+      (ssz/deserialize-example-container (io/read-bytes path)))
+
     (def ssz-source "example.ssz")
-    (defn load-ssz-container [path schema]
-      (ssz/deserialize (io/read-bytes path) schema))
+    (load-ssz-example-container ssz-source)
     "#;
 
     let result: ExampleContainer = interpreter
