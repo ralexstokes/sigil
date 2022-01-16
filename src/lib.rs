@@ -3,7 +3,7 @@ pub(crate) mod collections;
 mod interpreter;
 mod lang;
 mod namespace;
-mod reader;
+pub(crate) mod reader;
 mod value;
 
 #[cfg(test)]

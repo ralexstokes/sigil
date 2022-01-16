@@ -1,5 +1,6 @@
 use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter};
+use crate::reader::form::{unescape_string, Form};
 use itertools::{join, sorted, Itertools};
 use std::cell::RefCell;
 use std::cmp::{Eq, Ord, Ordering, PartialEq};
@@ -10,6 +11,29 @@ use std::hash::{Hash, Hasher};
 use std::iter::{FromIterator, IntoIterator};
 use std::mem::discriminant;
 use std::rc::Rc;
+
+impl From<&Form> for Value {
+    fn from(form: &Form) -> Self {
+        use Form::*;
+
+        match form {
+            Nil => Value::Nil,
+            Bool(b) => Value::Bool(*b),
+            Number(n) => Value::Number(*n),
+            String(s) => Value::String(s.clone()),
+            Keyword(id, ns_opt) => Value::Keyword(id.clone(), ns_opt.clone()),
+            Symbol(id, ns_opt) => Value::Symbol(id.clone(), ns_opt.clone()),
+            List(elems) => list_with_values(elems.iter().map(|e| -> Value { e.into() })),
+            Vector(elems) => vector_with_values(elems.iter().map(|e| -> Value { e.into() })),
+            Map(elems) => map_with_values(
+                elems
+                    .iter()
+                    .map(|(x, y)| -> (Value, Value) { (x.into(), y.into()) }),
+            ),
+            Set(elems) => set_with_values(elems.iter().map(|e| -> Value { e.into() })),
+        }
+    }
+}
 
 pub fn list_with_values(values: impl IntoIterator<Item = Value>) -> Value {
     Value::List(PersistentList::from_iter(values))
@@ -808,36 +832,6 @@ impl fmt::Display for Value {
             }
         }
     }
-}
-
-fn unescape_string(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
-    let mut iter = input.chars().peekable();
-    while let Some(ch) = iter.peek() {
-        let ch = *ch;
-        match ch {
-            '\\' => {
-                result.push('\\');
-                result.push('\\');
-                iter.next().expect("from peek");
-            }
-            '\n' => {
-                result.push('\\');
-                result.push('n');
-                iter.next().expect("from peek");
-            }
-            '\"' => {
-                result.push('\\');
-                result.push('"');
-                iter.next().expect("from peek");
-            }
-            ch => {
-                result.push(ch);
-                iter.next().expect("from peek");
-            }
-        };
-    }
-    result
 }
 
 impl Value {

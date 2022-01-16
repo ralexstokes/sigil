@@ -26,7 +26,7 @@ pub fn run_eval_test(test_cases: &[(&str, Value)]) {
         assert!(original_scope_len == EXPECTED_STARTING_SCOPE_LEN);
         assert!(interpreter.apply_stack.is_empty());
         for form in &forms {
-            match interpreter.evaluate(form) {
+            match interpreter.evaluate(&form.into()) {
                 Ok(result) => {
                     final_result = Some(result);
                 }

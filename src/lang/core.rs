@@ -366,7 +366,8 @@ fn read_string(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
             if forms.is_empty() {
                 Ok(Value::Nil)
             } else {
-                Ok(forms.pop().unwrap())
+                let form = forms.pop().unwrap();
+                Ok((&form).into())
             }
         }
         other => Err(EvaluationError::WrongType {
@@ -1331,7 +1332,6 @@ mod tests {
     use crate::value::{
         list_with_values, map_with_values, set_with_values, vector_with_values, Value::*,
     };
-    use std::iter::FromIterator;
 
     #[test]
     fn test_basic_prelude() {

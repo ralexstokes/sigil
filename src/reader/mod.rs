@@ -1,4 +1,6 @@
-use crate::value::{list_with_values, map_with_values, set_with_values, vector_with_values, Value};
+pub mod form;
+
+use form::{list_from, map_from, set_from, vector_from, Form};
 use itertools::Itertools;
 use std::num::ParseIntError;
 use std::{iter::Peekable, str::CharIndices};
@@ -74,24 +76,24 @@ fn parse_identifier_and_optional_namespace(
     }
 }
 
-fn parse_symbolic_with_namespace(symbolic: &str) -> Result<Value, ReaderError> {
+fn parse_symbolic_with_namespace(symbolic: &str) -> Result<Form, ReaderError> {
     if let Some(symbolic) = symbolic.strip_prefix(':') {
         if symbolic == "/" {
             return Err(ReaderError::InvalidIdentifier);
         }
         let (identifier, ns_opt) = parse_identifier_and_optional_namespace(symbolic)?;
-        Ok(Value::Keyword(identifier, ns_opt))
+        Ok(Form::Keyword(identifier, ns_opt))
     } else {
         let (identifier, ns_opt) = parse_identifier_and_optional_namespace(symbolic)?;
-        Ok(Value::Symbol(identifier, ns_opt))
+        Ok(Form::Symbol(identifier, ns_opt))
     }
 }
 
-fn parse_symbolic(symbolic: &str) -> Result<Value, ReaderError> {
+fn parse_symbolic(symbolic: &str) -> Result<Form, ReaderError> {
     match symbolic {
-        "nil" => Ok(Value::Nil),
-        "true" => Ok(Value::Bool(true)),
-        "false" => Ok(Value::Bool(false)),
+        "nil" => Ok(Form::Nil),
+        "true" => Ok(Form::Bool(true)),
+        "false" => Ok(Form::Bool(false)),
         symbolic => parse_symbolic_with_namespace(symbolic),
     }
 }
@@ -183,8 +185,8 @@ pub enum ReaderError {
     MapLiteralWithUnpairedElements,
     #[error("could not parse dispatch with following char: #{0}")]
     CouldNotParseDispatch(char),
-    #[error("reader macro `#'` requires a symbol suffix but found {0} instead")]
-    VarDispatchRequiresSymbol(Value),
+    #[error("reader macro `#'` requires a symbol suffix but found {0:?} instead")]
+    VarDispatchRequiresSymbol(Form),
     #[error("internal error: {0}")]
     Internal(&'static str),
 }
@@ -241,7 +243,7 @@ enum Span {
 struct Reader<'a> {
     input: &'a str,
     spans: Vec<Span>,
-    values: Vec<Value>,
+    values: Vec<Form>,
     line_count: usize,
     // beginning of the current focus in `input`
     cursor: usize,
@@ -329,7 +331,7 @@ impl<'a> Reader<'a> {
             let n = source.parse()?;
             let span = Range::Slice(start, end);
             self.spans.push(Span::Simple(span));
-            self.values.push(Value::Number(n));
+            self.values.push(Form::Number(n));
             Ok(())
         } else {
             Err(ReaderError::ExpectedMoreInput)
@@ -374,7 +376,7 @@ impl<'a> Reader<'a> {
         let escaped_string = apply_string_escapes(source);
         let span = Range::Slice(start, end);
         self.spans.push(Span::Simple(span));
-        let value = Value::String(escaped_string);
+        let value = Form::String(escaped_string);
         self.values.push(value);
         Ok(())
     }
@@ -392,7 +394,7 @@ impl<'a> Reader<'a> {
         let number = self.values.last_mut().expect("did read number");
         let span = self.spans.last_mut().expect("did range number");
         match (number, span) {
-            (Value::Number(n), Span::Simple(range)) => {
+            (Form::Number(n), Span::Simple(range)) => {
                 match range {
                     Range::Slice(number_start, _) => {
                         *number_start = start;
@@ -425,7 +427,7 @@ impl<'a> Reader<'a> {
         let symbol = self.values.last_mut().expect("did read symbol");
         let span = self.spans.last_mut().expect("did range symbol");
         match (symbol, span) {
-            (Value::Symbol(identifier, None), Span::Simple(range)) if identifier == "/" => {
+            (Form::Symbol(identifier, None), Span::Simple(range)) if identifier == "/" => {
                 match range {
                     Range::Slice(symbol_start, _) => {
                         *symbol_start = start;
@@ -437,7 +439,7 @@ impl<'a> Reader<'a> {
                 self.cursor = start;
                 return Err(ReaderError::MissingIdentifier);
             }
-            (Value::Symbol(identifier, ns_opt), Span::Simple(range)) => {
+            (Form::Symbol(identifier, ns_opt), Span::Simple(range)) => {
                 match range {
                     Range::Slice(symbol_start, _) => {
                         *symbol_start = start;
@@ -467,7 +469,7 @@ impl<'a> Reader<'a> {
                 ch if is_symbolic(ch) => self.read_symbolic_and_prepend_dash(start, stream)?,
                 _ => {
                     self.cursor = start;
-                    let value = Value::Symbol('-'.to_string(), None);
+                    let value = Form::Symbol('-'.to_string(), None);
                     self.values.push(value);
                     let span = Range::Slice(start, *end);
                     self.spans.push(Span::Simple(span));
@@ -475,7 +477,7 @@ impl<'a> Reader<'a> {
             }
         } else {
             self.cursor = start;
-            let value = Value::Symbol('-'.to_string(), None);
+            let value = Form::Symbol('-'.to_string(), None);
             self.values.push(value);
             let span = Range::ToEnd(start);
             self.spans.push(Span::Simple(span));
@@ -507,7 +509,7 @@ impl<'a> Reader<'a> {
         collector: C,
     ) -> Result<(), ReaderError>
     where
-        C: Fn(Vec<Value>) -> Result<Value, ReaderError>,
+        C: Fn(Vec<Form>) -> Result<Form, ReaderError>,
     {
         let (start, _) = stream.next().expect("from peek");
         self.cursor = start;
@@ -540,7 +542,7 @@ impl<'a> Reader<'a> {
         let (_, next_ch) = stream.peek().ok_or(ReaderError::ExpectedMoreInput)?;
         match *next_ch {
             '{' => {
-                self.read_collection('}', stream, |elems| Ok(set_with_values(elems)))
+                self.read_collection('}', stream, |elems| Ok(set_from(elems)))
                     .map_err(|err| {
                         self.cursor = start;
                         err
@@ -566,12 +568,9 @@ impl<'a> Reader<'a> {
                 let symbol = self.values.pop().expect("just read symbol");
                 let span = self.spans.pop().expect("just ranged symbol");
                 match symbol {
-                    symbol @ Value::Symbol(..) => {
-                        let expansion = list_with_values(
-                            [Value::Symbol("var".to_string(), None), symbol]
-                                .iter()
-                                .cloned(),
-                        );
+                    symbol @ Form::Symbol(..) => {
+                        let expansion =
+                            list_from(vec![Form::Symbol("var".to_string(), None), symbol]);
                         self.values.push(expansion);
 
                         let dispatch_span = match span {
@@ -643,12 +642,8 @@ impl<'a> Reader<'a> {
             err
         })?;
         let form = self.values.pop().expect("just read form");
-        let expansion = list_with_values(
-            [Value::Symbol(identifier.to_string(), None), form]
-                .iter()
-                .cloned(),
-        );
-        self.values.push(expansion);
+        let expansion = vec![Form::Symbol(identifier.to_string(), None), form];
+        self.values.push(list_from(expansion));
 
         let span = self.spans.pop().expect("just ranged form");
         let span = match span {
@@ -680,13 +675,13 @@ impl<'a> Reader<'a> {
     ) -> Result<(), ReaderError> {
         match next_char {
             '(' => {
-                self.read_collection(')', stream, |elems| Ok(list_with_values(elems)))?;
+                self.read_collection(')', stream, |elems| Ok(list_from(elems)))?;
             }
             ')' => {
                 self.parse_state = ParseState::Exiting;
             }
             '[' => {
-                self.read_collection(']', stream, |elems| Ok(vector_with_values(elems)))?;
+                self.read_collection(']', stream, |elems| Ok(vector_from(elems)))?;
             }
             ']' => {
                 self.parse_state = ParseState::Exiting;
@@ -696,7 +691,7 @@ impl<'a> Reader<'a> {
                     if elems.len() % 2 != 0 {
                         Err(ReaderError::MapLiteralWithUnpairedElements)
                     } else {
-                        Ok(map_with_values(elems.into_iter().tuples()))
+                        Ok(map_from(elems.into_iter().tuples().collect::<Vec<_>>()))
                     }
                 })?;
             }
@@ -767,7 +762,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-pub fn read(input: &str) -> Result<Vec<Value>, ReadError> {
+pub fn read(input: &str) -> Result<Vec<Form>, ReadError> {
     let mut reader = Reader::new();
     match reader.read(input) {
         Ok(_) => Ok(reader.values),
@@ -778,8 +773,7 @@ pub fn read(input: &str) -> Result<Vec<Value>, ReadError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        list_with_values, map_with_values, read, set_with_values, vector_with_values, ReadError,
-        ReaderError, Value::*,
+        list_from, map_from, read, set_from, vector_from, Form::*, ReadError, ReaderError,
     };
     use itertools::Itertools;
 
@@ -1202,7 +1196,7 @@ mod tests {
             (
                 "::bar",
                 vec![Keyword("bar".into(), Some(":".into()))],
-                // NOTE: this is to match `Value` specific behavior
+                // NOTE: this is to match `Form` specific behavior
                 // the `::` form is interpreted as an auto-resolving
                 // namespace inside the interpreter
                 "::/bar",
@@ -1244,10 +1238,10 @@ mod tests {
             ("1;\\\\", vec![Number(1)], "1"),
             ("1;\\\\\\", vec![Number(1)], "1"),
             ("1; &()*+,-./:;<=>?@[]^_{|}~", vec![Number(1)], "1"),
-            ("()", vec![list_with_values(vec![])], "()"),
+            ("()", vec![list_from(vec![])], "()"),
             (
                 "(a b c)",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("a".into(), None),
                     Symbol("b".into(), None),
                     Symbol("c".into(), None),
@@ -1256,7 +1250,7 @@ mod tests {
             ),
             (
                 "(a b, c,,,,),,",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("a".into(), None),
                     Symbol("b".into(), None),
                     Symbol("c".into(), None),
@@ -1265,17 +1259,17 @@ mod tests {
             ),
             (
                 "(12 :foo/bar \"extra\")",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Number(12),
                     Keyword("bar".into(), Some("foo".into())),
                     String("extra".into()),
                 ])],
                 "(12 :foo/bar \"extra\")",
             ),
-            ("[]", vec![vector_with_values(vec![])], "[]"),
+            ("[]", vec![vector_from(vec![])], "[]"),
             (
                 "[a b c]",
-                vec![vector_with_values(vec![
+                vec![vector_from(vec![
                     Symbol("a".into(), None),
                     Symbol("b".into(), None),
                     Symbol("c".into(), None),
@@ -1284,17 +1278,17 @@ mod tests {
             ),
             (
                 "[12 :foo/bar \"extra\"]",
-                vec![vector_with_values(vec![
+                vec![vector_from(vec![
                     Number(12),
                     Keyword("bar".into(), Some("foo".into())),
                     String("extra".into()),
                 ])],
                 "[12 :foo/bar \"extra\"]",
             ),
-            ("{}", vec![map_with_values(vec![])], "{}"),
+            ("{}", vec![map_from(vec![])], "{}"),
             (
                 "{a b c d}",
-                vec![map_with_values(vec![
+                vec![map_from(vec![
                     (Symbol("a".into(), None), Symbol("b".into(), None)),
                     (Symbol("c".into(), None), Symbol("d".into(), None)),
                 ])],
@@ -1302,7 +1296,7 @@ mod tests {
             ),
             (
                 "{12 13 :foo/bar \"extra\"}",
-                vec![map_with_values(vec![
+                vec![map_from(vec![
                     (Number(12), Number(13)),
                     (
                         Keyword("bar".into(), Some("foo".into())),
@@ -1313,76 +1307,67 @@ mod tests {
             ),
             (
                 "() []",
-                vec![list_with_values(vec![]), vector_with_values(vec![])],
+                vec![list_from(vec![]), vector_from(vec![])],
                 "() []",
             ),
             (
                 "()\n[]",
-                vec![list_with_values(vec![]), vector_with_values(vec![])],
+                vec![list_from(vec![]), vector_from(vec![])],
                 "() []",
             ),
-            (
-                "(())",
-                vec![list_with_values(vec![list_with_values(vec![])])],
-                "(())",
-            ),
+            ("(())", vec![list_from(vec![list_from(vec![])])], "(())"),
             (
                 "(([]))",
-                vec![list_with_values(vec![list_with_values(vec![
-                    vector_with_values(vec![]),
-                ])])],
+                vec![list_from(vec![list_from(vec![vector_from(vec![])])])],
                 "(([]))",
             ),
             (
                 "(([]))()",
                 vec![
-                    list_with_values(vec![list_with_values(vec![vector_with_values(vec![])])]),
-                    list_with_values(vec![]),
+                    list_from(vec![list_from(vec![vector_from(vec![])])]),
+                    list_from(vec![]),
                 ],
                 "(([])) ()",
             ),
             (
                 "(12 (true [34 false]))(), (7)",
                 vec![
-                    list_with_values(vec![
+                    list_from(vec![
                         Number(12),
-                        list_with_values(vec![
-                            Bool(true),
-                            vector_with_values(vec![Number(34), Bool(false)]),
-                        ]),
+                        list_from(vec![Bool(true), vector_from(vec![Number(34), Bool(false)])]),
                     ]),
-                    list_with_values(vec![]),
-                    list_with_values(vec![Number(7)]),
+                    list_from(vec![]),
+                    list_from(vec![Number(7)]),
                 ],
                 "(12 (true [34 false])) () (7)",
             ),
             (
                 "  [ +   1   [+   2 3   ]   ]  ",
-                vec![vector_with_values(vec![
+                vec![vector_from(vec![
                     Symbol("+".to_string(), None),
                     Number(1),
-                    vector_with_values(vec![Symbol("+".to_string(), None), Number(2), Number(3)]),
+                    vector_from(vec![Symbol("+".to_string(), None), Number(2), Number(3)]),
                 ])],
                 "[+ 1 [+ 2 3]]",
             ),
-            ("#{}", vec![set_with_values(vec![])], "#{}"),
-            ("#{1}", vec![set_with_values(vec![Number(1)])], "#{1}"),
-            ("#{   1}", vec![set_with_values(vec![Number(1)])], "#{1}"),
-            ("#{   1  }", vec![set_with_values(vec![Number(1)])], "#{1}"),
+            ("#{}", vec![set_from(vec![])], "#{}"),
+            ("#{1}", vec![set_from(vec![Number(1)])], "#{1}"),
+            ("#{   1}", vec![set_from(vec![Number(1)])], "#{1}"),
+            ("#{   1  }", vec![set_from(vec![Number(1)])], "#{1}"),
             (
                 "#{   \"hi\"  }",
-                vec![set_with_values(vec![String("hi".to_string())])],
+                vec![set_from(vec![String("hi".to_string())])],
                 "#{\"hi\"}",
             ),
             (
                 "#{1 2 3}",
-                vec![set_with_values(vec![Number(1), Number(2), Number(3)])],
+                vec![set_from(vec![Number(1), Number(2), Number(3)])],
                 "",
             ),
             (
                 "#{(1 3) :foo}",
-                vec![set_with_values(vec![
-                    list_with_values(vec![Number(1), Number(3)]),
+                vec![set_from(vec![
+                    list_from(vec![Number(1), Number(3)]),
                     Keyword("foo".into(), None),
                 ])],
                 "",
@@ -1398,11 +1383,11 @@ mod tests {
             ),
             (
                 "(defn foo [a] (+ a 1))",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("defn".into(), None),
                     Symbol("foo".into(), None),
-                    vector_with_values(vec![Symbol("a".into(), None)]),
-                    list_with_values(vec![
+                    vector_from(vec![Symbol("a".into(), None)]),
+                    list_from(vec![
                         Symbol("+".into(), None),
                         Symbol("a".into(), None),
                         Number(1),
@@ -1412,11 +1397,11 @@ mod tests {
             ),
             (
                 "(defn foo\n [a]\n (+ a 1))",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("defn".into(), None),
                     Symbol("foo".into(), None),
-                    vector_with_values(vec![Symbol("a".into(), None)]),
-                    list_with_values(vec![
+                    vector_from(vec![Symbol("a".into(), None)]),
+                    list_from(vec![
                         Symbol("+".into(), None),
                         Symbol("a".into(), None),
                         Number(1),
@@ -1430,11 +1415,11 @@ mod tests {
                   [a]      ; another comment
                   (+ a 1)) ; one final comment
                 "#,
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("defn".into(), None),
                     Symbol("foo".into(), None),
-                    vector_with_values(vec![Symbol("a".into(), None)]),
-                    list_with_values(vec![
+                    vector_from(vec![Symbol("a".into(), None)]),
+                    list_from(vec![
                         Symbol("+".into(), None),
                         Symbol("a".into(), None),
                         Number(1),
@@ -1444,7 +1429,7 @@ mod tests {
             ),
             (
                 "@a",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("deref".into(), None),
                     Symbol("a".into(), None),
                 ])],
@@ -1452,7 +1437,7 @@ mod tests {
             ),
             (
                 "@          a",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("deref".into(), None),
                     Symbol("a".into(), None),
                 ])],
@@ -1460,7 +1445,7 @@ mod tests {
             ),
             (
                 "@,,,,,a",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("deref".into(), None),
                     Symbol("a".into(), None),
                 ])],
@@ -1468,7 +1453,7 @@ mod tests {
             ),
             (
                 "@ ,, ,   a",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("deref".into(), None),
                     Symbol("a".into(), None),
                 ])],
@@ -1476,23 +1461,20 @@ mod tests {
             ),
             (
                 "'1",
-                vec![list_with_values(vec![
-                    Symbol("quote".into(), None),
-                    Number(1),
-                ])],
+                vec![list_from(vec![Symbol("quote".into(), None), Number(1)])],
                 "(quote 1)",
             ),
             (
                 "'(1 2 3)",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("quote".into(), None),
-                    list_with_values(vec![Number(1), Number(2), Number(3)]),
+                    list_from(vec![Number(1), Number(2), Number(3)]),
                 ])],
                 "(quote (1 2 3))",
             ),
             (
                 "`1",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("quasiquote".into(), None),
                     Number(1),
                 ])],
@@ -1500,35 +1482,32 @@ mod tests {
             ),
             (
                 "`(1 2 3)",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("quasiquote".into(), None),
-                    list_with_values(vec![Number(1), Number(2), Number(3)]),
+                    list_from(vec![Number(1), Number(2), Number(3)]),
                 ])],
                 "(quasiquote (1 2 3))",
             ),
             (
                 "~1",
-                vec![list_with_values(vec![
-                    Symbol("unquote".into(), None),
-                    Number(1),
-                ])],
+                vec![list_from(vec![Symbol("unquote".into(), None), Number(1)])],
                 "(unquote 1)",
             ),
             (
                 "~(1 2 3)",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("unquote".into(), None),
-                    list_with_values(vec![Number(1), Number(2), Number(3)]),
+                    list_from(vec![Number(1), Number(2), Number(3)]),
                 ])],
                 "(unquote (1 2 3))",
             ),
             (
                 "`(1 ~a 3)",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("quasiquote".into(), None),
-                    list_with_values(vec![
+                    list_from(vec![
                         Number(1),
-                        list_with_values(vec![
+                        list_from(vec![
                             Symbol("unquote".into(), None),
                             Symbol("a".into(), None),
                         ]),
@@ -1539,61 +1518,50 @@ mod tests {
             ),
             (
                 "~@(1 2 3)",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("splice-unquote".into(), None),
-                    list_with_values(vec![Number(1), Number(2), Number(3)]),
+                    list_from(vec![Number(1), Number(2), Number(3)]),
                 ])],
                 "(splice-unquote (1 2 3))",
             ),
             (
                 "~@,,,,,(1 2 3)",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("splice-unquote".into(), None),
-                    list_with_values(vec![Number(1), Number(2), Number(3)]),
+                    list_from(vec![Number(1), Number(2), Number(3)]),
                 ])],
                 "(splice-unquote (1 2 3))",
             ),
             (
                 "~@,  ,,(1 2 3)",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("splice-unquote".into(), None),
-                    list_with_values(vec![Number(1), Number(2), Number(3)]),
+                    list_from(vec![Number(1), Number(2), Number(3)]),
                 ])],
                 "(splice-unquote (1 2 3))",
             ),
             (
                 "~@    (1 2 3)",
-                vec![list_with_values(vec![
+                vec![list_from(vec![
                     Symbol("splice-unquote".into(), None),
-                    list_with_values(vec![Number(1), Number(2), Number(3)]),
+                    list_from(vec![Number(1), Number(2), Number(3)]),
                 ])],
                 "(splice-unquote (1 2 3))",
             ),
             ("1 #_(1 2 3) 3", vec![Number(1), Number(3)], "1 3"),
             (
                 "1 (1 2 #_[1 2 3 :keyw]) 3",
-                vec![
-                    Number(1),
-                    list_with_values([Number(1), Number(2)].iter().cloned()),
-                    Number(3),
-                ],
+                vec![Number(1), list_from(vec![Number(1), Number(2)]), Number(3)],
                 "1 (1 2) 3",
             ),
             (
                 "1 (1 2 #_[1 2 3 :keyw]) ,,,,,,, #_3",
-                vec![
-                    Number(1),
-                    list_with_values([Number(1), Number(2)].iter().cloned()),
-                ],
+                vec![Number(1), list_from(vec![Number(1), Number(2)])],
                 "1 (1 2)",
             ),
             (
                 "1 (1 2 #_[1 2 3 :keyw]) ,,,,,,, #_3        \n\n4",
-                vec![
-                    Number(1),
-                    list_with_values([Number(1), Number(2)].iter().cloned()),
-                    Number(4),
-                ],
+                vec![Number(1), list_from(vec![Number(1), Number(2)]), Number(4)],
                 "1 (1 2) 4",
             ),
         ];
@@ -1602,10 +1570,7 @@ mod tests {
                 Ok(result) => {
                     assert_eq!(result, expected_read);
                     if expected_print != "" {
-                        let print = result
-                            .iter()
-                            .map(|elem| elem.to_readable_string())
-                            .join(" ");
+                        let print = result.iter().join(" ");
                         assert_eq!(print, expected_print);
                     }
                 }

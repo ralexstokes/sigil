@@ -1138,7 +1138,7 @@ impl Interpreter {
         read(source)
             .map_err(|err| EvaluationError::ReaderError(err, source.to_string()))?
             .iter()
-            .map(|form| self.evaluate(form))
+            .map(|form| self.evaluate(&form.into()))
             .collect()
     }
 }
@@ -1147,13 +1147,23 @@ impl Interpreter {
 mod test {
     use crate::collections::{PersistentList, PersistentMap, PersistentVector};
     use crate::namespace::DEFAULT_NAME as DEFAULT_NAMESPACE;
-    use crate::reader::read;
+    use crate::reader;
     use crate::testing::run_eval_test;
     use crate::value::{
         atom_with_value, exception, list_with_values, map_with_values, var_with_value,
         vector_with_values,
         Value::{self, *},
     };
+
+    fn read_one_value(input: &str) -> Value {
+        let form = reader::read(input)
+            .expect("is valid")
+            .into_iter()
+            .nth(0)
+            .expect("some");
+
+        (&form).into()
+    }
 
     #[test]
     fn test_basic_self_evaluating() {
@@ -1541,335 +1551,171 @@ mod test {
             ),
             (
                 "(def! lst '(b c)) `(a lst d)",
-                read("(a lst d)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(a lst d)"),
             ),
             (
                 "`(1 2 (3 4))",
-                read("(1 2 (3 4))")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(1 2 (3 4))"),
             ),
             (
                 "`(nil)",
-                read("(nil)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(nil)"),
             ),
             (
                 "`(1 ())",
-                read("(1 ())")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(1 ())"),
             ),
             (
                 "`(() 1)",
-                read("(() 1)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(() 1)"),
             ),
             (
                 "`(2 () 1)",
-                read("(2 () 1)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(2 () 1)"),
             ),
             (
                 "`(())",
-                read("(())")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(())"),
             ),
             (
                 "`(f () g (h) i (j k) l)",
-                read("(f () g (h) i (j k) l)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(f () g (h) i (j k) l)"),
             ),
             ("`~7", Number(7)),
             ("(def! a 8) `a", Symbol("a".to_string(), None)),
             ("(def! a 8) `~a", Number(8)),
             (
                 "`(1 a 3)",
-                read("(1 a 3)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(1 a 3)"),
             ),
             (
                 "(def! a 8) `(1 ~a 3)",
-                read("(1 8 3)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(1 8 3)"),
             ),
             (
                 "(def! b '(1 :b :d)) `(1 b 3)",
-                read("(1 b 3)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(1 b 3)"),
             ),
             (
                 "(def! b '(1 :b :d)) `(1 ~b 3)",
-                read("(1 (1 :b :d) 3)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(1 (1 :b :d) 3)"),
             ),
             (
                 "`(~1 ~2)",
-                read("(1 2)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(1 2)"),
             ),
             ("(let* [x 0] `~x)", Number(0)),
             (
                 "(def! lst '(b c)) `(a ~lst d)",
-                read("(a (b c) d)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(a (b c) d)"),
             ),
             (
                 "(def! lst '(b c)) `(a ~@lst d)",
-                read("(a b c d)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(a b c d)"),
             ),
             (
                 "(def! lst '(b c)) `(a ~@lst)",
-                read("(a b c)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(a b c)"),
             ),
             (
                 "(def! lst '(b c)) `(~@lst 2)",
-                read("(b c 2)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(b c 2)"),
             ),
             (
                 "(def! lst '(b c)) `(~@lst ~@lst)",
-                read("(b c b c)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(b c b c)"),
             ),
             (
                 "((fn* [q] (quasiquote ((unquote q) (quote (unquote q))))) (quote (fn* [q] (quasiquote ((unquote q) (quote (unquote q)))))))",
-                read("((fn* [q] (quasiquote ((unquote q) (quote (unquote q))))) (quote (fn* [q] (quasiquote ((unquote q) (quote (unquote q)))))))")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("((fn* [q] (quasiquote ((unquote q) (quote (unquote q))))) (quote (fn* [q] (quasiquote ((unquote q) (quote (unquote q)))))))"),
             ),
             (
                 "`[]",
-                read("[]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[]"),
             ),
             (
                 "`[[]]",
-                read("[[]]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[[]]"),
             ),
             (
                 "`[()]",
-                read("[()]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[()]"),
             ),
             (
                 "`([])",
-                read("([])")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("([])"),
             ),
             (
                 "(def! a 8) `[1 a 3]",
-                read("[1 a 3]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[1 a 3]"),
             ),
             (
                 "`[a [] b [c] d [e f] g]",
-                read("[a [] b [c] d [e f] g]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[a [] b [c] d [e f] g]"),
             ),
             (
                 "(def! a 8) `[~a]",
-                read("[8]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[8]"),
             ),
             (
                 "(def! a 8) `[(~a)]",
-                read("[(8)]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[(8)]"),
             ),
             (
                 "(def! a 8) `([~a])",
-                read("([8])")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("([8])"),
             ),
             (
                 "(def! a 8) `[a ~a a]",
-                read("[a 8 a]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[a 8 a]"),
             ),
             (
                 "(def! a 8) `([a ~a a])",
-                read("([a 8 a])")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("([a 8 a])"),
             ),
             (
                 "(def! a 8) `[(a ~a a)]",
-                read("[(a 8 a)]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[(a 8 a)]"),
             ),
             (
                 "(def! c '(1 :b :d)) `[~@c]",
-                read("[1 :b :d]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[1 :b :d]"),
             ),
             (
                 "(def! c '(1 :b :d)) `[(~@c)]",
-                read("[(1 :b :d)]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[(1 :b :d)]"),
             ),
             (
                 "(def! c '(1 :b :d)) `([~@c])",
-                read("([1 :b :d])")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("([1 :b :d])"),
             ),
             (
                 "(def! c '(1 :b :d)) `[1 ~@c 3]",
-                read("[1 1 :b :d 3]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[1 1 :b :d 3]"),
             ),
             (
                 "(def! c '(1 :b :d)) `([1 ~@c 3])",
-                read("([1 1 :b :d 3])")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("([1 1 :b :d 3])"),
             ),
             (
                 "(def! c '(1 :b :d)) `[(1 ~@c 3)]",
-                read("[(1 1 :b :d 3)]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[(1 1 :b :d 3)]"),
             ),
             (
                 "`(0 unquote)",
-                read("(0 unquote)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(0 unquote)"),
             ),
             (
                 "`(0 splice-unquote)",
-                read("(0 splice-unquote)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("(0 splice-unquote)"),
             ),
             (
                 "`[unquote 0]",
-                read("[unquote 0]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[unquote 0]"),
             ),
             (
                 "`[splice-unquote 0]",
-                read("[splice-unquote 0]")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some"),
+                read_one_value("[splice-unquote 0]"),
             ),
         ];
         run_eval_test(&test_cases);
@@ -1886,25 +1732,13 @@ mod test {
             ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (unless true 7 8)", Number(8)),
             ("(defmacro! one (fn* [] 1)) (macroexpand (one))", Number(1)),
             ("(defmacro! unless (fn* [pred a b] `(if ~pred ~b ~a))) (macroexpand '(unless PRED A B))",
-                read("(if PRED B A)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some")
+                read_one_value("(if PRED B A)")
             ),
             ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (macroexpand '(unless PRED A B))",
-                read("(if (not PRED) A B)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some")
+                read_one_value("(if (not PRED) A B)")
             ),
             ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (macroexpand '(unless 2 3 4))",
-                read("(if (not 2) 3 4)")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some")
+                read_one_value("(if (not 2) 3 4)")
             ),
             ("(defmacro! identity (fn* [x] x)) (let* [a 123] (macroexpand (identity a)))",
                 Number(123),
@@ -1915,11 +1749,7 @@ mod test {
             ("(macroexpand (cond))", Nil),
             ("(cond)", Nil),
             ("(macroexpand '(cond X Y))",
-                read("(if X Y (cond))")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some")
+                read_one_value("(if X Y (cond))")
             ),
             ("(cond true 7)", Number(7)),
             ("(cond true 7 true 8)", Number(7)),
@@ -1930,11 +1760,7 @@ mod test {
             ("(cond false 7 false 8 false 9)", Nil),
             ("(let* [x (cond false :no true :yes)] x)", Keyword("yes".to_string(), None)),
             ("(macroexpand '(cond X Y Z T))",
-                read("(if X Y (cond Z T))")
-                    .expect("example is correct")
-                    .into_iter()
-                    .nth(0)
-                    .expect("some")
+                read_one_value("(if X Y (cond Z T))")
             ),
             ("(def! x 2) (defmacro! a (fn* [] x)) (a)", Number(2)),
             ("(def! x 2) (defmacro! a (fn* [] x)) (let* [x 3] (a))", Number(2)),

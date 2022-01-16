@@ -158,12 +158,12 @@ impl<P: AsRef<Path>> StdRepl<P> {
         let forms = read(source).map_err(|err| ReplError::Read(err, source))?;
         let mut results = vec![];
         for form in forms.iter() {
-            match self.interpreter.evaluate(form) {
+            match self.interpreter.evaluate(&form.into()) {
                 Ok(result) => {
                     results.push(result);
                 }
                 Err(err) => {
-                    return Err(ReplError::Eval(err, form.clone()));
+                    return Err(ReplError::Eval(err, form.into()));
                 }
             }
         }
