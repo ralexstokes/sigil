@@ -1,4 +1,4 @@
-mod analyzer;
+pub(crate) mod analyzer;
 pub(crate) mod collections;
 mod interpreter;
 mod lang;
