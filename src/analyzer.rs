@@ -1,8 +1,6 @@
+use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter, Scope, SyntaxError};
-use crate::value::{
-    FnImpl, FnWithCapturesImpl, PersistentList, PersistentMap, PersistentSet, PersistentVector,
-    Value,
-};
+use crate::value::{FnImpl, FnWithCapturesImpl, Value};
 use itertools::Itertools;
 use std::collections::HashSet;
 use std::fmt::Write;

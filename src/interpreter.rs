@@ -1,11 +1,11 @@
 use crate::analyzer::{analyze_fn, analyze_let, lambda_parameter_key, LetForm};
+use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::lang::core;
 use crate::namespace::{Namespace, NamespaceError};
 use crate::reader::{read, ReadError};
 use crate::value::{
     exception_from_system_err, list_with_values, unbound_var, var_impl_into_inner, ExceptionImpl,
-    FnImpl, FnWithCapturesImpl, NativeFn, PersistentList, PersistentMap, PersistentSet,
-    PersistentVector, Value,
+    FnImpl, FnWithCapturesImpl, NativeFn, Value,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1145,12 +1145,13 @@ impl Interpreter {
 
 #[cfg(test)]
 mod test {
+    use crate::collections::{PersistentList, PersistentMap, PersistentVector};
     use crate::namespace::DEFAULT_NAME as DEFAULT_NAMESPACE;
     use crate::reader::read;
     use crate::testing::run_eval_test;
     use crate::value::{
         atom_with_value, exception, list_with_values, map_with_values, var_with_value,
-        vector_with_values, PersistentList, PersistentMap, PersistentVector,
+        vector_with_values,
         Value::{self, *},
     };
 

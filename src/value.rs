@@ -1,9 +1,6 @@
+use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter};
 use itertools::{join, sorted, Itertools};
-pub use rpds::{
-    HashTrieMap as PersistentMap, HashTrieSet as PersistentSet, List as PersistentList,
-    Vector as PersistentVector,
-};
 use std::cell::RefCell;
 use std::cmp::{Eq, Ord, Ordering, PartialEq};
 use std::collections::HashMap;

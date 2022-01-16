@@ -1,10 +1,10 @@
+use crate::collections::{PersistentList, PersistentSet, PersistentVector};
 use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter, InterpreterError};
 use crate::namespace::Namespace;
 use crate::reader::read;
 use crate::value::{
     atom_impl_into_inner, atom_with_value, exception, list_with_values, map_with_values,
-    set_with_values, var_impl_into_inner, vector_with_values, FnWithCapturesImpl, NativeFn,
-    PersistentList, PersistentSet, PersistentVector, Value,
+    set_with_values, var_impl_into_inner, vector_with_values, FnWithCapturesImpl, NativeFn, Value,
 };
 use itertools::Itertools;
 use std::fmt::Write;
@@ -1326,11 +1326,11 @@ fn is_zero(_: &mut Interpreter, args: &[Value]) -> EvaluationResult<Value> {
 
 #[cfg(test)]
 mod tests {
+    use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
     use crate::testing::run_eval_test;
     use crate::value::{
         list_with_values, map_with_values, set_with_values, vector_with_values, Value::*,
     };
-    use crate::value::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
     use std::iter::FromIterator;
 
     #[test]
