@@ -5,6 +5,7 @@ mod lang;
 mod namespace;
 pub(crate) mod reader;
 mod value;
+mod writer;
 
 #[cfg(test)]
 mod testing;

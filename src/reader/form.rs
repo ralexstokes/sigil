@@ -1,5 +1,8 @@
-use itertools::join;
-use std::fmt::{self, Write};
+use crate::writer::{
+    write_bool, write_keyword, write_list, write_map, write_nil, write_number, write_set,
+    write_string, write_symbol, write_vector,
+};
+use std::fmt;
 
 pub(super) fn list_from(elems: Vec<Form>) -> Form {
     Form::List(elems)
@@ -32,69 +35,21 @@ pub enum Form {
     Set(Vec<Form>),
 }
 
-fn write_symbol(f: &mut fmt::Formatter<'_>, id: &str, ns_opt: &Option<String>) -> fmt::Result {
-    if let Some(ns) = ns_opt {
-        write!(f, "{}/", ns)?;
-    }
-    write!(f, "{}", id)
-}
-
-pub(crate) fn unescape_string(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
-    let mut iter = input.chars().peekable();
-    while let Some(ch) = iter.peek() {
-        let ch = *ch;
-        match ch {
-            '\\' => {
-                result.push('\\');
-                result.push('\\');
-                iter.next().expect("from peek");
-            }
-            '\n' => {
-                result.push('\\');
-                result.push('n');
-                iter.next().expect("from peek");
-            }
-            '\"' => {
-                result.push('\\');
-                result.push('"');
-                iter.next().expect("from peek");
-            }
-            ch => {
-                result.push(ch);
-                iter.next().expect("from peek");
-            }
-        };
-    }
-    result
-}
-
 impl fmt::Display for Form {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use Form::*;
 
         match self {
-            Nil => write!(f, "nil"),
-            Bool(b) => write!(f, "{}", b),
-            Number(n) => write!(f, "{}", n),
-            String(s) => write!(f, "\"{}\"", unescape_string(s)),
-            Keyword(id, ns_opt) => {
-                write!(f, ":")?;
-                write_symbol(f, id, ns_opt)
-            }
+            Nil => write_nil(f),
+            Bool(b) => write_bool(f, *b),
+            Number(n) => write_number(f, *n),
+            String(s) => write_string(f, s),
+            Keyword(id, ns_opt) => write_keyword(f, id, ns_opt),
             Symbol(id, ns_opt) => write_symbol(f, id, ns_opt),
-            List(elems) => write!(f, "({})", join(elems, " ")),
-            Vector(elems) => write!(f, "[{}]", join(elems, " ")),
-            Map(elems) => {
-                let mut inner = vec![];
-                for (k, v) in elems {
-                    let mut buffer = std::string::String::new();
-                    write!(buffer, "{} {}", k, v)?;
-                    inner.push(buffer);
-                }
-                write!(f, "{{{}}}", join(inner, ", "))
-            }
-            Set(elems) => write!(f, "#{{{}}}", join(elems, " ")),
+            List(elems) => write_list(f, elems),
+            Vector(elems) => write_vector(f, elems),
+            Map(elems) => write_map(f, elems),
+            Set(elems) => write_set(f, elems),
         }
     }
 }

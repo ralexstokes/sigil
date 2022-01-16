@@ -1,6 +1,7 @@
 use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter};
-use crate::reader::form::{unescape_string, Form};
+use crate::reader::Form;
+use crate::writer::unescape_string;
 use itertools::{join, sorted, Itertools};
 use std::cell::RefCell;
 use std::cmp::{Eq, Ord, Ordering, PartialEq};
