@@ -1,6 +1,6 @@
 use crate::analyzer::{analyze_fn, analyze_let, lambda_parameter_key, LetForm};
-use crate::lang::{prelude, CORE_SOURCE};
-use crate::namespace::{Namespace, NamespaceError, DEFAULT_NAME as DEFAULT_NAMESPACE};
+use crate::lang::core;
+use crate::namespace::{Namespace, NamespaceError};
 use crate::reader::{read, ReadError};
 use crate::value::{
     exception_from_system_err, list_with_values, unbound_var, var_impl_into_inner, ExceptionImpl,
@@ -10,15 +10,13 @@ use crate::value::{
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::convert::AsRef;
 use std::default::Default;
 use std::fmt::Write;
 use std::iter::FromIterator;
 use std::iter::IntoIterator;
-use std::path::Path;
 use std::rc::Rc;
 use std::time::SystemTimeError;
-use std::{fmt, fs, io};
+use std::{fmt, io};
 use thiserror::Error;
 
 const COMMAND_LINE_ARGS_SYMBOL: &str = "*command-line-args*";
@@ -276,51 +274,6 @@ fn update_captures(
     Ok(())
 }
 
-pub struct InterpreterBuilder<P: AsRef<Path>> {
-    // points to a source file for the "core" namespace
-    core_file_path: Option<P>,
-}
-
-impl Default for InterpreterBuilder<&'static str> {
-    fn default() -> Self {
-        InterpreterBuilder::new()
-    }
-}
-
-impl<P: AsRef<Path>> InterpreterBuilder<P> {
-    pub fn new() -> Self {
-        InterpreterBuilder {
-            core_file_path: None,
-        }
-    }
-
-    pub fn with_core_file_path(&mut self, core_file_path: P) -> &mut InterpreterBuilder<P> {
-        self.core_file_path = Some(core_file_path);
-        self
-    }
-
-    pub fn build(self) -> Interpreter {
-        let mut interpreter = Interpreter::default();
-
-        match self.core_file_path {
-            Some(core_file_path) => {
-                let source = fs::read_to_string(core_file_path).expect("file exists");
-                interpreter
-                    .evaluate_from_source(&source)
-                    .expect("is valid source");
-            }
-            None => {
-                let source = CORE_SOURCE;
-                interpreter
-                    .evaluate_from_source(source)
-                    .expect("is valid source");
-            }
-        };
-
-        interpreter
-    }
-}
-
 #[derive(Debug)]
 pub struct Interpreter {
     current_namespace: String,
@@ -347,16 +300,20 @@ impl Default for Interpreter {
         }
 
         let mut interpreter = Interpreter {
-            current_namespace: DEFAULT_NAMESPACE.to_string(),
+            current_namespace: String::new(),
             namespaces: HashMap::new(),
-            scopes: vec![default_scope],
             symbol_index: None,
+            scopes: vec![default_scope],
             apply_stack: vec![],
             failed_form: None,
         };
 
-        interpreter.load_namespace(Namespace::new(DEFAULT_NAMESPACE));
+        // load the "core" namespace
+        interpreter
+            .activate_namespace(core::loader)
+            .expect("is valid namespace");
 
+        // add support for `*command-line-args*`
         let mut buffer = String::new();
         let _ = write!(&mut buffer, "(def! {} '())", COMMAND_LINE_ARGS_SYMBOL)
             .expect("can write to string");
@@ -364,14 +321,21 @@ impl Default for Interpreter {
             .evaluate_from_source(&buffer)
             .expect("valid source");
 
-        // load the "prelude"
-        prelude::register(&mut interpreter);
-
         interpreter
     }
 }
 
+pub type NamespaceLoader = fn(&mut Interpreter) -> EvaluationResult<()>;
+
 impl Interpreter {
+    pub fn activate_namespace(&mut self, loader: NamespaceLoader) -> EvaluationResult<()> {
+        loader(self)
+    }
+
+    pub fn set_namespace(&mut self, namespace: &Namespace) {
+        self.current_namespace = namespace.name.to_string();
+    }
+
     pub fn register_symbol_index(&mut self, symbol_index: Rc<RefCell<SymbolIndex>>) {
         let mut index = symbol_index.borrow_mut();
         for namespace in self.namespaces.values() {
@@ -384,13 +348,15 @@ impl Interpreter {
         self.symbol_index = Some(symbol_index);
     }
 
-    pub fn load_namespace(&mut self, namespace: Namespace) {
+    // Returns the name of the loaded namespace
+    pub fn load_namespace(&mut self, namespace: Namespace) -> EvaluationResult<()> {
         let key = &namespace.name;
         if let Some(existing) = self.namespaces.get_mut(key) {
-            existing.merge(&namespace);
+            existing.merge(&namespace)?;
         } else {
             self.namespaces.insert(key.clone(), namespace);
         }
+        Ok(())
     }
 
     /// Store `args` in the var referenced by `COMMAND_LINE_ARGS_SYMBOL`.

@@ -13,5 +13,5 @@ mod repl;
 #[cfg(feature = "repl")]
 pub use repl::{repl_with_interpreter, StdRepl};
 
-pub use interpreter::{Interpreter, InterpreterBuilder};
+pub use interpreter::Interpreter;
 pub use reader::read;

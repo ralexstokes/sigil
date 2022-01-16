@@ -17,6 +17,12 @@ pub struct Namespace {
     bindings: HashMap<String, Value>,
 }
 
+impl Default for Namespace {
+    fn default() -> Self {
+        Self::new(DEFAULT_NAME)
+    }
+}
+
 impl Namespace {
     pub fn new(name: &str) -> Self {
         Self {
@@ -60,10 +66,11 @@ impl Namespace {
         self.bindings.remove(identifier);
     }
 
-    pub fn merge(&mut self, other: &Namespace) {
+    pub fn merge(&mut self, other: &Namespace) -> Result<(), NamespaceError> {
         for (identifier, value) in &other.bindings {
-            self.insert(identifier, value);
+            self.intern(identifier, value)?;
         }
+        Ok(())
     }
 
     pub fn symbols(&self) -> impl Iterator<Item = &String> {

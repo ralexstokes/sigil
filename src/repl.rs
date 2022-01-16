@@ -1,4 +1,4 @@
-use crate::interpreter::{EvaluationError, Interpreter, InterpreterBuilder, SymbolIndex};
+use crate::interpreter::{EvaluationError, Interpreter, SymbolIndex};
 use crate::reader::{is_structural, is_symbolic, is_token, read, ReadError};
 use crate::value::Value;
 use rustyline::completion::{Completer, Pair};
@@ -42,7 +42,7 @@ pub struct StdRepl<P: AsRef<Path>> {
 
 impl Default for StdRepl<&'static str> {
     fn default() -> Self {
-        let interpreter = InterpreterBuilder::default().build();
+        let interpreter = Interpreter::default();
         Self::new(interpreter, DEFAULT_HISTORY_PATH)
     }
 }

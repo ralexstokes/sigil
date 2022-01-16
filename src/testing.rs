@@ -1,4 +1,4 @@
-use crate::interpreter::InterpreterBuilder;
+use crate::interpreter::Interpreter;
 use crate::reader::read;
 use crate::value::Value;
 
@@ -20,7 +20,7 @@ pub fn run_eval_test(test_cases: &[(&str, Value)]) {
             }
         };
 
-        let mut interpreter = InterpreterBuilder::default().build();
+        let mut interpreter = Interpreter::default();
         let mut final_result: Option<Value> = None;
         let original_scope_len = interpreter.scopes.len();
         assert!(original_scope_len == EXPECTED_STARTING_SCOPE_LEN);

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use sigil::{repl_with_interpreter, InterpreterBuilder};
+use sigil::{repl_with_interpreter, Interpreter};
 use std::env;
 use std::error::Error;
 
@@ -25,12 +25,7 @@ enum FromFileCommand {
 fn main() -> Result<(), Box<dyn Error>> {
     let options = Options::parse();
 
-    let mut builder = InterpreterBuilder::default();
-    if let Some(core_source) = &options.with_core_source {
-        builder.with_core_file_path(core_source);
-    }
-    let interpreter = builder.build();
-
+    let interpreter = Interpreter::default();
     let mut repl = repl_with_interpreter(interpreter).with_command_line_args(env::args());
 
     let result = if let Some(FromFileCommand::FromFile { path }) = options.from_file {

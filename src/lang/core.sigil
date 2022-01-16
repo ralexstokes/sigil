@@ -1,3 +1,5 @@
+;; (ns core)
+
 (defmacro! defmacro
   (fn* [macro-name macro-args & body]
        `(defmacro! ~macro-name (fn* ~macro-args ~@body))))
