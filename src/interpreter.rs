@@ -317,9 +317,7 @@ impl Default for Interpreter {
         let mut buffer = String::new();
         let _ = write!(&mut buffer, "(def! {} '())", COMMAND_LINE_ARGS_SYMBOL)
             .expect("can write to string");
-        interpreter
-            .evaluate_from_source(&buffer)
-            .expect("valid source");
+        interpreter.interpret(&buffer).expect("valid source");
 
         interpreter
     }
@@ -1134,7 +1132,7 @@ impl Interpreter {
         result
     }
 
-    pub fn evaluate_from_source(&mut self, source: &str) -> EvaluationResult<Vec<Value>> {
+    pub fn interpret(&mut self, source: &str) -> EvaluationResult<Vec<Value>> {
         read(source)
             .map_err(|err| EvaluationError::ReaderError(err, source.to_string()))?
             .iter()

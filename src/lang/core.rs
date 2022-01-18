@@ -100,7 +100,7 @@ pub fn loader(interpreter: &mut Interpreter) -> EvaluationResult<()> {
 
     interpreter.load_namespace(namespace)?;
 
-    interpreter.evaluate_from_source(SOURCE).expect("is valid");
+    interpreter.interpret(SOURCE).expect("is valid");
 
     Ok(())
 }
