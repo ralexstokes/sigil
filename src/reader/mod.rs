@@ -1,6 +1,6 @@
 mod form;
 
-pub use form::{Atom, Form};
+pub use form::{Atom, Form, Symbol};
 
 use form::{list_from, map_from, set_from, vector_from};
 use itertools::Itertools;
@@ -84,10 +84,16 @@ fn parse_symbolic_with_namespace(symbolic: &str) -> Result<Form, ReaderError> {
             return Err(ReaderError::InvalidIdentifier);
         }
         let (identifier, ns_opt) = parse_identifier_and_optional_namespace(symbolic)?;
-        Ok(Form::Atom(Atom::Keyword(identifier, ns_opt)))
+        Ok(Form::Atom(Atom::Keyword(Symbol {
+            identifier,
+            namespace: ns_opt,
+        })))
     } else {
         let (identifier, ns_opt) = parse_identifier_and_optional_namespace(symbolic)?;
-        Ok(Form::Atom(Atom::Symbol(identifier, ns_opt)))
+        Ok(Form::Atom(Atom::Symbol(Symbol {
+            identifier,
+            namespace: ns_opt,
+        })))
     }
 }
 
@@ -429,9 +435,13 @@ impl<'a> Reader<'a> {
         let symbol = self.values.last_mut().expect("did read symbol");
         let span = self.spans.last_mut().expect("did range symbol");
         match (symbol, span) {
-            (Form::Atom(Atom::Symbol(identifier, None)), Span::Simple(range))
-                if identifier == "/" =>
-            {
+            (
+                Form::Atom(Atom::Symbol(Symbol {
+                    identifier,
+                    namespace: None,
+                })),
+                Span::Simple(range),
+            ) if identifier == "/" => {
                 match range {
                     Range::Slice(symbol_start, _) => {
                         *symbol_start = start;
@@ -443,7 +453,13 @@ impl<'a> Reader<'a> {
                 self.cursor = start;
                 return Err(ReaderError::MissingIdentifier);
             }
-            (Form::Atom(Atom::Symbol(identifier, ns_opt)), Span::Simple(range)) => {
+            (
+                Form::Atom(Atom::Symbol(Symbol {
+                    identifier,
+                    namespace: ns_opt,
+                })),
+                Span::Simple(range),
+            ) => {
                 match range {
                     Range::Slice(symbol_start, _) => {
                         *symbol_start = start;
@@ -473,7 +489,10 @@ impl<'a> Reader<'a> {
                 ch if is_symbolic(ch) => self.read_symbolic_and_prepend_dash(start, stream)?,
                 _ => {
                     self.cursor = start;
-                    let value = Form::Atom(Atom::Symbol('-'.to_string(), None));
+                    let value = Form::Atom(Atom::Symbol(Symbol {
+                        identifier: '-'.to_string(),
+                        namespace: None,
+                    }));
                     self.values.push(value);
                     let span = Range::Slice(start, *end);
                     self.spans.push(Span::Simple(span));
@@ -481,7 +500,10 @@ impl<'a> Reader<'a> {
             }
         } else {
             self.cursor = start;
-            let value = Form::Atom(Atom::Symbol('-'.to_string(), None));
+            let value = Form::Atom(Atom::Symbol(Symbol {
+                identifier: '-'.to_string(),
+                namespace: None,
+            }));
             self.values.push(value);
             let span = Range::ToEnd(start);
             self.spans.push(Span::Simple(span));
@@ -574,7 +596,10 @@ impl<'a> Reader<'a> {
                 match symbol {
                     symbol @ Form::Atom(Atom::Symbol(..)) => {
                         let expansion = list_from(vec![
-                            Form::Atom(Atom::Symbol("var".to_string(), None)),
+                            Form::Atom(Atom::Symbol(Symbol {
+                                identifier: "var".to_string(),
+                                namespace: None,
+                            })),
                             symbol,
                         ]);
                         self.values.push(expansion);
@@ -648,7 +673,13 @@ impl<'a> Reader<'a> {
             err
         })?;
         let form = self.values.pop().expect("just read form");
-        let expansion = vec![Form::Atom(Atom::Symbol(identifier.to_string(), None)), form];
+        let expansion = vec![
+            Form::Atom(Atom::Symbol(Symbol {
+                identifier: identifier.to_string(),
+                namespace: None,
+            })),
+            form,
+        ];
         self.values.push(list_from(expansion));
 
         let span = self.spans.pop().expect("just ranged form");
@@ -780,6 +811,7 @@ pub fn read(input: &str) -> Result<Vec<Form>, ReadError> {
 mod tests {
     use super::{
         list_from, map_from, read, set_from, vector_from, Atom, Form, ReadError, ReaderError,
+        Symbol,
     };
     use itertools::Itertools;
 
@@ -1059,11 +1091,17 @@ mod tests {
     }
 
     fn keyword(id: String, ns: Option<String>) -> Form {
-        Form::Atom(Atom::Keyword(id, ns))
+        Form::Atom(Atom::Keyword(Symbol {
+            identifier: id,
+            namespace: ns,
+        }))
     }
 
     fn symbol(id: String, ns: Option<String>) -> Form {
-        Form::Atom(Atom::Symbol(id, ns))
+        Form::Atom(Atom::Symbol(Symbol {
+            identifier: id,
+            namespace: ns,
+        }))
     }
 
     #[test]

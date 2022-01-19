@@ -34,10 +34,14 @@ pub enum Atom {
     Bool(bool),
     Number(i64),
     String(String),
-    // identifier with optional namespace
-    Keyword(String, Option<String>),
-    // identifier with optional namespace
-    Symbol(String, Option<String>),
+    Keyword(Symbol),
+    Symbol(Symbol),
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Symbol {
+    identifier: String,
+    namespace: Option<String>,
 }
 
 impl fmt::Display for Form {
@@ -48,8 +52,8 @@ impl fmt::Display for Form {
                 Atom::Bool(b) => write_bool(f, *b),
                 Atom::Number(n) => write_number(f, *n),
                 Atom::String(s) => write_string(f, s),
-                Atom::Keyword(id, ns_opt) => write_keyword(f, id, ns_opt),
-                Atom::Symbol(id, ns_opt) => write_symbol(f, id, ns_opt),
+                Atom::Keyword(symbol) => write_keyword(f, symbol),
+                Atom::Symbol(symbol) => write_symbol(f, symbol),
             },
             Form::List(elems) => write_list(f, elems),
             Form::Vector(elems) => write_vector(f, elems),

@@ -2,6 +2,8 @@ use itertools::join;
 use std::fmt::{self, Display, Write};
 use std::string::String as StdString;
 
+use crate::reader::Symbol;
+
 pub(crate) fn unescape_string(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut iter = input.chars().peekable();
@@ -48,24 +50,22 @@ pub(crate) fn write_string(f: &mut fmt::Formatter<'_>, s: &str) -> fmt::Result {
     write!(f, "\"{}\"", unescape_string(s))
 }
 
-pub(crate) fn write_keyword(
-    f: &mut fmt::Formatter<'_>,
-    id: &str,
-    ns_opt: &Option<String>,
-) -> fmt::Result {
+pub(crate) fn write_keyword(f: &mut fmt::Formatter<'_>, symbol: &Symbol) -> fmt::Result {
     write!(f, ":")?;
-    write_symbol(f, id, ns_opt)
+    write_symbol(f, symbol)
 }
 
 pub(crate) fn write_symbol(
     f: &mut fmt::Formatter<'_>,
-    id: &str,
-    ns_opt: &Option<String>,
+    Symbol {
+        identifier,
+        namespace,
+    }: &Symbol,
 ) -> fmt::Result {
-    if let Some(ns) = ns_opt {
+    if let Some(ns) = namespace {
         write!(f, "{}/", ns)?;
     }
-    write!(f, "{}", id)
+    write!(f, "{}", identifier)
 }
 
 pub(crate) fn write_list<I>(f: &mut fmt::Formatter<'_>, elems: I) -> fmt::Result

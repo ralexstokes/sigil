@@ -1,6 +1,6 @@
 use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter};
-use crate::reader::{Atom, Form};
+use crate::reader::{Atom, Form, Symbol};
 use crate::writer::unescape_string;
 use itertools::{join, sorted, Itertools};
 use std::cell::RefCell;
@@ -21,8 +21,14 @@ impl From<&Form> for Value {
                 Atom::Bool(b) => Value::Bool(*b),
                 Atom::Number(n) => Value::Number(*n),
                 Atom::String(s) => Value::String(s.clone()),
-                Atom::Keyword(id, ns_opt) => Value::Keyword(id.clone(), ns_opt.clone()),
-                Atom::Symbol(id, ns_opt) => Value::Symbol(id.clone(), ns_opt.clone()),
+                Atom::Keyword(Symbol {
+                    identifier: id,
+                    namespace: ns_opt,
+                }) => Value::Keyword(id.clone(), ns_opt.clone()),
+                Atom::Symbol(Symbol {
+                    identifier: id,
+                    namespace: ns_opt,
+                }) => Value::Symbol(id.clone(), ns_opt.clone()),
             },
             Form::List(elems) => list_with_values(elems.iter().map(|e| -> Value { e.into() })),
             Form::Vector(elems) => vector_with_values(elems.iter().map(|e| -> Value { e.into() })),
