@@ -1,6 +1,6 @@
 mod form;
 
-pub use form::{Atom, Form, Symbol};
+pub use form::{Atom, Form, Identifier, Symbol};
 
 use form::{list_from, map_from, set_from, vector_from};
 use itertools::Itertools;

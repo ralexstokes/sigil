@@ -38,10 +38,18 @@ pub enum Atom {
     Symbol(Symbol),
 }
 
+pub type Identifier = String;
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Symbol {
-    identifier: String,
-    namespace: Option<String>,
+    pub identifier: Identifier,
+    pub namespace: Option<Identifier>,
+}
+
+impl fmt::Display for Symbol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_symbol(f, self)
+    }
 }
 
 impl fmt::Display for Form {

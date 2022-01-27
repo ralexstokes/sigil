@@ -1,8 +1,8 @@
-use crate::analyzer::{analyze_fn, analyze_let, lambda_parameter_key, LetForm};
+use crate::analyzer::{AnalyzedForm, Analyzer};
 use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::lang::core;
-use crate::namespace::{Namespace, NamespaceError};
-use crate::reader::{read, ReadError};
+use crate::namespace::{Context as NamespaceContext, Namespace, NamespaceError};
+use crate::reader::{read, Form, ReadError};
 use crate::value::{
     exception_from_system_err, list_with_values, unbound_var, var_impl_into_inner, ExceptionImpl,
     FnImpl, FnWithCapturesImpl, NativeFn, Value,
@@ -132,6 +132,12 @@ pub type SymbolIndex = HashSet<String>;
 // maps identifiers to {Value::Symbol, Value::Var}
 // `Var` variant is to allow for recursive fns in `let*`
 pub type Scope = HashMap<String, Value>;
+
+fn lambda_parameter_key(index: usize, level: usize) -> String {
+    let mut key = String::new();
+    let _ = write!(&mut key, ":system-fn-%{}/{}", index, level);
+    key
+}
 
 // `scopes` from most specific to least specific
 fn resolve_symbol_in_scopes<'a>(
@@ -276,8 +282,7 @@ fn update_captures(
 
 #[derive(Debug)]
 pub struct Interpreter {
-    current_namespace: String,
-    namespaces: HashMap<String, Namespace>,
+    namespaces: NamespaceContext,
     symbol_index: Option<Rc<RefCell<SymbolIndex>>>,
 
     // stack of scopes
@@ -300,8 +305,7 @@ impl Default for Interpreter {
         }
 
         let mut interpreter = Interpreter {
-            current_namespace: String::new(),
-            namespaces: HashMap::new(),
+            namespaces: Rc::new(RefCell::new(Namespaces::default())),
             symbol_index: None,
             scopes: vec![default_scope],
             apply_stack: vec![],
@@ -694,69 +698,71 @@ impl Interpreter {
     }
 
     fn eval_let(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        let LetForm { bindings, body } = analyze_let(&operand_forms)?;
-        let forward_declarations = bindings.resolve_forward_declarations();
-        if !forward_declarations.is_empty() {
-            self.enter_scope();
-            for identifier in &forward_declarations {
-                let var = unbound_var("", identifier);
-                self.insert_value_in_current_scope(identifier, var);
-            }
-        }
-        self.enter_scope();
-        for (identifier, value_form) in bindings {
-            match self.evaluate_form(value_form) {
-                Ok(value) => {
-                    if let Some(Value::Var(var)) =
-                        resolve_symbol_in_scopes(self.scopes.iter().rev(), identifier)
-                    {
-                        var.update(value);
-                    } else {
-                        self.insert_value_in_current_scope(identifier, value);
-                    }
-                }
-                e @ Err(_) => {
-                    self.leave_scope();
-                    if !forward_declarations.is_empty() {
-                        self.leave_scope();
-                    }
-                    return e;
-                }
-            }
-        }
-        let result = self.eval_do_inner(&body);
-        self.leave_scope();
-        if !forward_declarations.is_empty() {
-            self.leave_scope();
-        }
-        result
+        Ok(Value::Nil)
+        // let LetForm { bindings, body } = analyze_let(&operand_forms)?;
+        // let forward_declarations = bindings.resolve_forward_declarations();
+        // if !forward_declarations.is_empty() {
+        //     self.enter_scope();
+        //     for identifier in &forward_declarations {
+        //         let var = unbound_var("", identifier);
+        //         self.insert_value_in_current_scope(identifier, var);
+        //     }
+        // }
+        // self.enter_scope();
+        // for (identifier, value_form) in bindings {
+        //     match self.evaluate_form(value_form) {
+        //         Ok(value) => {
+        //             if let Some(Value::Var(var)) =
+        //                 resolve_symbol_in_scopes(self.scopes.iter().rev(), identifier)
+        //             {
+        //                 var.update(value);
+        //             } else {
+        //                 self.insert_value_in_current_scope(identifier, value);
+        //             }
+        //         }
+        //         e @ Err(_) => {
+        //             self.leave_scope();
+        //             if !forward_declarations.is_empty() {
+        //                 self.leave_scope();
+        //             }
+        //             return e;
+        //         }
+        //     }
+        // }
+        // let result = self.eval_do_inner(&body);
+        // self.leave_scope();
+        // if !forward_declarations.is_empty() {
+        //     self.leave_scope();
+        // }
+        // result
     }
 
     fn eval_loop(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        let LetForm { bindings, body } = analyze_let(&operand_forms)?;
-        self.enter_scope();
-        let mut bindings_keys = vec![];
-        for (name, value_form) in bindings.into_iter() {
-            let value = self.evaluate_form(value_form)?;
-            bindings_keys.push(name);
-            self.insert_value_in_current_scope(name, value)
-        }
-        let mut result = self.eval_do_inner(&body);
-        while let Ok(Value::Recur(next_bindings)) = result {
-            if next_bindings.len() != bindings_keys.len() {
-                self.leave_scope();
-                return Err(EvaluationError::WrongArity {
-                    expected: bindings_keys.len(),
-                    realized: next_bindings.len(),
-                });
-            }
-            for (key, value) in bindings_keys.iter().zip(next_bindings.iter()) {
-                self.insert_value_in_current_scope(key, value.clone());
-            }
-            result = self.eval_do_inner(&body);
-        }
-        self.leave_scope();
-        result
+        Ok(Value::Nil)
+        // let LetForm { bindings, body } = analyze_let(&operand_forms)?;
+        // self.enter_scope();
+        // let mut bindings_keys = vec![];
+        // for (name, value_form) in bindings.into_iter() {
+        //     let value = self.evaluate_form(value_form)?;
+        //     bindings_keys.push(name);
+        //     self.insert_value_in_current_scope(name, value)
+        // }
+        // let mut result = self.eval_do_inner(&body);
+        // while let Ok(Value::Recur(next_bindings)) = result {
+        //     if next_bindings.len() != bindings_keys.len() {
+        //         self.leave_scope();
+        //         return Err(EvaluationError::WrongArity {
+        //             expected: bindings_keys.len(),
+        //             realized: next_bindings.len(),
+        //         });
+        //     }
+        //     for (key, value) in bindings_keys.iter().zip(next_bindings.iter()) {
+        //         self.insert_value_in_current_scope(key, value.clone());
+        //     }
+        //     result = self.eval_do_inner(&body);
+        // }
+        // self.leave_scope();
+        // result
     }
 
     fn eval_recur(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -812,18 +818,19 @@ impl Interpreter {
     }
 
     fn eval_fn(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        if operand_forms.is_empty() {
-            return Err(EvaluationError::WrongArity {
-                expected: 1,
-                realized: 0,
-            });
-        }
-        let params_form = operand_forms.first().unwrap();
-        let body = operand_forms.drop_first().expect("list is not empty");
-        match params_form {
-            Value::Vector(params) => analyze_fn(self, body, params),
-            other => Err(SyntaxError::LexicalBindingsMustBeVector(other.clone()).into()),
-        }
+        Ok(Value::Nil)
+        // if operand_forms.is_empty() {
+        //     return Err(EvaluationError::WrongArity {
+        //         expected: 1,
+        //         realized: 0,
+        //     });
+        // }
+        // let params_form = operand_forms.first().unwrap();
+        // let body = operand_forms.drop_first().expect("list is not empty");
+        // match params_form {
+        //     Value::Vector(params) => analyze_fn(self, body, params),
+        //     other => Err(SyntaxError::LexicalBindingsMustBeVector(other.clone()).into()),
+        // }
     }
 
     fn eval_quote(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
@@ -893,15 +900,16 @@ impl Interpreter {
                         if let Some(exception_symbol) = catch_form.first() {
                             match exception_symbol {
                                 s @ Value::Symbol(_, None) => {
-                                    if let Some(exception_body) = catch_form.drop_first() {
-                                        let mut exception_binding = PersistentVector::new();
-                                        exception_binding.push_back_mut(s.clone());
-                                        let body =
-                                            analyze_fn(self, exception_body, &exception_binding)?;
-                                        Some(body)
-                                    } else {
-                                        None
-                                    }
+                                    // if let Some(exception_body) = catch_form.drop_first() {
+                                    //     let mut exception_binding = PersistentVector::new();
+                                    //     exception_binding.push_back_mut(s.clone());
+                                    //     let body =
+                                    //         analyze_fn(self, exception_body, &exception_binding)?;
+                                    //     Some(body)
+                                    // } else {
+                                    //     None
+                                    // }
+                                    None
                                 }
                                 other => {
                                     return Err(SyntaxError::LexicalBindingsMustHaveSymbolNames(
@@ -1132,6 +1140,17 @@ impl Interpreter {
         result
     }
 
+    fn evaluate_analyzed_form(&mut self, form: AnalyzedForm) -> EvaluationResult<Value> {
+        Ok(Value::Nil)
+    }
+
+    fn analyze_and_evaluate(&mut self, form: &Form) -> EvaluationResult<Value> {
+        let namespaces = self.namespaces.borrow();
+        let analyzer = Analyzer::new(namespaces);
+        let analyzed_form = analyzer.analyze(form)?;
+        self.evaluate_analyzed_form(analyzed_form)
+    }
+
     pub fn interpret(&mut self, source: &str) -> EvaluationResult<Vec<Value>> {
         read(source)
             .map_err(|err| EvaluationError::ReaderError(err, source.to_string()))?
@@ -1144,7 +1163,6 @@ impl Interpreter {
 #[cfg(test)]
 mod test {
     use crate::collections::{PersistentList, PersistentMap, PersistentVector};
-    use crate::namespace::DEFAULT_NAME as DEFAULT_NAMESPACE;
     use crate::reader;
     use crate::testing::run_eval_test;
     use crate::value::{
@@ -1152,6 +1170,8 @@ mod test {
         vector_with_values,
         Value::{self, *},
     };
+
+    const DEFAULT_NAMESPACE: &str = "core";
 
     fn read_one_value(input: &str) -> Value {
         let form = reader::read(input)
