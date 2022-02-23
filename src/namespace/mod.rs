@@ -1,9 +1,10 @@
 mod var;
 
-use crate::reader::Identifier;
-use crate::value::{unbound_var, var_with_value, Value};
+use crate::reader::{Identifier, Symbol};
+use crate::value::{unbound_var, var_with_value, RuntimeValue, Value};
 use std::collections::HashMap;
 use thiserror::Error;
+use var::new_var;
 
 pub use var::Var;
 
@@ -41,15 +42,25 @@ impl Context {
         &self.namespaces[self.current_namespace]
     }
 
-    fn resolve_reference_in_namespace(
-        &self,
-        namespace: &Namespace,
-        identifier: &Identifier,
-    ) -> Option<Var> {
-        namespace.get(identifier).map(|value| Var(value.clone()))
+    fn get_namespace(&self, identifier: &Identifier) -> &Namespace {
+        let index = self.names[identifier];
+        &self.namespaces[index]
     }
 
-    pub fn resolve_reference(
+    pub fn resolve_symbol(&self, symbol: &Symbol) -> Result<Var, NamespaceError> {
+        match symbol {
+            Symbol {
+                identifier,
+                namespace: Some(name),
+            } => self.resolve_reference(name, identifier),
+            Symbol {
+                identifier,
+                namespace: None,
+            } => self.resolve_reference_in_current_namespace(identifier),
+        }
+    }
+
+    fn resolve_reference(
         &self,
         name: &Identifier,
         identifier: &Identifier,
@@ -61,93 +72,66 @@ impl Context {
 
         let namespace = &self.namespaces[*namespace_index];
 
-        self.resolve_reference_in_namespace(namespace, identifier)
+        namespace
+            .get(identifier)
             .ok_or_else(|| NamespaceError::MissingIdentifier(identifier.clone(), name.clone()))
     }
 
-    pub fn resolve_reference_in_current_namespace(
+    fn resolve_reference_in_current_namespace(
         &self,
         identifier: &Identifier,
     ) -> Result<Var, NamespaceError> {
-        self.resolve_reference_in_namespace(self.current_namespace(), identifier)
-            .ok_or_else(|| {
-                let name = self.name_lookup.get(&self.current_namespace).unwrap();
-                NamespaceError::MissingIdentifier(identifier.clone(), name.clone())
-            })
+        self.current_namespace().get(identifier).ok_or_else(|| {
+            let name = self.name_lookup.get(&self.current_namespace).unwrap();
+            NamespaceError::MissingIdentifier(identifier.clone(), name.clone())
+        })
     }
 }
 
 #[derive(Debug, Error, Clone)]
 pub enum NamespaceError {
-    #[error("value found in namespace was not a Value::Var, instead {0}")]
-    ValueInNamespaceWasNotVar(Value),
     #[error("namespace {0} was not found")]
     MissingNamespace(Identifier),
     #[error("identifier {0} was not found in namespace {1}")]
     MissingIdentifier(Identifier, Identifier),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Namespace {
-    pub name: String,
-    bindings: HashMap<Identifier, Value>,
-}
-
-impl Default for Namespace {
-    fn default() -> Self {
-        Self::new(&DEFAULT_NAME)
-    }
+    bindings: HashMap<Identifier, Var>,
 }
 
 impl Namespace {
-    pub fn new(name: &str) -> Self {
-        Self {
-            name: name.to_string(),
-            bindings: HashMap::new(),
+    pub fn get(&self, identifier: &Identifier) -> Option<Var> {
+        self.bindings.get(identifier).map(|var| var.clone())
+    }
+
+    pub fn intern(
+        &mut self,
+        identifier: &Identifier,
+        value: Option<RuntimeValue>,
+    ) -> Result<Var, NamespaceError> {
+        let var = self
+            .bindings
+            .entry(identifier.clone())
+            .or_insert_with(|| Var::Unbound);
+
+        if let Some(value) = value {
+            *var = new_var(value)
         }
-    }
-
-    pub fn get(&self, identifier: &str) -> Option<&Value> {
-        self.bindings.get(identifier)
-    }
-
-    // NOTE: `value` must be a `Value::Var`
-    fn insert(&mut self, identifier: &str, value: &Value) {
-        self.bindings.insert(identifier.to_string(), value.clone());
-    }
-
-    // NOTE: `value` will be wrapped in a `Value::Var` which is stored in this namespace
-    pub fn intern(&mut self, identifier: &str, value: &Value) -> Result<Value, NamespaceError> {
-        match self.get(identifier) {
-            Some(Value::Var(var)) => {
-                var.update(value.clone());
-                Ok(Value::Var(var.clone()))
-            }
-            Some(other) => Err(NamespaceError::ValueInNamespaceWasNotVar(other.clone())),
-            None => {
-                let var = var_with_value(value.clone(), &self.name, identifier);
-                self.insert(identifier, &var);
-                Ok(var)
-            }
-        }
-    }
-
-    pub fn intern_unbound(&mut self, identifier: &str) -> Value {
-        let var = unbound_var(&self.name, identifier);
-        self.insert(identifier, &var);
-        var
+        Ok(var.clone())
     }
 
     pub fn remove(&mut self, identifier: &str) {
         self.bindings.remove(identifier);
     }
 
-    pub fn merge(&mut self, other: &Namespace) -> Result<(), NamespaceError> {
-        for (identifier, value) in &other.bindings {
-            self.intern(identifier, value)?;
-        }
-        Ok(())
-    }
+    // pub fn merge(&mut self, other: &Namespace) -> Result<(), NamespaceError> {
+    //     for (identifier, value) in &other.bindings {
+    //         self.intern(identifier, value)?;
+    //     }
+    //     Ok(())
+    // }
 
     pub fn symbols(&self) -> impl Iterator<Item = &String> {
         self.bindings.keys()

@@ -1,8 +1,9 @@
 use crate::namespace::Var;
 use crate::reader::{Atom, Identifier, Symbol};
+use std::collections::HashSet;
 
 pub enum AnalyzedForm<'a> {
-    Symbol(&'a Identifier),
+    LexicalSymbol(&'a Identifier),
     Var(Var),
     Atom(&'a Atom),
     List(AnalyzedList<'a>),
@@ -32,10 +33,10 @@ pub enum AnalyzedList<'a> {
     Quote(Box<AnalyzedForm<'a>>),
     // (quasiquote form)
     Quasiquote(Box<AnalyzedForm<'a>>),
-    // (unquote form)
-    Unquote(Box<AnalyzedForm<'a>>),
-    // (splice-unquote form)
-    SpliceUnquote(Box<AnalyzedForm<'a>>),
+    // // (unquote form)
+    // Unquote(Box<AnalyzedForm<'a>>),
+    // // (splice-unquote form)
+    // SpliceUnquote(Box<AnalyzedForm<'a>>),
     // (defmacro! symbol fn*-form)
     Defmacro(&'a Symbol, FnForm<'a>),
     // (macroexpand macro-form)
@@ -60,8 +61,8 @@ pub enum LexicalBindings<'a> {
 }
 
 pub struct LexicalForm<'a> {
-    bindings: LexicalBindings<'a>,
-    body: BodyForm<'a>,
+    pub bindings: LexicalBindings<'a>,
+    pub body: BodyForm<'a>,
 }
 
 fn is_forward_visible(form: &AnalyzedForm<'_>) -> bool {
@@ -69,13 +70,13 @@ fn is_forward_visible(form: &AnalyzedForm<'_>) -> bool {
 }
 
 impl<'a> LexicalForm<'a> {
-    pub(super) fn resolve_forward_declarations(&self) -> Vec<&'a Symbol> {
-        let mut result = vec![];
+    pub(super) fn resolve_forward_declarations(&self) -> HashSet<&'a Symbol> {
+        let mut result = HashSet::new();
         match self.bindings {
             LexicalBindings::Bound(bindings) => {
                 for (name, value) in bindings {
                     if is_forward_visible(value.as_ref()) {
-                        result.push(name);
+                        result.insert(name);
                     }
                 }
             }
@@ -86,10 +87,10 @@ impl<'a> LexicalForm<'a> {
 }
 
 pub struct LetForm<'a> {
-    lexical_form: LexicalForm<'a>,
+    pub lexical_form: LexicalForm<'a>,
     // `let*` can produce "forward declarations" where some names
     // in `scope` can be seen by all other names
-    pub forward_declarations: Vec<&'a Symbol>,
+    pub forward_declarations: HashSet<&'a Symbol>,
 }
 
 #[derive(Default)]

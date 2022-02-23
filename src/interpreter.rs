@@ -1,11 +1,14 @@
-use crate::analyzer::{AnalyzedForm, Analyzer};
+use crate::analyzer::{
+    AnalysisError, AnalyzedForm, AnalyzedList, Analyzer, BodyForm, CatchError, CatchForm, DefForm,
+    FnForm, IfForm, LetForm, LexicalBindings, LexicalForm, TryForm,
+};
 use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::lang::core;
-use crate::namespace::{Context as NamespaceContext, Namespace, NamespaceError};
-use crate::reader::{read, Form, ReadError};
+use crate::namespace::{Context as NamespaceContext, Namespace, NamespaceError, Var};
+use crate::reader::{read, Form, Identifier, ReadError, Symbol};
 use crate::value::{
-    exception_from_system_err, list_with_values, unbound_var, var_impl_into_inner, ExceptionImpl,
-    FnImpl, FnWithCapturesImpl, NativeFn, Value,
+    exception_from_system_err, list_with_values, var_impl_into_inner, ExceptionImpl, FnImpl,
+    FnWithCapturesImpl, NativeFn, RuntimeValue, Value,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -121,27 +124,28 @@ pub enum EvaluationError {
     Syntax(#[from] SyntaxError),
     #[error("interpreter error: {0}")]
     Interpreter(#[from] InterpreterError),
+    // TODO: clean up errors above ~here
     #[error("namespace error: {0}")]
     Namespace(#[from] NamespaceError),
     #[error("reader error: {0}")]
     ReaderError(ReadError, String),
+    #[error("analysis error: {0}")]
+    AnalysisError(#[from] AnalysisError),
 }
 
 pub type EvaluationResult<T> = Result<T, EvaluationError>;
 pub type SymbolIndex = HashSet<String>;
-// maps identifiers to {Value::Symbol, Value::Var}
-// `Var` variant is to allow for recursive fns in `let*`
-pub type Scope = HashMap<String, Value>;
+pub type Scope<'a> = HashMap<&'a Identifier, RuntimeValue>;
 
-fn lambda_parameter_key(index: usize, level: usize) -> String {
-    let mut key = String::new();
-    let _ = write!(&mut key, ":system-fn-%{}/{}", index, level);
-    key
-}
+// fn lambda_parameter_key(index: usize, level: usize) -> String {
+//     let mut key = String::new();
+//     let _ = write!(&mut key, ":system-fn-%{}/{}", index, level);
+//     key
+// }
 
 // `scopes` from most specific to least specific
 fn resolve_symbol_in_scopes<'a>(
-    scopes: impl Iterator<Item = &'a Scope>,
+    scopes: impl Iterator<Item = &'a Scope<'a>>,
     identifier: &str,
 ) -> Option<&'a Value> {
     for scope in scopes {
@@ -235,8 +239,9 @@ fn eval_quasiquote_vector(elems: &PersistentVector<Value>) -> EvaluationResult<V
     ]))
 }
 
-fn eval_quasiquote(value: &Value) -> EvaluationResult<Value> {
-    match value {
+// TODO fix types
+fn eval_quasiquote(form: AnalyzedForm) -> EvaluationResult<RuntimeValue> {
+    match form {
         Value::List(elems) => eval_quasiquote_list(elems),
         Value::Vector(elems) => eval_quasiquote_vector(elems),
         elem @ Value::Map(_) | elem @ Value::Symbol(..) => {
@@ -280,6 +285,11 @@ fn update_captures(
     Ok(())
 }
 
+enum ControlFlow {
+    Continue,
+    Recur(Vec<RuntimeValue>),
+}
+
 #[derive(Debug)]
 pub struct Interpreter {
     namespaces: NamespaceContext,
@@ -288,6 +298,7 @@ pub struct Interpreter {
     // stack of scopes
     // contains at least one scope, the "default" scope
     pub(crate) scopes: Vec<Scope>,
+    control_stack: Vec<ControlFlow>,
 
     // low-res backtrace
     pub(crate) apply_stack: Vec<Value>,
@@ -305,9 +316,10 @@ impl Default for Interpreter {
         }
 
         let mut interpreter = Interpreter {
-            namespaces: Rc::new(RefCell::new(Namespaces::default())),
+            namespaces: NamespaceContext::default(),
             symbol_index: None,
             scopes: vec![default_scope],
+            control_stack: vec![],
             apply_stack: vec![],
             failed_form: None,
         };
@@ -334,17 +346,14 @@ impl Interpreter {
         loader(self)
     }
 
-    pub fn set_namespace(&mut self, namespace: &Namespace) {
-        self.current_namespace = namespace.name.to_string();
-    }
-
     pub fn register_symbol_index(&mut self, symbol_index: Rc<RefCell<SymbolIndex>>) {
         let mut index = symbol_index.borrow_mut();
-        for namespace in self.namespaces.values() {
-            for symbol in namespace.symbols() {
-                index.insert(symbol.clone());
-            }
-        }
+        // TODO: fixme
+        // for namespace in self.namespaces.values() {
+        //     for symbol in namespace.symbols() {
+        //         index.insert(symbol.clone());
+        //     }
+        // }
         drop(index);
 
         self.symbol_index = Some(symbol_index);
@@ -384,40 +393,19 @@ impl Interpreter {
         }
     }
 
-    pub fn current_namespace(&self) -> &str {
-        &self.current_namespace
-    }
+    fn intern(&mut self, symbol: &Symbol, value: Option<RuntimeValue>) -> EvaluationResult<Var> {
+        let namespace = match symbol.namespace {
+            Some(ns) => self.namespaces.get_namespace(&ns),
+            None => self.namespaces.current_namespace(),
+        };
+        let var = namespace.intern(&symbol.identifier, value)?;
 
-    fn intern_var(&mut self, identifier: &str, value: Value) -> EvaluationResult<Value> {
-        let current_namespace = self.current_namespace().to_string();
-
-        let ns = self
-            .namespaces
-            .get_mut(&current_namespace)
-            .expect("current namespace always resolves");
-        let result = ns
-            .intern(identifier, &value)
-            .map_err(|err| -> EvaluationError { err.into() })?;
+        // TODO update indexing...
         if let Some(index) = &self.symbol_index {
             let mut index = index.borrow_mut();
-            index.insert(identifier.to_string());
+            index.insert(symbol.identifier.clone());
         }
-        Ok(result)
-    }
-
-    fn intern_unbound_var(&mut self, identifier: &str) -> EvaluationResult<Value> {
-        let current_namespace = self.current_namespace().to_string();
-
-        let ns = self
-            .namespaces
-            .get_mut(&current_namespace)
-            .expect("current namespace always resolves");
-        let result = ns.intern_unbound(identifier);
-        if let Some(index) = &self.symbol_index {
-            let mut index = index.borrow_mut();
-            index.insert(identifier.to_string());
-        }
-        Ok(result)
+        Ok(var)
     }
 
     fn unintern_var(&mut self, identifier: &str) {
@@ -431,26 +419,26 @@ impl Interpreter {
     }
 
     // return a ref to some var in the current namespace
-    fn resolve_var_in_current_namespace(&self, identifier: &str) -> EvaluationResult<Value> {
-        let ns_desc = self.current_namespace();
-        self.resolve_var_in_namespace(identifier, ns_desc)
-    }
+    // fn resolve_var_in_current_namespace(&self, identifier: &str) -> EvaluationResult<Value> {
+    //     let ns_desc = self.current_namespace();
+    //     self.resolve_var_in_namespace(identifier, ns_desc)
+    // }
 
     // namespace -> var
-    fn resolve_var_in_namespace(&self, identifier: &str, ns_desc: &str) -> EvaluationResult<Value> {
-        self.namespaces
-            .get(ns_desc)
-            .ok_or_else(|| {
-                EvaluationError::Interpreter(InterpreterError::MissingNamespace(
-                    ns_desc.to_string(),
-                ))
-            })
-            .and_then(|ns| {
-                ns.get(identifier).cloned().ok_or_else(|| {
-                    EvaluationError::MissingVar(identifier.to_string(), ns_desc.to_string())
-                })
-            })
-    }
+    // fn resolve_var_in_namespace(&self, identifier: &str, ns_desc: &str) -> EvaluationResult<Value> {
+    //     self.namespaces
+    //         .get(ns_desc)
+    //         .ok_or_else(|| {
+    //             EvaluationError::Interpreter(InterpreterError::MissingNamespace(
+    //                 ns_desc.to_string(),
+    //             ))
+    //         })
+    //         .and_then(|ns| {
+    //             ns.get(identifier).cloned().ok_or_else(|| {
+    //                 EvaluationError::MissingVar(identifier.to_string(), ns_desc.to_string())
+    //             })
+    //         })
+    // }
 
     // symbol -> namespace -> var
     pub(crate) fn resolve_symbol_to_var(
@@ -481,14 +469,14 @@ impl Interpreter {
         }
     }
 
-    fn enter_scope(&mut self) {
-        self.scopes.push(Scope::default());
-    }
+    // fn enter_scope(&mut self) {
+    //     self.scopes.push(Scope::default());
+    // }
 
-    fn insert_value_in_current_scope(&mut self, identifier: &str, value: Value) {
-        let scope = self.scopes.last_mut().expect("always one scope");
-        scope.insert(identifier.to_string(), value);
-    }
+    // fn insert_value_in_current_scope(&mut self, identifier: &str, value: Value) {
+    //     let scope = self.scopes.last_mut().expect("always one scope");
+    //     scope.insert(identifier.to_string(), value);
+    // }
 
     /// Exits the current lexical scope.
     /// NOTE: exposed for some prelude functionality.
@@ -620,242 +608,251 @@ impl Interpreter {
         Ok(())
     }
 
-    fn eval_def_inner(&mut self, id: &str, value_form: &Value) -> EvaluationResult<Value> {
-        // need to only adjust var if this `def!` is successful
-        // also optimistically allocate in the interpreter so that
-        // the def body can capture references to itself (e.g. for recursive fn)
-        //
-        // to address this:
-        // get the existing var, or intern a sentinel value if it is missing
-        let (var, var_already_exists) = match self.resolve_var_in_current_namespace(id) {
-            Ok(v @ Value::Var(..)) => (v, true),
-            Err(EvaluationError::MissingVar(..)) => (self.intern_unbound_var(id)?, false),
-            e @ Err(_) => return e,
-            _ => unreachable!(),
-        };
-        let value = self.evaluate_form(value_form).map_err(|err| {
-            // and if the evaluation is not ok,
-            if !var_already_exists {
-                // and the var did not already exist, unintern the sentinel allocation
-                self.unintern_var(id);
-            }
-            // (if the var did already exist, then simply leave alone)
-            err
-        })?;
-        // and if the evaluation is ok, unconditionally update the var
-        match &var {
-            Value::Var(var) => var.update(value),
-            _ => unreachable!(),
-        }
-        Ok(var)
-    }
+    // fn eval_def_inner(&mut self, id: &str, value_form: &Value) -> EvaluationResult<Value> {
+    //     // need to only adjust var if this `def!` is successful
+    //     // also optimistically allocate in the interpreter so that
+    //     // the def body can capture references to itself (e.g. for recursive fn)
+    //     //
+    //     // to address this:
+    //     // get the existing var, or intern a sentinel value if it is missing
+    //     let (var, var_already_exists) = match self.resolve_var_in_current_namespace(id) {
+    //         Ok(v @ Value::Var(..)) => (v, true),
+    //         Err(EvaluationError::MissingVar(..)) => (self.intern_unbound_var(id)?, false),
+    //         e @ Err(_) => return e,
+    //         _ => unreachable!(),
+    //     };
+    //     let value = self.evaluate_form(value_form).map_err(|err| {
+    //         // and if the evaluation is not ok,
+    //         if !var_already_exists {
+    //             // and the var did not already exist, unintern the sentinel allocation
+    //             self.unintern_var(id);
+    //         }
+    //         // (if the var did already exist, then simply leave alone)
+    //         err
+    //     })?;
+    //     // and if the evaluation is ok, unconditionally update the var
+    //     match &var {
+    //         Value::Var(var) => var.update(value),
+    //         _ => unreachable!(),
+    //     }
+    //     Ok(var)
+    // }
 
-    fn eval_def(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        if !(operand_forms.len() == 1 || operand_forms.len() == 2) {
-            return Err(EvaluationError::WrongArity {
-                expected: 2,
-                realized: operand_forms.len(),
-            });
-        }
-        let name_form = operand_forms.first().unwrap();
-        let rest = operand_forms.drop_first().expect("list is not empty");
-        match name_form {
-            Value::Symbol(id, None) => {
-                if rest.is_empty() {
-                    return self.intern_unbound_var(id);
-                }
-                let value_form = rest.first().unwrap();
-                self.eval_def_inner(id, value_form)
-            }
-            other => Err(EvaluationError::WrongType {
-                expected: "SymbolWithoutNamespace",
-                realized: other.clone(),
-            }),
-        }
-    }
+    // fn eval_def_legacy(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    //     // if !(operand_forms.len() == 1 || operand_forms.len() == 2) {
+    //     //     return Err(EvaluationError::WrongArity {
+    //     //         expected: 2,
+    //     //         realized: operand_forms.len(),
+    //     //     });
+    //     // }
+    //     // let name_form = operand_forms.first().unwrap();
+    //     // let rest = operand_forms.drop_first().expect("list is not empty");
+    //     // match name_form {
+    //     //     Value::Symbol(id, None) => {
+    //     //         if rest.is_empty() {
+    //     //             return self.intern_unbound_var(id);
+    //     //         }
+    //     //         let value_form = rest.first().unwrap();
+    //     //         self.eval_def_inner(id, value_form)
+    //     //     }
+    //     //     other => Err(EvaluationError::WrongType {
+    //     //         expected: "SymbolWithoutNamespace",
+    //     //         realized: other.clone(),
+    //     //     }),
+    //     // }
+    // }
 
-    fn eval_var(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        if operand_forms.len() != 1 {
-            return Err(EvaluationError::WrongArity {
-                expected: 1,
-                realized: operand_forms.len(),
-            });
-        }
-        let name_form = operand_forms.first().unwrap();
-        match name_form {
-            Value::Symbol(s, ns_opt) => {
-                if let Some(ns_desc) = ns_opt {
-                    self.resolve_var_in_namespace(s, ns_desc)
-                } else {
-                    self.resolve_var_in_current_namespace(s)
-                }
-            }
-            other => Err(EvaluationError::WrongType {
-                expected: "Symbol",
-                realized: other.clone(),
-            }),
-        }
-    }
+    // fn eval_var_legacy(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    //     if operand_forms.len() != 1 {
+    //         return Err(EvaluationError::WrongArity {
+    //             expected: 1,
+    //             realized: operand_forms.len(),
+    //         });
+    //     }
+    //     let name_form = operand_forms.first().unwrap();
+    //     match name_form {
+    //         Value::Symbol(s, ns_opt) => {
+    //             if let Some(ns_desc) = ns_opt {
+    //                 self.resolve_var_in_namespace(s, ns_desc)
+    //             } else {
+    //                 self.resolve_var_in_current_namespace(s)
+    //             }
+    //         }
+    //         other => Err(EvaluationError::WrongType {
+    //             expected: "Symbol",
+    //             realized: other.clone(),
+    //         }),
+    //     }
+    // }
 
-    fn eval_let(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        Ok(Value::Nil)
-        // let LetForm { bindings, body } = analyze_let(&operand_forms)?;
-        // let forward_declarations = bindings.resolve_forward_declarations();
-        // if !forward_declarations.is_empty() {
-        //     self.enter_scope();
-        //     for identifier in &forward_declarations {
-        //         let var = unbound_var("", identifier);
-        //         self.insert_value_in_current_scope(identifier, var);
-        //     }
-        // }
-        // self.enter_scope();
-        // for (identifier, value_form) in bindings {
-        //     match self.evaluate_form(value_form) {
-        //         Ok(value) => {
-        //             if let Some(Value::Var(var)) =
-        //                 resolve_symbol_in_scopes(self.scopes.iter().rev(), identifier)
-        //             {
-        //                 var.update(value);
-        //             } else {
-        //                 self.insert_value_in_current_scope(identifier, value);
-        //             }
-        //         }
-        //         e @ Err(_) => {
-        //             self.leave_scope();
-        //             if !forward_declarations.is_empty() {
-        //                 self.leave_scope();
-        //             }
-        //             return e;
-        //         }
-        //     }
-        // }
-        // let result = self.eval_do_inner(&body);
-        // self.leave_scope();
-        // if !forward_declarations.is_empty() {
-        //     self.leave_scope();
-        // }
-        // result
-    }
+    // fn eval_let_legacy(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    //     let LetForm { bindings, body } = analyze_let(&operand_forms)?;
+    //     let forward_declarations = bindings.resolve_forward_declarations();
+    //     if !forward_declarations.is_empty() {
+    //         self.enter_scope();
+    //         for identifier in &forward_declarations {
+    //             let var = unbound_var("", identifier);
+    //             self.insert_value_in_current_scope(identifier, var);
+    //         }
+    //     }
+    //     self.enter_scope();
+    //     for (identifier, value_form) in bindings {
+    //         match self.evaluate_form(value_form) {
+    //             Ok(value) => {
+    //                 if let Some(Value::Var(var)) =
+    //                     resolve_symbol_in_scopes(self.scopes.iter().rev(), identifier)
+    //                 {
+    //                     var.update(value);
+    //                 } else {
+    //                     self.insert_value_in_current_scope(identifier, value);
+    //                 }
+    //             }
+    //             e @ Err(_) => {
+    //                 self.leave_scope();
+    //                 if !forward_declarations.is_empty() {
+    //                     self.leave_scope();
+    //                 }
+    //                 return e;
+    //             }
+    //         }
+    //     }
+    //     let result = self.eval_do_inner(&body);
+    //     self.leave_scope();
+    //     if !forward_declarations.is_empty() {
+    //         self.leave_scope();
+    //     }
+    //     result
+    // }
 
-    fn eval_loop(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        Ok(Value::Nil)
-        // let LetForm { bindings, body } = analyze_let(&operand_forms)?;
-        // self.enter_scope();
-        // let mut bindings_keys = vec![];
-        // for (name, value_form) in bindings.into_iter() {
-        //     let value = self.evaluate_form(value_form)?;
-        //     bindings_keys.push(name);
-        //     self.insert_value_in_current_scope(name, value)
-        // }
-        // let mut result = self.eval_do_inner(&body);
-        // while let Ok(Value::Recur(next_bindings)) = result {
-        //     if next_bindings.len() != bindings_keys.len() {
-        //         self.leave_scope();
-        //         return Err(EvaluationError::WrongArity {
-        //             expected: bindings_keys.len(),
-        //             realized: next_bindings.len(),
-        //         });
-        //     }
-        //     for (key, value) in bindings_keys.iter().zip(next_bindings.iter()) {
-        //         self.insert_value_in_current_scope(key, value.clone());
-        //     }
-        //     result = self.eval_do_inner(&body);
-        // }
-        // self.leave_scope();
-        // result
-    }
+    // fn eval_loop_legacy(
+    //     &mut self,
+    //     operand_forms: PersistentList<Value>,
+    // ) -> EvaluationResult<Value> {
+    //     let LetForm { bindings, body } = analyze_let(&operand_forms)?;
+    //     self.enter_scope();
+    //     let mut bindings_keys = vec![];
+    //     for (name, value_form) in bindings.into_iter() {
+    //         let value = self.evaluate_form(value_form)?;
+    //         bindings_keys.push(name);
+    //         self.insert_value_in_current_scope(name, value)
+    //     }
+    //     let mut result = self.eval_do_inner(&body);
+    //     while let Ok(Value::Recur(next_bindings)) = result {
+    //         if next_bindings.len() != bindings_keys.len() {
+    //             self.leave_scope();
+    //             return Err(EvaluationError::WrongArity {
+    //                 expected: bindings_keys.len(),
+    //                 realized: next_bindings.len(),
+    //             });
+    //         }
+    //         for (key, value) in bindings_keys.iter().zip(next_bindings.iter()) {
+    //             self.insert_value_in_current_scope(key, value.clone());
+    //         }
+    //         result = self.eval_do_inner(&body);
+    //     }
+    //     self.leave_scope();
+    //     result
+    // }
 
-    fn eval_recur(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        let mut result = PersistentVector::new();
-        for form in operand_forms.into_iter() {
-            let value = self.evaluate_form(form)?;
-            result.push_back_mut(value);
-        }
-        Ok(Value::Recur(result))
-    }
+    // fn eval_recur_legacy(
+    //     &mut self,
+    //     operand_forms: PersistentList<Value>,
+    // ) -> EvaluationResult<Value> {
+    //     let mut result = PersistentVector::new();
+    //     for form in operand_forms.into_iter() {
+    //         let value = self.evaluate_form(form)?;
+    //         result.push_back_mut(value);
+    //     }
+    //     Ok(Value::Recur(result))
+    // }
 
-    fn eval_if(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        if !(operand_forms.len() == 2 || operand_forms.len() == 3) {
-            return Err(EvaluationError::WrongArity {
-                expected: 2,
-                realized: operand_forms.len(),
-            });
-        }
-        let predicate_form = operand_forms.first().unwrap();
-        let predicate = self.evaluate_form(predicate_form)?;
-        let falsey = matches!(predicate, Value::Nil | Value::Bool(false));
-        let rest = operand_forms.drop_first().expect("list is not empty");
-        let consequent_form = rest.first().unwrap();
-        match rest.len() {
-            2 => {
-                if !falsey {
-                    self.evaluate_form(consequent_form)
-                } else {
-                    let rest = rest.drop_first().expect("list is not empty");
-                    let alternate_form = rest.first().unwrap();
-                    self.evaluate_form(alternate_form)
-                }
-            }
-            1 => {
-                if !falsey {
-                    self.evaluate_form(consequent_form)
-                } else {
-                    Ok(Value::Nil)
-                }
-            }
-            _ => unreachable!("validated len of `if` form"),
-        }
-    }
+    // fn eval_if_legacy(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    //     if !(operand_forms.len() == 2 || operand_forms.len() == 3) {
+    //         return Err(EvaluationError::WrongArity {
+    //             expected: 2,
+    //             realized: operand_forms.len(),
+    //         });
+    //     }
+    //     let predicate_form = operand_forms.first().unwrap();
+    //     let predicate = self.evaluate_form(predicate_form)?;
+    //     let falsey = matches!(predicate, Value::Nil | Value::Bool(false));
+    //     let rest = operand_forms.drop_first().expect("list is not empty");
+    //     let consequent_form = rest.first().unwrap();
+    //     match rest.len() {
+    //         2 => {
+    //             if !falsey {
+    //                 self.evaluate_form(consequent_form)
+    //             } else {
+    //                 let rest = rest.drop_first().expect("list is not empty");
+    //                 let alternate_form = rest.first().unwrap();
+    //                 self.evaluate_form(alternate_form)
+    //             }
+    //         }
+    //         1 => {
+    //             if !falsey {
+    //                 self.evaluate_form(consequent_form)
+    //             } else {
+    //                 Ok(Value::Nil)
+    //             }
+    //         }
+    //         _ => unreachable!("validated len of `if` form"),
+    //     }
+    // }
 
-    fn eval_do_inner(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
-        forms
-            .iter()
-            .try_fold(Value::Nil, |_, next| self.evaluate_form(next))
-    }
+    // fn eval_do_inner(&mut self, forms: &PersistentList<Value>) -> EvaluationResult<Value> {
+    //     forms
+    //         .iter()
+    //         .try_fold(Value::Nil, |_, next| self.evaluate_form(next))
+    // }
 
-    fn eval_do(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        self.eval_do_inner(&operand_forms)
-    }
+    // fn eval_do(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    //     self.eval_do_inner(&operand_forms)
+    // }
 
-    fn eval_fn(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        Ok(Value::Nil)
-        // if operand_forms.is_empty() {
-        //     return Err(EvaluationError::WrongArity {
-        //         expected: 1,
-        //         realized: 0,
-        //     });
-        // }
-        // let params_form = operand_forms.first().unwrap();
-        // let body = operand_forms.drop_first().expect("list is not empty");
-        // match params_form {
-        //     Value::Vector(params) => analyze_fn(self, body, params),
-        //     other => Err(SyntaxError::LexicalBindingsMustBeVector(other.clone()).into()),
-        // }
-    }
+    // fn eval_fn_legacy(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    //     if operand_forms.is_empty() {
+    //         return Err(EvaluationError::WrongArity {
+    //             expected: 1,
+    //             realized: 0,
+    //         });
+    //     }
+    //     let params_form = operand_forms.first().unwrap();
+    //     let body = operand_forms.drop_first().expect("list is not empty");
+    //     match params_form {
+    //         Value::Vector(params) => analyze_fn(self, body, params),
+    //         other => Err(SyntaxError::LexicalBindingsMustBeVector(other.clone()).into()),
+    //     }
+    // }
 
-    fn eval_quote(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        if operand_forms.len() != 1 {
-            return Err(EvaluationError::WrongArity {
-                expected: 1,
-                realized: operand_forms.len(),
-            });
-        }
-        Ok(operand_forms.first().cloned().unwrap())
-    }
+    // fn eval_quote_legacy(
+    //     &mut self,
+    //     operand_forms: PersistentList<Value>,
+    // ) -> EvaluationResult<Value> {
+    //     if operand_forms.len() != 1 {
+    //         return Err(EvaluationError::WrongArity {
+    //             expected: 1,
+    //             realized: operand_forms.len(),
+    //         });
+    //     }
+    //     Ok(operand_forms.first().cloned().unwrap())
+    // }
 
-    fn eval_quasiquote(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
-        if operand_forms.len() != 1 {
-            return Err(EvaluationError::WrongArity {
-                expected: 1,
-                realized: operand_forms.len(),
-            });
-        }
-        let operand_form = operand_forms.first().unwrap();
-        let expansion = eval_quasiquote(operand_form)?;
-        self.evaluate_form(&expansion)
-    }
+    // fn eval_quasiquote(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    //     if operand_forms.len() != 1 {
+    //         return Err(EvaluationError::WrongArity {
+    //             expected: 1,
+    //             realized: operand_forms.len(),
+    //         });
+    //     }
+    //     let operand_form = operand_forms.first().unwrap();
+    //     let expansion = eval_quasiquote(operand_form)?;
+    //     self.evaluate_form(&expansion)
+    // }
 
-    fn eval_defmacro(&mut self, operand_forms: PersistentList<Value>) -> EvaluationResult<Value> {
+    fn eval_defmacro_legacy(
+        &mut self,
+        operand_forms: PersistentList<Value>,
+    ) -> EvaluationResult<Value> {
         match self.eval_def(operand_forms)? {
             Value::Var(var) => match var_impl_into_inner(&var) {
                 Some(Value::Fn(f)) => {
@@ -1140,13 +1137,269 @@ impl Interpreter {
         result
     }
 
-    fn evaluate_analyzed_form(&mut self, form: AnalyzedForm) -> EvaluationResult<Value> {
-        Ok(Value::Nil)
+    fn resolve_in_lexical_scopes(&self, identifier: &Identifier) -> RuntimeValue {
+        for scope in self.scopes.iter().rev() {
+            if let Some(value) = scope.get(identifier) {
+                return value.clone();
+            }
+        }
+        unreachable!("analysis guarantees identifier is in scope")
     }
 
-    fn analyze_and_evaluate(&mut self, form: &Form) -> EvaluationResult<Value> {
-        let namespaces = self.namespaces.borrow();
-        let analyzer = Analyzer::new(namespaces);
+    fn eval_def(&mut self, form: DefForm) -> EvaluationResult<RuntimeValue> {
+        let var = match form {
+            DefForm::Bound(symbol, form) => {
+                let value = self.evaluate_analyzed_form(*form)?;
+                self.intern(symbol, Some(value))?
+            }
+            DefForm::Unbound(symbol) => self.intern(symbol, None)?,
+        };
+        Ok(RuntimeValue::Var(var))
+    }
+
+    fn eval_var(&self, symbol: &Symbol) -> EvaluationResult<RuntimeValue> {
+        self.namespaces
+            .resolve_symbol(symbol)
+            .map(RuntimeValue::Var)
+            .map_err(EvaluationError::from)
+    }
+
+    fn extend_lexical_scope<'a>(
+        &'a mut self,
+        bindings: impl Iterator<Item = (&'a Identifier, RuntimeValue)>,
+    ) {
+        let scope = Scope::from(bindings);
+        self.scopes.push(scope);
+    }
+
+    fn eval_body_form(&mut self, BodyForm { body }: &BodyForm) -> EvaluationResult<RuntimeValue> {
+        let mut result = RuntimeValue::Nil;
+        for &form in body {
+            result = self.evaluate_analyzed_form(form)?
+        }
+        Ok(result)
+    }
+
+    fn eval_let(
+        &mut self,
+        LetForm {
+            lexical_form,
+            forward_declarations,
+        }: LetForm,
+    ) -> EvaluationResult<RuntimeValue> {
+        let has_forward_declarations = !forward_declarations.is_empty();
+        if has_forward_declarations {
+            self.extend_lexical_scope(
+                forward_declarations
+                    .into_iter()
+                    .map(|symbol| (&symbol.identifier, RuntimeValue::Var(Var::Unbound))),
+            );
+        }
+
+        let bindings = match lexical_form.bindings {
+            LexicalBindings::Bound(bindings) => bindings
+                .into_iter()
+                .map(|(symbol, form)| Ok((&symbol.identifier, self.evaluate_analyzed_form(*form)?)))
+                .collect::<Result<Vec<(&Identifier, RuntimeValue)>, _>>()
+                .map_err(|err| {
+                    if has_forward_declarations {
+                        self.leave_scope();
+                    }
+                    err
+                })?,
+            LexicalBindings::Unbound(bindings) => {
+                unreachable!("let* cannot have unbound local symbols")
+            }
+        };
+        // TODO: are forward decls being resolved correctly?
+        self.extend_lexical_scope(bindings.iter());
+
+        let result = self.eval_body_form(&lexical_form.body);
+
+        self.leave_scope();
+        if has_forward_declarations {
+            self.leave_scope();
+        }
+        result
+    }
+
+    fn eval_loop<'a>(
+        &'a mut self,
+        lexical_form: LexicalForm<'a>,
+    ) -> EvaluationResult<RuntimeValue> {
+        let bindings = match lexical_form.bindings {
+            LexicalBindings::Bound(bindings) => bindings
+                .into_iter()
+                .map(|(symbol, form)| Ok((&symbol.identifier, self.evaluate_analyzed_form(*form)?)))
+                .collect::<Result<Vec<(&Identifier, RuntimeValue)>, _>>()?,
+            LexicalBindings::Unbound(bindings) => {
+                unreachable!("let* cannot have unbound local symbols")
+            }
+        };
+        self.extend_lexical_scope(bindings.iter());
+
+        let delimiter = self.control_stack.len();
+        self.control_stack.push(ControlFlow::Continue);
+
+        let body = &lexical_form.body;
+        let mut result = self.eval_body_form(body).map_err(|err| {
+            self.control_stack.truncate(delimiter);
+            self.leave_scope();
+            err
+        })?;
+        while let ControlFlow::Recur(values) = self.control_stack.pop().unwrap() {
+            let scope = self.scopes.last_mut().unwrap();
+            for ((name, _), value) in bindings.iter().zip(values.into_iter()) {
+                scope.insert(*name, value);
+            }
+            result = self.eval_body_form(body).map_err(|err| {
+                self.control_stack.truncate(delimiter);
+                self.leave_scope();
+                err
+            })?;
+        }
+
+        // NOTE: any control information added in this fn was popped in loop
+        self.leave_scope();
+
+        Ok(result)
+    }
+
+    fn eval_recur(&mut self, BodyForm { body }: BodyForm) -> EvaluationResult<RuntimeValue> {
+        let result = body
+            .into_iter()
+            .map(|form| self.evaluate_analyzed_form(form))
+            .collect::<Result<Vec<RuntimeValue>, _>>()?;
+        self.control_stack.push(ControlFlow::Recur(result));
+        Ok(RuntimeValue::Nil)
+    }
+
+    fn eval_if(
+        &mut self,
+        IfForm {
+            predicate,
+            consequent,
+            alternate,
+        }: IfForm,
+    ) -> EvaluationResult<RuntimeValue> {
+        let predicate = self.evaluate_analyzed_form(*predicate)?;
+        let falsey = matches!(predicate, RuntimeValue::Nil | RuntimeValue::Bool(false));
+        if falsey {
+            if let Some(alternate) = alternate {
+                self.evaluate_analyzed_form(*alternate)
+            } else {
+                Ok(RuntimeValue::Nil)
+            }
+        } else {
+            self.evaluate_analyzed_form(*consequent)
+        }
+    }
+
+    fn eval_fn(&mut self, fn_form: FnForm) -> EvaluationResult<RuntimeValue> {
+        // TODO: address lifetimes
+        Ok(RuntimeValue::Fn(fn_form))
+    }
+
+    fn eval_quote(&mut self, form: Box<AnalyzedForm>) -> EvaluationResult<RuntimeValue> {
+        Ok(form.into())
+    }
+
+    fn eval_quasiquote(&mut self, form: Box<AnalyzedForm>) -> EvaluationResult<RuntimeValue> {
+        let expansion = eval_quasiquote(form)?;
+        self.evaluate_analyzed_form(expansion)
+    }
+
+    fn eval_defmacro(&mut self, name: &Symbol, fn_form: FnForm) -> EvaluationResult<RuntimeValue> {
+        // TODO
+    }
+
+    fn eval_macroexpand(&mut self, form: Box<AnalyzedForm>) -> EvaluationResult<RuntimeValue> {
+        // TODO
+    }
+
+    fn eval_try(&mut self, TryForm { body, catch }: TryForm) -> EvaluationResult<RuntimeValue> {
+        // TODO
+    }
+
+    fn eval_catch(
+        &mut self,
+        CatchForm {
+            exception_binding,
+            body,
+        }: CatchError,
+    ) -> EvaluationResult<RuntimeValue> {
+        // TODO
+    }
+
+    fn evaluate_analyzed_form(&mut self, form: AnalyzedForm) -> EvaluationResult<RuntimeValue> {
+        let value = match form {
+            AnalyzedForm::LexicalSymbol(identifier) => self.resolve_in_lexical_scopes(identifier),
+            AnalyzedForm::Var(var) => {
+                match var {
+                    Var::Bound(value) => {
+                        // TODO fix
+                        RuntimeValue::Nil
+                    }
+                    Var::Unbound => RuntimeValue::Var(var),
+                }
+            }
+            AnalyzedForm::Atom(atom) => atom.into(),
+            AnalyzedForm::List(inner) => match inner {
+                AnalyzedList::Def(form) => self.eval_def(form),
+                AnalyzedList::Var(symbol) => self.eval_var(symbol),
+                AnalyzedList::Let(form) => self.eval_let(form),
+                AnalyzedList::Loop(form) => self.eval_loop(form),
+                AnalyzedList::Recur(form) => self.eval_recur(form),
+                AnalyzedList::If(form) => self.eval_if(form),
+                AnalyzedList::Do(form) => self.eval_body_form(&form),
+                AnalyzedList::Fn(form) => self.eval_fn(form),
+                AnalyzedList::Quote(form) => self.eval_quote(form),
+                AnalyzedList::Quasiquote(form) => self.eval_quasiquote(form),
+                // AnalyzedList::Unquote(form) => self.eval_unquote(form),
+                // AnalyzedList::SpliceUnquote(form) => self.eval_splice_unquote(form),
+                AnalyzedList::Defmacro(name, form) => self.eval_defmacro(name, form),
+                AnalyzedList::Macroexpand(form) => self.eval_macroexpand(form),
+                AnalyzedList::Try(form) => self.eval_try(form),
+                AnalyzedList::Catch(form) => self.eval_catch(form),
+                AnalyzedList::Form(coll) => {
+                    let evaluated_coll = coll
+                        .into_iter()
+                        .map(|form| self.evaluate_analyzed_form(form))
+                        .collect::<Result<PersistentList, _>>()?;
+                    RuntimeValue::List(evaluated_coll)
+                }
+            },
+            AnalyzedForm::Vector(coll) => {
+                let evaluated_coll = coll
+                    .into_iter()
+                    .map(|form| self.evaluate_analyzed_form(form))
+                    .collect::<Result<PersistentVector, _>>()?;
+                RuntimeValue::Vector(evaluated_coll)
+            }
+            AnalyzedForm::Map(coll) => {
+                let evaluated_coll = coll
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let evaluated_key = self.evaluate_analyzed_form(form);
+                        let evaluated_value = self.evaluate_analyzed_form(form);
+                        [evaluated_key, evaluated_value]
+                    })
+                    .collect::<Result<PersistentMap, _>>()?;
+                RuntimeValue::Map(evaluated_coll)
+            }
+            AnalyzedForm::Set(coll) => {
+                let evaluated_coll = coll
+                    .into_iter()
+                    .map(|form| self.evaluate_analyzed_form(form))
+                    .collect::<Result<PersistentSet, _>>()?;
+                RuntimeValue::Set(evaluated_coll)
+            }
+        };
+        Ok(value)
+    }
+
+    fn analyze_and_evaluate(&mut self, form: &Form) -> EvaluationResult<RuntimeValue> {
+        let analyzer = Analyzer::new(&self.namespaces);
         let analyzed_form = analyzer.analyze(form)?;
         self.evaluate_analyzed_form(analyzed_form)
     }
@@ -1155,8 +1408,10 @@ impl Interpreter {
         read(source)
             .map_err(|err| EvaluationError::ReaderError(err, source.to_string()))?
             .iter()
-            .map(|form| self.evaluate(&form.into()))
-            .collect()
+            .map(|form| self.analyze_and_evaluate(form))
+            .collect::<Result<RuntimeValue, _>>()?;
+        // TODO fix return
+        Ok(vec![Value::Nil])
     }
 }
 

@@ -1,7 +1,7 @@
 mod analyzed_form;
 
 use crate::{
-    namespace::{Context as Namespaces, NamespaceError},
+    namespace::{Context as NamespaceContext, NamespaceError},
     reader::{Atom, Form, Identifier, Symbol},
 };
 pub use analyzed_form::{
@@ -9,7 +9,6 @@ pub use analyzed_form::{
     LexicalBindings, LexicalForm, TryForm,
 };
 use itertools::Itertools;
-use std::cell::Ref;
 use std::collections::HashSet;
 use std::ops::Range;
 use thiserror::Error;
@@ -19,7 +18,7 @@ const MAX_ARGS_BOUND: usize = 129;
 
 const VARIADIC_PARAM_COUNT: usize = 2;
 const VARIADIC_ARG: &Symbol = &Symbol {
-    identifier: String::from("&"),
+    identifier: Identifier::from("&"),
     namespace: None,
 };
 
@@ -271,13 +270,13 @@ fn analyze_tail_fn_parameters<'a>(parameters: &'a [&Symbol]) -> AnalysisResult<O
 }
 
 #[derive(Debug)]
-pub struct Analyzer<'n, 's> {
-    namespaces: Ref<'n, Namespaces>,
-    scopes: Vec<HashSet<&'s Identifier>>,
+pub struct Analyzer<'ana> {
+    namespaces: &'ana NamespaceContext,
+    scopes: Vec<HashSet<&'ana Identifier>>,
 }
 
-impl<'n, 's> Analyzer<'n, 's> {
-    pub fn new(namespaces: Ref<'n, Namespaces>) -> Self {
+impl<'ana> Analyzer<'ana> {
+    pub fn new(namespaces: &'ana NamespaceContext) -> Self {
         Self {
             namespaces,
             scopes: vec![],
@@ -288,7 +287,7 @@ impl<'n, 's> Analyzer<'n, 's> {
     fn analyze_def<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
         verify_arity(args, 1..3).map_err(DefError::from)?;
 
-        let name = extract_symbol_without_namespace(&args[0]).map_err(DefError::from)?;
+        let name = extract_symbol(&args[0]).map_err(DefError::from)?;
         let form = if args.len() == 2 {
             let analyzed_value = self.analyze(&args[1])?;
             DefForm::Bound(name, Box::new(analyzed_value))
@@ -341,7 +340,7 @@ impl<'n, 's> Analyzer<'n, 's> {
         }
     }
 
-    fn analyze_lexical_form<'a: 's, E>(
+    fn analyze_lexical_form<'a: 'ana, E>(
         &'a mut self,
         forms: &'a [Form],
         lexical_mode: LexicalMode,
@@ -383,7 +382,7 @@ impl<'n, 's> Analyzer<'n, 's> {
     }
 
     // (let* [bindings*] body*)
-    fn analyze_let<'a: 's>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_let<'a: 'ana>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
         let lexical_form = self.analyze_lexical_form::<LetError>(args, LexicalMode::Bound)?;
         let forward_declarations = lexical_form.resolve_forward_declarations();
         Ok(AnalyzedList::Let(LetForm {
@@ -393,7 +392,7 @@ impl<'n, 's> Analyzer<'n, 's> {
     }
 
     // (loop* [bindings*] body*)
-    fn analyze_loop<'a: 's>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_loop<'a: 'ana>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
         let lexical_form = self.analyze_lexical_form::<LoopError>(args, LexicalMode::Bound)?;
         Ok(AnalyzedList::Loop(lexical_form))
     }
@@ -470,7 +469,7 @@ impl<'n, 's> Analyzer<'n, 's> {
         }
     }
 
-    fn extract_fn_form<'a: 's>(&'a self, args: &'a [Form]) -> AnalysisResult<FnForm<'a>> {
+    fn extract_fn_form<'a: 'ana>(&'a self, args: &'a [Form]) -> AnalysisResult<FnForm<'a>> {
         let LexicalForm { bindings, body } =
             self.analyze_lexical_form::<FnError>(args, LexicalMode::Unbound)?;
         let parameters = match bindings {
@@ -512,29 +511,29 @@ impl<'n, 's> Analyzer<'n, 's> {
         Ok(AnalyzedList::Quasiquote(Box::new(form)))
     }
 
-    // (unquote form)
-    fn analyze_unquote<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
-        verify_arity(args, 1..2).map_err(UnquoteError::from)?;
+    // // (unquote form)
+    // fn analyze_unquote<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    //     verify_arity(args, 1..2).map_err(UnquoteError::from)?;
 
-        let form = self.analyze(&args[0])?;
+    //     let form = self.analyze(&args[0])?;
 
-        Ok(AnalyzedList::Unquote(Box::new(form)))
-    }
+    //     Ok(AnalyzedList::Unquote(Box::new(form)))
+    // }
 
-    // (splice-unquote form)
-    fn analyze_splice_unquote<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
-        verify_arity(args, 1..2).map_err(SpliceUnquoteError::from)?;
+    // // (splice-unquote form)
+    // fn analyze_splice_unquote<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    //     verify_arity(args, 1..2).map_err(SpliceUnquoteError::from)?;
 
-        let form = self.analyze(&args[0])?;
+    //     let form = self.analyze(&args[0])?;
 
-        Ok(AnalyzedList::SpliceUnquote(Box::new(form)))
-    }
+    //     Ok(AnalyzedList::SpliceUnquote(Box::new(form)))
+    // }
 
     // (defmacro! symbol fn*-form)
     fn analyze_defmacro<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
         verify_arity(args, 2..3).map_err(DefmacroError::from)?;
 
-        let name = extract_symbol_without_namespace(&args[0]).map_err(DefmacroError::from)?;
+        let name = extract_symbol(&args[0]).map_err(DefmacroError::from)?;
         let body = self.extract_fn_form(&args[1..])?;
 
         Ok(AnalyzedList::Defmacro(name, body))
@@ -578,7 +577,7 @@ impl<'n, 's> Analyzer<'n, 's> {
     }
 
     // (catch* exc-symbol form*)
-    fn analyze_catch<'a: 's>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_catch<'a: 'ana>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
         verify_arity(args, 1..MAX_ARGS_BOUND).map_err(CatchError::from)?;
 
         let exception_binding =
@@ -621,8 +620,8 @@ impl<'n, 's> Analyzer<'n, 's> {
                     "fn*" => self.analyze_fn(rest),
                     "quote" => self.analyze_quote(rest),
                     "quasiquote" => self.analyze_quasiquote(rest),
-                    "unquote" => self.analyze_unquote(rest),
-                    "splice-unquote" => self.analyze_splice_unquote(rest),
+                    // "unquote" => self.analyze_unquote(rest),
+                    // "splice-unquote" => self.analyze_splice_unquote(rest),
                     "defmacro!" => self.analyze_defmacro(rest),
                     "macroexpand" => self.analyze_macroexpand(rest),
                     "try*" => self.analyze_try(rest),
@@ -675,35 +674,18 @@ impl<'n, 's> Analyzer<'n, 's> {
         false
     }
 
-    fn resolve_identifier<'a>(
-        &'a self,
-        identifier: &'a Identifier,
-    ) -> AnalysisResult<AnalyzedForm<'a>> {
-        if self.identifier_is_in_lexical_scope(identifier) {
-            Ok(AnalyzedForm::Symbol(identifier))
-        } else {
-            let var = self
-                .namespaces
-                .resolve_reference_in_current_namespace(identifier)
-                .map_err(SymbolError::from)?;
-            Ok(AnalyzedForm::Var(var))
-        }
-    }
-
     pub fn analyze_symbol<'a>(&'a self, symbol: &'a Symbol) -> AnalysisResult<AnalyzedForm<'a>> {
-        let form = match symbol {
-            Symbol {
-                identifier,
-                namespace: Some(namespace),
-            } => self
-                .namespaces
-                .resolve_reference(namespace, identifier)
-                .map(AnalyzedForm::Var)
-                .map_err(SymbolError::from)?,
-            Symbol {
-                identifier,
-                namespace: None,
-            } => self.resolve_identifier(identifier)?,
+        let form = match self.namespaces.resolve_symbol(symbol) {
+            Ok(var) => AnalyzedForm::Var(var),
+            Err(e @ NamespaceError::MissingIdentifier(..)) => {
+                let identifier = &symbol.identifier;
+                if self.identifier_is_in_lexical_scope(identifier) {
+                    AnalyzedForm::LexicalSymbol(identifier)
+                } else {
+                    return Err(SymbolError::from(e).into());
+                }
+            }
+            Err(err) => return Err(SymbolError::from(err).into()),
         };
         Ok(form)
     }

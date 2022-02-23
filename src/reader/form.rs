@@ -40,7 +40,7 @@ pub enum Atom {
 
 pub type Identifier = String;
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Symbol {
     pub identifier: Identifier,
     pub namespace: Option<Identifier>,

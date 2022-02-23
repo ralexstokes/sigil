@@ -1,5 +1,7 @@
+use crate::analyzer::{AnalyzedForm, FnForm};
 use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter};
+use crate::namespace::Var;
 use crate::reader::{Atom, Form, Symbol};
 use crate::writer::unescape_string;
 use itertools::{join, sorted, Itertools};
@@ -12,6 +14,59 @@ use std::hash::{Hash, Hasher};
 use std::iter::{FromIterator, IntoIterator};
 use std::mem::discriminant;
 use std::rc::Rc;
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum RuntimeValue {
+    Nil,
+    Bool(bool),
+    Number(i64),
+    String(String),
+    Keyword(Symbol),
+    Symbol(Symbol),
+    Var(Var),
+    List(PersistentList<RuntimeValue>),
+    Vector(PersistentVector<RuntimeValue>),
+    Map(PersistentMap<RuntimeValue, RuntimeValue>),
+    Set(PersistentSet<RuntimeValue>),
+    Fn(FnForm<'_>),
+}
+
+impl From<&Atom> for RuntimeValue {
+    fn from(atom: &Atom) -> Self {
+        match atom {
+            Atom::Nil => RuntimeValue::Nil,
+            Atom::Bool(b) => RuntimeValue::Bool(*b),
+            Atom::Number(n) => RuntimeValue::Number(*n),
+            Atom::String(s) => RuntimeValue::String(s.clone()),
+            Atom::Keyword(k) => RuntimeValue::Keyword(k.clone()),
+            Atom::Symbol(s) => RuntimeValue::Symbol(s.clone()),
+        }
+    }
+}
+
+impl<'a> From<&AnalyzedForm<'a>> for RuntimeValue {
+    fn from(form: &AnalyzedForm<'a>) -> Self {
+        // TODO finish
+        match form {
+            AnalyzedForm::LexicalSymbol(identifier) => RuntimeValue::Symbol(Symbol {
+                identifier,
+                namespace: None,
+            }),
+            AnalyzedForm::Var(var) => RuntimeValue::Var(var),
+            AnalyzedForm::Atom(atom) => atom.into(),
+            AnalyzedForm::List(list) => {}
+            AnalyzedForm::Vector(coll) => {}
+            AnalyzedForm::Map(coll) => {}
+            AnalyzedForm::Set(coll) => {}
+        }
+    }
+}
+
+impl Hash for RuntimeValue {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // TODO
+    }
+}
 
 impl From<&Form> for Value {
     fn from(form: &Form) -> Self {
