@@ -1,14 +1,14 @@
 mod var;
 
 use crate::reader::{Identifier, Symbol};
-use crate::value::{unbound_var, var_with_value, RuntimeValue, Value};
+use crate::value::RuntimeValue;
 use std::collections::HashMap;
 use thiserror::Error;
 use var::new_var;
 
 pub use var::Var;
 
-const DEFAULT_NAME: Identifier = Identifier::from("core");
+pub const DEFAULT_NAME: &str = "core";
 
 // `Context` maps global names to namespaces
 // and also tracks a "current" namespace, the one which
@@ -24,8 +24,9 @@ pub struct Context {
 impl Default for Context {
     fn default() -> Self {
         let current_namespace = 0;
-        let names = HashMap::from([(DEFAULT_NAME, current_namespace)]);
-        let name_lookup = HashMap::from([(current_namespace, DEFAULT_NAME.clone())]);
+        let default_identifier = Identifier::from(DEFAULT_NAME);
+        let names = HashMap::from([(default_identifier.clone(), current_namespace)]);
+        let name_lookup = HashMap::from([(current_namespace, default_identifier)]);
         let namespaces = vec![Namespace::default()];
 
         Self {
@@ -42,9 +43,31 @@ impl Context {
         &self.namespaces[self.current_namespace]
     }
 
-    fn get_namespace(&self, identifier: &Identifier) -> &Namespace {
-        let index = self.names[identifier];
-        &self.namespaces[index]
+    pub fn current_namespace_mut(&mut self) -> &mut Namespace {
+        &mut self.namespaces[self.current_namespace]
+    }
+
+    pub fn current_namespace_name(&self) -> &Identifier {
+        self.name_lookup.get(&self.current_namespace).unwrap()
+    }
+
+    fn create_if_missing(&mut self, identifier: &Identifier) -> usize {
+        *self.names.entry(identifier.clone()).or_insert_with(|| {
+            self.namespaces.push(Namespace::default());
+            let index = self.namespaces.len() - 1;
+            self.name_lookup.insert(index, identifier.clone());
+            index
+        })
+    }
+
+    pub fn get_namespace_mut(&mut self, name: &Identifier) -> &mut Namespace {
+        let index = self.create_if_missing(name);
+        &mut self.namespaces[index]
+    }
+
+    pub fn intern_namespace(&mut self, name: &Identifier, namespace: Namespace) {
+        let ns = self.get_namespace_mut(name);
+        ns.merge(namespace);
     }
 
     pub fn resolve_symbol(&self, symbol: &Symbol) -> Result<Var, NamespaceError> {
@@ -122,18 +145,23 @@ impl Namespace {
         Ok(var.clone())
     }
 
-    pub fn remove(&mut self, identifier: &str) {
+    pub fn remove(&mut self, identifier: &Identifier) {
         self.bindings.remove(identifier);
     }
 
-    // pub fn merge(&mut self, other: &Namespace) -> Result<(), NamespaceError> {
-    //     for (identifier, value) in &other.bindings {
-    //         self.intern(identifier, value)?;
-    //     }
-    //     Ok(())
-    // }
+    fn merge(&mut self, other: Namespace) {
+        for (identifier, value) in other.bindings {
+            self.bindings.insert(identifier, value);
+        }
+    }
 
-    pub fn symbols(&self) -> impl Iterator<Item = &String> {
+    pub fn symbols(&self) -> impl Iterator<Item = &Identifier> {
         self.bindings.keys()
     }
+}
+
+pub struct NamespaceDesc<'a> {
+    pub name: Identifier,
+    pub namespace: Namespace,
+    pub source: Option<&'a str>,
 }

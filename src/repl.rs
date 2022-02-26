@@ -1,6 +1,6 @@
 use crate::interpreter::{EvaluationError, Interpreter, SymbolIndex};
-use crate::reader::{is_structural, is_symbolic, is_token, read, ReadError};
-use crate::value::Value;
+use crate::reader::{is_structural, is_symbolic, is_token, ReadError};
+use crate::value::RuntimeValue;
 use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::{Highlighter, MatchingBracketHighlighter};
@@ -25,13 +25,16 @@ pub enum ReplError<'a> {
     #[error("error reading: {0}")]
     Read(ReadError, &'a str),
     #[error("error evaluating: {0}")]
-    Eval(EvaluationError, Value),
+    Eval(EvaluationError, RuntimeValue),
     #[error("error with I/O: {0}")]
     IO(#[from] io::Error),
     #[error("error with formatting: {0}")]
     Fmt(#[from] fmt::Error),
     #[error("error with readline: {0}")]
     Readline(#[from] ReadlineError),
+    // TODO: fixme
+    #[error("error interpreting: {0}")]
+    Tmp(#[from] EvaluationError),
 }
 
 pub struct StdRepl<P: AsRef<Path>> {
@@ -154,20 +157,8 @@ impl<P: AsRef<Path>> StdRepl<P> {
         self
     }
 
-    pub fn run_from_source<'a>(&mut self, source: &'a str) -> Result<Vec<Value>, ReplError<'a>> {
-        let forms = read(source).map_err(|err| ReplError::Read(err, source))?;
-        let mut results = vec![];
-        for form in forms.iter() {
-            match self.interpreter.evaluate(&form.into()) {
-                Ok(result) => {
-                    results.push(result);
-                }
-                Err(err) => {
-                    return Err(ReplError::Eval(err, form.into()));
-                }
-            }
-        }
-        Ok(results)
+    pub fn run_from_source(&mut self, source: &str) -> Result<Vec<RuntimeValue>, ReplError> {
+        self.interpreter.interpret(source).map_err(ReplError::Tmp)
     }
 
     pub fn run_from_file<Q: AsRef<Path>>(&mut self, path: Q) -> Result<(), ReplError> {

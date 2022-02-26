@@ -1,12 +1,11 @@
-mod analyzed_form;
-
 use crate::{
+    collections::PersistentList,
     namespace::{Context as NamespaceContext, NamespaceError},
     reader::{Atom, Form, Identifier, Symbol},
-};
-pub use analyzed_form::{
-    AnalyzedForm, AnalyzedList, BodyForm, CatchForm, DefForm, FnForm, IfForm, LetForm,
-    LexicalBindings, LexicalForm, TryForm,
+    value::{
+        BodyForm, CatchForm, DefForm, FnForm, IfForm, LetForm, LexicalBindings, LexicalForm,
+        RuntimeValue, SpecialForm, TryForm,
+    },
 };
 use itertools::Itertools;
 use std::collections::HashSet;
@@ -17,10 +16,8 @@ use thiserror::Error;
 const MAX_ARGS_BOUND: usize = 129;
 
 const VARIADIC_PARAM_COUNT: usize = 2;
-const VARIADIC_ARG: &Symbol = &Symbol {
-    identifier: Identifier::from("&"),
-    namespace: None,
-};
+const VARIADIC_IDENTIFIER: &str = "&";
+const CATCH_IDENTIFIER: &str = "catch*";
 
 #[derive(Debug, Clone, Error)]
 pub enum SymbolError {
@@ -188,9 +185,9 @@ pub enum AnalysisError {
 
 pub type AnalysisResult<T> = Result<T, AnalysisError>;
 
-fn extract_symbol(form: &Form) -> Result<&Symbol, TypeError> {
+fn extract_symbol(form: &Form) -> Result<Symbol, TypeError> {
     match form {
-        Form::Atom(Atom::Symbol(symbol)) => Ok(symbol),
+        Form::Atom(Atom::Symbol(symbol)) => Ok(symbol.clone()),
         e => Err(TypeError {
             expected: "symbol".into(),
             provided: e.clone(),
@@ -198,11 +195,12 @@ fn extract_symbol(form: &Form) -> Result<&Symbol, TypeError> {
     }
 }
 
-fn extract_symbol_without_namespace(form: &Form) -> Result<&Symbol, TypeError> {
+fn extract_symbol_without_namespace(form: &Form) -> Result<Identifier, TypeError> {
     match extract_symbol(form)? {
-        s @ Symbol {
-            namespace: None, ..
-        } => Ok(s),
+        Symbol {
+            identifier,
+            namespace: None,
+        } => Ok(identifier.clone()),
         e => Err(TypeError {
             expected: "symbol without namespace".into(),
             provided: Form::Atom(Atom::Symbol(e.clone())),
@@ -210,9 +208,9 @@ fn extract_symbol_without_namespace(form: &Form) -> Result<&Symbol, TypeError> {
     }
 }
 
-fn extract_vector(form: &Form) -> Result<&Vec<Form>, TypeError> {
+fn extract_vector(form: &Form) -> Result<Vec<Form>, TypeError> {
     match form {
-        Form::Vector(v) => Ok(v),
+        Form::Vector(v) => Ok(v.clone()),
         e => Err(TypeError {
             expected: "vector".into(),
             provided: e.clone(),
@@ -220,6 +218,7 @@ fn extract_vector(form: &Form) -> Result<&Vec<Form>, TypeError> {
     }
 }
 
+#[derive(Copy, Clone)]
 enum LexicalMode {
     Bound,
     Unbound,
@@ -228,7 +227,7 @@ enum LexicalMode {
 fn extract_lexical_form(
     forms: &[Form],
     lexical_mode: LexicalMode,
-) -> Result<(&Vec<Form>, &[Form]), LexicalError> {
+) -> Result<(Vec<Form>, Vec<Form>), LexicalError> {
     verify_arity(forms, 1..MAX_ARGS_BOUND).map_err(|err| LexicalError::Arity(err))?;
 
     let bindings = extract_vector(&forms[0]).map_err(LexicalError::Type)?;
@@ -237,7 +236,7 @@ fn extract_lexical_form(
         return Err(LexicalError::BindingsMustBeBound);
     }
 
-    let body = &forms[1..];
+    let body = Vec::from(&forms[1..]);
     Ok((bindings, body))
 }
 
@@ -252,14 +251,47 @@ fn verify_arity(forms: &[Form], range: Range<usize>) -> Result<(), ArityError> {
     }
 }
 
-fn analyze_tail_fn_parameters<'a>(parameters: &'a [&Symbol]) -> AnalysisResult<Option<&'a Symbol>> {
-    match parameters {
+fn analyze_fn_parameters(
+    mut parameters: Vec<Identifier>,
+) -> AnalysisResult<(Vec<Identifier>, Option<Identifier>)> {
+    match parameters.len() {
+        0 => Ok((parameters, None)),
+        1 => {
+            if parameters[0] == VARIADIC_IDENTIFIER {
+                Err(AnalysisError::FnError(FnError::MissingVariadicArg))
+            } else {
+                Ok((parameters, None))
+            }
+        }
+        _ => {
+            let variadic_position = parameters.len() - VARIADIC_PARAM_COUNT;
+            let (fixed_parameters, possibly_variadic) = parameters.split_at(variadic_position);
+            let valid_fixed_parameters = fixed_parameters
+                .iter()
+                .all(|parameter| parameter != VARIADIC_IDENTIFIER);
+            if !valid_fixed_parameters {
+                return Err(AnalysisError::FnError(
+                    FnError::VariadicArgNotInTailPosition,
+                ));
+            }
+
+            let variadic_parameter = analyze_tail_fn_parameters(possibly_variadic)?;
+            if variadic_parameter.is_some() {
+                parameters.truncate(variadic_position);
+            }
+            Ok((parameters, variadic_parameter))
+        }
+    }
+}
+
+fn analyze_tail_fn_parameters(parameters: &[Identifier]) -> AnalysisResult<Option<Identifier>> {
+    match &parameters {
         &[a, b] => {
-            if a == VARIADIC_ARG {
-                if b == VARIADIC_ARG {
+            if a == VARIADIC_IDENTIFIER {
+                if b == VARIADIC_IDENTIFIER {
                     Err(AnalysisError::FnError(FnError::VariadicArgNotUnique))
                 } else {
-                    Ok(Some(b))
+                    Ok(Some(b.clone()))
                 }
             } else {
                 Ok(None)
@@ -269,14 +301,25 @@ fn analyze_tail_fn_parameters<'a>(parameters: &'a [&Symbol]) -> AnalysisResult<O
     }
 }
 
-#[derive(Debug)]
-pub struct Analyzer<'ana> {
-    namespaces: &'ana NamespaceContext,
-    scopes: Vec<HashSet<&'ana Identifier>>,
+type Scopes = Vec<HashSet<Identifier>>;
+
+fn identifier_is_in_lexical_scope(scopes: &Scopes, identifier: &Identifier) -> bool {
+    for scope in scopes.iter().rev() {
+        if scope.contains(identifier) {
+            return true;
+        }
+    }
+    false
 }
 
-impl<'ana> Analyzer<'ana> {
-    pub fn new(namespaces: &'ana NamespaceContext) -> Self {
+#[derive(Debug)]
+pub struct Analyzer<'n> {
+    namespaces: &'n NamespaceContext,
+    scopes: Scopes,
+}
+
+impl<'n> Analyzer<'n> {
+    pub fn new(namespaces: &'n NamespaceContext) -> Self {
         Self {
             namespaces,
             scopes: vec![],
@@ -284,10 +327,10 @@ impl<'ana> Analyzer<'ana> {
     }
 
     // (def! name value?)
-    fn analyze_def<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_def(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         verify_arity(args, 1..3).map_err(DefError::from)?;
 
-        let name = extract_symbol(&args[0]).map_err(DefError::from)?;
+        let name = extract_symbol(&args[0]).map_err(DefError::from)?.clone();
         let form = if args.len() == 2 {
             let analyzed_value = self.analyze(&args[1])?;
             DefForm::Bound(name, Box::new(analyzed_value))
@@ -295,25 +338,25 @@ impl<'ana> Analyzer<'ana> {
             DefForm::Unbound(name)
         };
 
-        Ok(AnalyzedList::Def(form))
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Def(form)))
     }
 
     // (var name)
-    fn analyze_var<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_var(&self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         verify_arity(args, 1..2).map_err(VarError::from)?;
 
         let symbol = extract_symbol(&args[0])
-            .map(AnalyzedList::Var)
+            .map(|identifier| RuntimeValue::SpecialForm(SpecialForm::Var(identifier.clone())))
             .map_err(VarError::from)?;
 
         Ok(symbol)
     }
 
-    fn analyze_lexical_bindings<'a, E>(
-        &'a self,
-        bindings_form: &'a Vec<Form>,
+    fn analyze_lexical_bindings<E>(
+        &mut self,
+        bindings_form: &[Form],
         lexical_mode: LexicalMode,
-    ) -> AnalysisResult<LexicalBindings<'a>>
+    ) -> AnalysisResult<LexicalBindings>
     where
         E: From<LexicalError>,
         AnalysisError: From<E>,
@@ -325,14 +368,14 @@ impl<'ana> Analyzer<'ana> {
                     let analyzed_name =
                         extract_symbol_without_namespace(name).map_err(|e| E::from(e.into()))?;
                     let analyzed_value = self.analyze(value)?;
-                    bindings.push((analyzed_name, Box::new(analyzed_value)));
+                    bindings.push((analyzed_name.clone(), Box::new(analyzed_value)));
                 }
                 Ok(LexicalBindings::Bound(bindings))
             }
             LexicalMode::Unbound => {
                 let parameters = bindings_form
                     .iter()
-                    .map(extract_symbol_without_namespace)
+                    .map(|form| extract_symbol_without_namespace(form).map(|s| s.clone()))
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|e| E::from(e.into()))?;
                 Ok(LexicalBindings::Unbound(parameters))
@@ -340,29 +383,29 @@ impl<'ana> Analyzer<'ana> {
         }
     }
 
-    fn analyze_lexical_form<'a: 'ana, E>(
-        &'a mut self,
-        forms: &'a [Form],
+    fn analyze_lexical_form<E>(
+        &mut self,
+        forms: &[Form],
         lexical_mode: LexicalMode,
-    ) -> AnalysisResult<LexicalForm<'a>>
+    ) -> AnalysisResult<LexicalForm>
     where
         E: From<LexicalError>,
         AnalysisError: From<E>,
     {
         let (bindings_form, body) = extract_lexical_form(forms, lexical_mode).map_err(E::from)?;
 
-        let bindings = self.analyze_lexical_bindings::<E>(bindings_form, lexical_mode)?;
+        let bindings = self.analyze_lexical_bindings::<E>(&bindings_form, lexical_mode)?;
 
         let mut scope = HashSet::new();
-        match bindings {
+        match &bindings {
             LexicalBindings::Bound(bindings) => {
                 for (name, _) in bindings {
-                    scope.insert(&name.identifier);
+                    scope.insert(name.clone());
                 }
             }
             LexicalBindings::Unbound(bindings) => {
                 for name in bindings {
-                    scope.insert(&name.identifier);
+                    scope.insert(name.clone());
                 }
             }
         }
@@ -382,32 +425,34 @@ impl<'ana> Analyzer<'ana> {
     }
 
     // (let* [bindings*] body*)
-    fn analyze_let<'a: 'ana>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_let(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         let lexical_form = self.analyze_lexical_form::<LetError>(args, LexicalMode::Bound)?;
         let forward_declarations = lexical_form.resolve_forward_declarations();
-        Ok(AnalyzedList::Let(LetForm {
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Let(LetForm {
             lexical_form,
             forward_declarations,
-        }))
+        })))
     }
 
     // (loop* [bindings*] body*)
-    fn analyze_loop<'a: 'ana>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_loop(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         let lexical_form = self.analyze_lexical_form::<LoopError>(args, LexicalMode::Bound)?;
-        Ok(AnalyzedList::Loop(lexical_form))
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Loop(lexical_form)))
     }
 
     // (recur body*)
-    fn analyze_recur<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_recur(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         let body = args
             .iter()
             .map(|form| self.analyze(form))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(AnalyzedList::Recur(BodyForm { body }))
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Recur(BodyForm {
+            body,
+        })))
     }
 
     // (if predicate consequent alternate?)
-    fn analyze_if<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_if(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         verify_arity(args, 2..4).map_err(IfError::from)?;
 
         let predicate = Box::new(self.analyze(&args[0])?);
@@ -419,57 +464,25 @@ impl<'ana> Analyzer<'ana> {
             None
         };
 
-        Ok(AnalyzedList::If(IfForm {
+        Ok(RuntimeValue::SpecialForm(SpecialForm::If(IfForm {
             predicate,
             consequent,
             alternate,
-        }))
+        })))
     }
 
     // (do body*)
-    fn analyze_do<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_do(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         let body = args
             .iter()
             .map(|form| self.analyze(form))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(AnalyzedList::Do(BodyForm { body }))
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Do(BodyForm {
+            body,
+        })))
     }
 
-    fn analyze_fn_parameters<'a>(
-        &'a self,
-        parameters: Vec<&'a Symbol>,
-    ) -> AnalysisResult<(Vec<&'a Symbol>, Option<&'a Symbol>)> {
-        match parameters.len() {
-            0 => Ok((parameters, None)),
-            1 => {
-                if parameters[0] == VARIADIC_ARG {
-                    Err(AnalysisError::FnError(FnError::MissingVariadicArg))
-                } else {
-                    Ok((parameters, None))
-                }
-            }
-            _ => {
-                let variadic_position = parameters.len() - VARIADIC_PARAM_COUNT;
-                let (fixed_parameters, possibly_variadic) = parameters.split_at(variadic_position);
-                let valid_fixed_parameters = fixed_parameters
-                    .iter()
-                    .all(|&parameter| parameter != VARIADIC_ARG);
-                if !valid_fixed_parameters {
-                    return Err(AnalysisError::FnError(
-                        FnError::VariadicArgNotInTailPosition,
-                    ));
-                }
-
-                let variadic_parameter = analyze_tail_fn_parameters(possibly_variadic)?;
-                if variadic_parameter.is_some() {
-                    parameters.truncate(variadic_position);
-                }
-                Ok((parameters, variadic_parameter))
-            }
-        }
-    }
-
-    fn extract_fn_form<'a: 'ana>(&'a self, args: &'a [Form]) -> AnalysisResult<FnForm<'a>> {
+    fn extract_fn_form(&mut self, args: &[Form]) -> AnalysisResult<FnForm> {
         let LexicalForm { bindings, body } =
             self.analyze_lexical_form::<FnError>(args, LexicalMode::Unbound)?;
         let parameters = match bindings {
@@ -477,7 +490,7 @@ impl<'ana> Analyzer<'ana> {
             _ => unreachable!("lexical bindings have been validated to only have unbound symbols"),
         };
 
-        let (parameters, variadic) = self.analyze_fn_parameters(parameters)?;
+        let (parameters, variadic) = analyze_fn_parameters(parameters)?;
 
         Ok(FnForm {
             parameters,
@@ -487,69 +500,75 @@ impl<'ana> Analyzer<'ana> {
     }
 
     // (fn [parameters*] body*)
-    fn analyze_fn<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_fn(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         let fn_form = self.extract_fn_form(args)?;
 
-        Ok(AnalyzedList::Fn(fn_form))
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Fn(fn_form)))
     }
 
     // (quote form)
-    fn analyze_quote<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_quote(&self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         verify_arity(args, 1..2).map_err(QuoteError::from)?;
 
-        let form = self.analyze(&args[0])?;
-
-        Ok(AnalyzedList::Quote(Box::new(form)))
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Quote(Box::new(
+            RuntimeValue::from(&args[0]),
+        ))))
     }
 
     // (quasiquote form)
-    fn analyze_quasiquote<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_quasiquote(&self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         verify_arity(args, 1..2).map_err(QuasiquoteError::from)?;
 
-        let form = self.analyze(&args[0])?;
-
-        Ok(AnalyzedList::Quasiquote(Box::new(form)))
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Quasiquote(
+            Box::new(RuntimeValue::from(&args[0])),
+        )))
     }
 
+    // TODO: only try these in the context of `quasiquote`, like `try/catch`
     // // (unquote form)
-    // fn analyze_unquote<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    // fn analyze_unquote(& self, args: & [Form]) -> AnalysisResult<RuntimeValue> {
     //     verify_arity(args, 1..2).map_err(UnquoteError::from)?;
 
     //     let form = self.analyze(&args[0])?;
 
-    //     Ok(AnalyzedList::Unquote(Box::new(form)))
+    //     Ok(RuntimeValue::Unquote(Box::new(form)))
     // }
 
     // // (splice-unquote form)
-    // fn analyze_splice_unquote<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    // fn analyze_splice_unquote(& self, args: & [Form]) -> AnalysisResult<RuntimeValue> {
     //     verify_arity(args, 1..2).map_err(SpliceUnquoteError::from)?;
 
     //     let form = self.analyze(&args[0])?;
 
-    //     Ok(AnalyzedList::SpliceUnquote(Box::new(form)))
+    //     Ok(RuntimeValue::SpliceUnquote(Box::new(form)))
     // }
 
     // (defmacro! symbol fn*-form)
-    fn analyze_defmacro<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_defmacro(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         verify_arity(args, 2..3).map_err(DefmacroError::from)?;
 
         let name = extract_symbol(&args[0]).map_err(DefmacroError::from)?;
         let body = self.extract_fn_form(&args[1..])?;
 
-        Ok(AnalyzedList::Defmacro(name, body))
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Defmacro(
+            name.clone(),
+            body,
+        )))
     }
 
     // (macroexpand form)
-    fn analyze_macroexpand<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_macroexpand(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         verify_arity(args, 1..2).map_err(MacroexpandError::from)?;
 
         let form = self.analyze(&args[0])?;
 
-        Ok(AnalyzedList::Macroexpand(Box::new(form)))
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Macroexpand(
+            Box::new(form),
+        )))
     }
 
     // (try* form* catch*-form?)
-    fn analyze_try<'a>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_try(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         let try_form = match args.len() {
             0 => TryForm::default(),
             _ => {
@@ -558,13 +577,26 @@ impl<'ana> Analyzer<'ana> {
                     .iter()
                     .map(|form| self.analyze(form))
                     .collect::<Result<Vec<_>, _>>()?;
-                let catch = match self.analyze(last_form)? {
-                    AnalyzedForm::List(AnalyzedList::Catch(catch_form)) => Some(catch_form),
-                    form => {
-                        body.push(form);
-                        None
-                    }
+                let catch = match last_form {
+                    Form::List(form) => match form.split_first() {
+                        Some((first, rest)) => match first {
+                            Form::Atom(Atom::Symbol(Symbol {
+                                identifier,
+                                namespace: None,
+                            })) if identifier == CATCH_IDENTIFIER => {
+                                let catch = self.analyze_catch(rest)?;
+                                Some(catch)
+                            }
+                            _ => None,
+                        },
+                        None => None,
+                    },
+                    _ => None,
                 };
+                if catch.is_none() {
+                    let analyzed_form = self.analyze(last_form)?;
+                    body.push(analyzed_form);
+                }
 
                 TryForm {
                     body: BodyForm { body },
@@ -573,17 +605,17 @@ impl<'ana> Analyzer<'ana> {
             }
         };
 
-        Ok(AnalyzedList::Try(try_form))
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Try(try_form)))
     }
 
     // (catch* exc-symbol form*)
-    fn analyze_catch<'a: 'ana>(&'a self, args: &'a [Form]) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_catch(&mut self, args: &[Form]) -> AnalysisResult<CatchForm> {
         verify_arity(args, 1..MAX_ARGS_BOUND).map_err(CatchError::from)?;
 
         let exception_binding =
             extract_symbol_without_namespace(&args[0]).map_err(CatchError::from)?;
 
-        let mut scope = HashSet::from([&exception_binding.identifier]);
+        let scope = HashSet::from([exception_binding.clone()]);
         self.scopes.push(scope);
 
         let body = args[1..]
@@ -591,135 +623,123 @@ impl<'ana> Analyzer<'ana> {
             .map(|form| self.analyze(form))
             .collect::<Result<Vec<_>, _>>()?;
 
-        self.scopes.pop();
+        self.scopes.pop().unwrap();
 
-        Ok(AnalyzedList::Catch(CatchForm {
+        Ok(CatchForm {
             exception_binding,
             body: BodyForm { body },
-        }))
+        })
     }
 
-    fn analyze_list_with_possible_special_form<'a>(
-        &'a self,
-        operator: &'a Atom,
-        rest: &'a [Form],
-    ) -> AnalysisResult<AnalyzedList<'a>> {
+    fn analyze_list_with_possible_special_form(
+        &mut self,
+        operator: &Atom,
+        operands: &[Form],
+    ) -> AnalysisResult<RuntimeValue> {
         match operator {
-            Atom::Symbol(symbol) => match symbol {
-                Symbol {
+            Atom::Symbol(
+                symbol @ Symbol {
                     identifier: s,
                     namespace: None,
-                } => match s.as_str() {
-                    "def!" => self.analyze_def(rest),
-                    "var" => self.analyze_var(rest),
-                    "let*" => self.analyze_let(rest),
-                    "loop*" => self.analyze_loop(rest),
-                    "recur" => self.analyze_recur(rest),
-                    "if" => self.analyze_if(rest),
-                    "do" => self.analyze_do(rest),
-                    "fn*" => self.analyze_fn(rest),
-                    "quote" => self.analyze_quote(rest),
-                    "quasiquote" => self.analyze_quasiquote(rest),
-                    // "unquote" => self.analyze_unquote(rest),
-                    // "splice-unquote" => self.analyze_splice_unquote(rest),
-                    "defmacro!" => self.analyze_defmacro(rest),
-                    "macroexpand" => self.analyze_macroexpand(rest),
-                    "try*" => self.analyze_try(rest),
-                    "catch*" => self.analyze_catch(rest),
-                    _ => {
-                        let mut inner = vec![AnalyzedForm::Atom(operator)];
-                        inner.extend(
-                            rest.iter()
-                                .map(|f| self.analyze(f))
-                                .collect::<Result<Vec<_>, _>>()?,
-                        );
-                        Ok(AnalyzedList::Form(inner))
-                    }
                 },
-                _ => unreachable!("only call this function with one of the prior variants"),
+            ) => match s.as_str() {
+                "def!" => self.analyze_def(operands),
+                "var" => self.analyze_var(operands),
+                "let*" => self.analyze_let(operands),
+                "loop*" => self.analyze_loop(operands),
+                "recur" => self.analyze_recur(operands),
+                "if" => self.analyze_if(operands),
+                "do" => self.analyze_do(operands),
+                "fn*" => self.analyze_fn(operands),
+                "quote" => self.analyze_quote(operands),
+                "quasiquote" => self.analyze_quasiquote(operands),
+                "defmacro!" => self.analyze_defmacro(operands),
+                "macroexpand" => self.analyze_macroexpand(operands),
+                "try*" => self.analyze_try(operands),
+                _ => {
+                    let first = self.analyze_symbol(symbol)?;
+                    self.analyze_list_without_special_form(first, operands)
+                }
             },
             _ => unreachable!("only call this function with one of the prior variants"),
         }
     }
 
-    fn analyze_list<'a>(&'a self, forms: &'a [Form]) -> AnalysisResult<AnalyzedForm<'a>> {
-        let inner = match forms.split_first() {
+    fn analyze_list_without_special_form(
+        &mut self,
+        first: RuntimeValue,
+        rest: &[Form],
+    ) -> AnalysisResult<RuntimeValue> {
+        // TODO evaluate in order to reveal errors left-to-right
+        let mut inner = PersistentList::new();
+        for form in rest.iter().rev() {
+            let analyzed_form = self.analyze(form)?;
+            inner.push_front_mut(analyzed_form);
+        }
+        inner.push_front_mut(first);
+        Ok(RuntimeValue::List(inner))
+    }
+
+    fn analyze_list(&mut self, forms: &[Form]) -> AnalysisResult<RuntimeValue> {
+        match forms.split_first() {
             Some((first, rest)) => match first {
                 Form::Atom(
                     atom @ Atom::Symbol(Symbol {
                         namespace: None, ..
                     }),
-                ) => self.analyze_list_with_possible_special_form(atom, rest)?,
+                ) => self.analyze_list_with_possible_special_form(atom, rest),
                 first => {
-                    let mut inner = vec![self.analyze(first)?];
-                    inner.extend(
-                        rest.iter()
-                            .map(|f| self.analyze(f))
-                            .collect::<Result<Vec<_>, _>>()?,
-                    );
-                    AnalyzedList::Form(inner)
+                    let first = self.analyze(first)?;
+                    self.analyze_list_without_special_form(first, rest)
                 }
             },
-            None => AnalyzedList::Form(vec![]),
-        };
-        Ok(AnalyzedForm::List(inner))
-    }
-
-    fn identifier_is_in_lexical_scope(&self, identifier: &Identifier) -> bool {
-        for scope in self.scopes.iter().rev() {
-            if scope.contains(identifier) {
-                return true;
-            }
+            None => Ok(RuntimeValue::List(PersistentList::new())),
         }
-        false
     }
 
-    pub fn analyze_symbol<'a>(&'a self, symbol: &'a Symbol) -> AnalysisResult<AnalyzedForm<'a>> {
-        let form = match self.namespaces.resolve_symbol(symbol) {
-            Ok(var) => AnalyzedForm::Var(var),
-            Err(e @ NamespaceError::MissingIdentifier(..)) => {
-                let identifier = &symbol.identifier;
-                if self.identifier_is_in_lexical_scope(identifier) {
-                    AnalyzedForm::LexicalSymbol(identifier)
-                } else {
-                    return Err(SymbolError::from(e).into());
-                }
-            }
-            Err(err) => return Err(SymbolError::from(err).into()),
-        };
-        Ok(form)
+    pub fn analyze_symbol(&self, symbol: &Symbol) -> AnalysisResult<RuntimeValue> {
+        if symbol.namespace.is_none()
+            && identifier_is_in_lexical_scope(&self.scopes, &symbol.identifier)
+        {
+            return Ok(RuntimeValue::LexicalSymbol(symbol.identifier.clone()));
+        }
+
+        self.namespaces
+            .resolve_symbol(symbol)
+            .map(RuntimeValue::Var)
+            .map_err(|err| SymbolError::from(err).into())
     }
 
     // `analyze` performs static analysis of `form` to provide data optimized for evaluation
-    // 1. Syntax: can an `AnalyzedForm` be produced from a `Form`
-    // 2. Semantics: some `AnalyzedForm`s have some invariants that can be verified statically
+    // 1. Syntax: can an `RuntimeValue` be produced from a `Form`
+    // 2. Semantics: some `RuntimeValue`s have some invariants that can be verified statically
     //    like constraints on special forms
-    pub fn analyze<'a>(&'a self, form: &'a Form) -> AnalysisResult<AnalyzedForm<'a>> {
+    pub fn analyze(&mut self, form: &Form) -> AnalysisResult<RuntimeValue> {
         let analyzed_form = match form {
             Form::Atom(Atom::Symbol(s)) => self.analyze_symbol(s)?,
-            Form::Atom(a) => AnalyzedForm::Atom(a),
+            Form::Atom(a) => a.into(),
             Form::List(elems) => self.analyze_list(elems)?,
-            Form::Vector(elems) => AnalyzedForm::Vector(
+            Form::Vector(elems) => RuntimeValue::Vector(
                 elems
                     .iter()
                     .map(|f| self.analyze(f))
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect::<Result<_, _>>()?,
             ),
-            Form::Map(elems) => AnalyzedForm::Map(
+            Form::Map(elems) => RuntimeValue::Map(
                 elems
                     .iter()
-                    .map(|(x, y)| -> AnalysisResult<(AnalyzedForm, AnalyzedForm)> {
+                    .map(|(x, y)| -> AnalysisResult<(RuntimeValue, RuntimeValue)> {
                         let analyzed_x = self.analyze(x)?;
                         let analyzed_y = self.analyze(y)?;
                         Ok((analyzed_x, analyzed_y))
                     })
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect::<Result<_, _>>()?,
             ),
-            Form::Set(elems) => AnalyzedForm::Set(
+            Form::Set(elems) => RuntimeValue::Set(
                 elems
                     .iter()
                     .map(|f| self.analyze(f))
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect::<Result<_, _>>()?,
             ),
         };
         Ok(analyzed_form)

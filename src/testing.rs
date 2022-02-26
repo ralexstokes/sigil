@@ -1,10 +1,10 @@
 use crate::interpreter::Interpreter;
 use crate::reader::read;
-use crate::value::Value;
+use crate::value::RuntimeValue;
 
 const EXPECTED_STARTING_SCOPE_LEN: usize = 1;
 
-pub fn run_eval_test(test_cases: &[(&str, Value)]) {
+pub fn run_eval_test(test_cases: &[(&str, RuntimeValue)]) {
     let mut has_err = false;
     for (input, expected) in test_cases {
         let forms = match read(input) {
@@ -21,12 +21,12 @@ pub fn run_eval_test(test_cases: &[(&str, Value)]) {
         };
 
         let mut interpreter = Interpreter::default();
-        let mut final_result: Option<Value> = None;
+        let mut final_result: Option<RuntimeValue> = None;
         let original_scope_len = interpreter.scopes.len();
         assert!(original_scope_len == EXPECTED_STARTING_SCOPE_LEN);
-        assert!(interpreter.apply_stack.is_empty());
+        // assert!(interpreter.apply_stack.is_empty());
         for form in &forms {
-            match interpreter.evaluate(&form.into()) {
+            match interpreter.analyze_and_evaluate(form) {
                 Ok(result) => {
                     final_result = Some(result);
                 }
@@ -44,7 +44,7 @@ pub fn run_eval_test(test_cases: &[(&str, Value)]) {
             continue;
         }
         assert!(interpreter.scopes.len() == original_scope_len);
-        assert!(interpreter.apply_stack.is_empty());
+        // assert!(interpreter.apply_stack.is_empty());
         if let Some(final_result) = final_result {
             if final_result != *expected {
                 has_err = true;

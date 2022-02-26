@@ -4,21 +4,6 @@ use crate::writer::{
 };
 use std::fmt;
 
-pub(super) fn list_from(elems: Vec<Form>) -> Form {
-    Form::List(elems)
-}
-
-pub(super) fn vector_from(elems: Vec<Form>) -> Form {
-    Form::Vector(elems)
-}
-pub(super) fn map_from(elems: Vec<(Form, Form)>) -> Form {
-    Form::Map(elems)
-}
-
-pub(super) fn set_from(elems: Vec<Form>) -> Form {
-    Form::Set(elems)
-}
-
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Form {
     Atom(Atom),
@@ -28,7 +13,7 @@ pub enum Form {
     Set(Vec<Form>),
 }
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Atom {
     Nil,
     Bool(bool),
@@ -40,7 +25,7 @@ pub enum Atom {
 
 pub type Identifier = String;
 
-#[derive(Clone, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, PartialEq, Eq, Debug, Hash, PartialOrd, Ord)]
 pub struct Symbol {
     pub identifier: Identifier,
     pub namespace: Option<Identifier>,
@@ -65,7 +50,7 @@ impl fmt::Display for Form {
             },
             Form::List(elems) => write_list(f, elems),
             Form::Vector(elems) => write_vector(f, elems),
-            Form::Map(elems) => write_map(f, elems),
+            Form::Map(elems) => write_map(f, elems.iter().map(|(a, b)| (a, b))),
             Form::Set(elems) => write_set(f, elems),
         }
     }
