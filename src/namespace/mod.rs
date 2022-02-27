@@ -4,7 +4,7 @@ use crate::reader::{Identifier, Symbol};
 use crate::value::RuntimeValue;
 use std::collections::HashMap;
 use thiserror::Error;
-use var::new_var;
+pub use var::new_var;
 
 pub use var::Var;
 
@@ -140,8 +140,9 @@ impl Namespace {
             .or_insert_with(|| Var::Unbound);
 
         if let Some(value) = value {
-            *var = new_var(value)
+            var.update(value)
         }
+
         Ok(var.clone())
     }
 

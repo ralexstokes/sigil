@@ -27,3 +27,23 @@ impl Hash for Var {
         }
     }
 }
+
+impl Var {
+    pub fn value(&self) -> RuntimeValue {
+        match self {
+            Var::Bound(inner) => inner.borrow().clone(),
+            // NOTE: this is a bit of a pun, in lieu of having anything more descriptive to provide for now
+            Var::Unbound => RuntimeValue::Var(self.clone()),
+        }
+    }
+
+    pub fn update(&mut self, value: RuntimeValue) {
+        match self {
+            Var::Bound(inner) => {
+                let mut data = inner.borrow_mut();
+                *data = value;
+            }
+            Var::Unbound => *self = new_var(value),
+        }
+    }
+}

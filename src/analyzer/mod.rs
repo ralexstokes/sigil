@@ -8,8 +8,10 @@ use crate::{
     },
 };
 use itertools::Itertools;
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ops::Range;
+use std::rc::Rc;
 use thiserror::Error;
 
 // TODO: remove once we can express unbounded range
@@ -301,7 +303,11 @@ fn analyze_tail_fn_parameters(parameters: &[Identifier]) -> AnalysisResult<Optio
     }
 }
 
-type Scopes = Vec<HashSet<Identifier>>;
+type LexicalScope = HashSet<Identifier>;
+
+type GlobalScope = HashSet<Symbol>;
+
+type Scopes = Vec<LexicalScope>;
 
 fn identifier_is_in_lexical_scope(scopes: &Scopes, identifier: &Identifier) -> bool {
     for scope in scopes.iter().rev() {
@@ -313,17 +319,25 @@ fn identifier_is_in_lexical_scope(scopes: &Scopes, identifier: &Identifier) -> b
 }
 
 #[derive(Debug)]
-pub struct Analyzer<'n> {
-    namespaces: &'n NamespaceContext,
+pub struct Analyzer {
+    namespaces: Rc<RefCell<NamespaceContext>>,
     scopes: Scopes,
+    // track mutations to namespaces, e.g. via simulated `def!`
+    global_scope: GlobalScope,
 }
 
-impl<'n> Analyzer<'n> {
-    pub fn new(namespaces: &'n NamespaceContext) -> Self {
+impl Analyzer {
+    pub fn new(namespaces: Rc<RefCell<NamespaceContext>>) -> Self {
         Self {
             namespaces,
             scopes: vec![],
+            global_scope: GlobalScope::default(),
         }
+    }
+
+    pub fn reset(&mut self) {
+        debug_assert!(self.scopes.is_empty());
+        self.global_scope.clear();
     }
 
     // (def! name value?)
@@ -331,6 +345,10 @@ impl<'n> Analyzer<'n> {
         verify_arity(args, 1..3).map_err(DefError::from)?;
 
         let name = extract_symbol(&args[0]).map_err(DefError::from)?.clone();
+
+        // NOTE: insert before analyzing value in the event that it recursively captures `name`
+        self.global_scope.insert(name.clone());
+
         let form = if args.len() == 2 {
             let analyzed_value = self.analyze(&args[1])?;
             DefForm::Bound(name, Box::new(analyzed_value))
@@ -369,13 +387,21 @@ impl<'n> Analyzer<'n> {
                         extract_symbol_without_namespace(name).map_err(|e| E::from(e.into()))?;
                     let analyzed_value = self.analyze(value)?;
                     bindings.push((analyzed_name.clone(), Box::new(analyzed_value)));
+                    let current_scope = self.scopes.last_mut().unwrap();
+                    current_scope.insert(analyzed_name);
                 }
                 Ok(LexicalBindings::Bound(bindings))
             }
             LexicalMode::Unbound => {
                 let parameters = bindings_form
                     .iter()
-                    .map(|form| extract_symbol_without_namespace(form).map(|s| s.clone()))
+                    .map(|form| {
+                        extract_symbol_without_namespace(form).map(|s| {
+                            let current_scope = self.scopes.last_mut().unwrap();
+                            current_scope.insert(s.clone());
+                            s.clone()
+                        })
+                    })
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|e| E::from(e.into()))?;
                 Ok(LexicalBindings::Unbound(parameters))
@@ -394,22 +420,9 @@ impl<'n> Analyzer<'n> {
     {
         let (bindings_form, body) = extract_lexical_form(forms, lexical_mode).map_err(E::from)?;
 
-        let bindings = self.analyze_lexical_bindings::<E>(&bindings_form, lexical_mode)?;
+        self.scopes.push(LexicalScope::default());
 
-        let mut scope = HashSet::new();
-        match &bindings {
-            LexicalBindings::Bound(bindings) => {
-                for (name, _) in bindings {
-                    scope.insert(name.clone());
-                }
-            }
-            LexicalBindings::Unbound(bindings) => {
-                for name in bindings {
-                    scope.insert(name.clone());
-                }
-            }
-        }
-        self.scopes.push(scope);
+        let bindings = self.analyze_lexical_bindings::<E>(&bindings_form, lexical_mode)?;
 
         let body = body
             .iter()
@@ -428,8 +441,15 @@ impl<'n> Analyzer<'n> {
     fn analyze_let(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         let lexical_form = self.analyze_lexical_form::<LetError>(args, LexicalMode::Bound)?;
         let forward_declarations = lexical_form.resolve_forward_declarations();
+        let bindings = match lexical_form.bindings {
+            LexicalBindings::Bound(bindings) => bindings,
+            LexicalBindings::Unbound(..) => {
+                unreachable!("let form has been validated to only have bound bindings")
+            }
+        };
         Ok(RuntimeValue::SpecialForm(SpecialForm::Let(LetForm {
-            lexical_form,
+            bindings,
+            body: lexical_form.body,
             forward_declarations,
         })))
     }
@@ -437,7 +457,18 @@ impl<'n> Analyzer<'n> {
     // (loop* [bindings*] body*)
     fn analyze_loop(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         let lexical_form = self.analyze_lexical_form::<LoopError>(args, LexicalMode::Bound)?;
-        Ok(RuntimeValue::SpecialForm(SpecialForm::Loop(lexical_form)))
+        let forward_declarations = lexical_form.resolve_forward_declarations();
+        let bindings = match lexical_form.bindings {
+            LexicalBindings::Bound(bindings) => bindings,
+            LexicalBindings::Unbound(..) => {
+                unreachable!("loop form has been validated to only have bound bindings")
+            }
+        };
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Loop(LetForm {
+            bindings,
+            body: lexical_form.body,
+            forward_declarations,
+        })))
     }
 
     // (recur body*)
@@ -704,10 +735,25 @@ impl<'n> Analyzer<'n> {
             return Ok(RuntimeValue::LexicalSymbol(symbol.identifier.clone()));
         }
 
-        self.namespaces
+        let result = self
+            .namespaces
+            .borrow()
             .resolve_symbol(symbol)
-            .map(RuntimeValue::Var)
-            .map_err(|err| SymbolError::from(err).into())
+            .map(RuntimeValue::Var);
+
+        match result {
+            Ok(value) => Ok(value),
+            Err(err) => match err {
+                err @ NamespaceError::MissingIdentifier(..) => {
+                    if self.global_scope.contains(&symbol) {
+                        Ok(RuntimeValue::Symbol(symbol.clone()))
+                    } else {
+                        Err(SymbolError::from(err).into())
+                    }
+                }
+                _ => Err(SymbolError::from(err).into()),
+            },
+        }
     }
 
     // `analyze` performs static analysis of `form` to provide data optimized for evaluation

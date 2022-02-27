@@ -777,21 +777,10 @@ fn apply(interpreter: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResu
     }
     let (last, prefix) = args.split_last().expect("has enough elements");
     let (first, middle) = prefix.split_first().expect("has enough elements");
-    let fn_args = match last {
-        RuntimeValue::List(elems) => {
-            let mut fn_args = Vec::with_capacity(middle.len() + elems.len());
-            for elem in middle.iter().chain(elems.iter()) {
-                fn_args.push(elem.clone())
-            }
-            fn_args
-        }
-        RuntimeValue::Vector(elems) => {
-            let mut fn_args = Vec::with_capacity(middle.len() + elems.len());
-            for elem in middle.iter().chain(elems.iter()) {
-                fn_args.push(elem.clone())
-            }
-            fn_args
-        }
+    let mut fn_args = middle.iter().cloned().collect::<Vec<_>>();
+    match last {
+        RuntimeValue::List(elems) => fn_args.extend(elems.iter().cloned()),
+        RuntimeValue::Vector(elems) => fn_args.extend(elems.iter().cloned()),
         other => {
             return Err(EvaluationError::WrongType {
                 expected: "List, Vector",
@@ -800,15 +789,14 @@ fn apply(interpreter: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResu
         }
     };
     match first {
-        // TODO
-        // RuntimeValue::Fn(f) => interpreter.apply_fn_inner(f, &fn_args, fn_args.len()),
+        RuntimeValue::Fn(f) => interpreter.apply_fn(f, fn_args),
         // RuntimeValue::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
         //     interpreter.extend_from_captures(captures)?;
         //     let result = interpreter.apply_fn_inner(f, &fn_args, fn_args.len());
         //     interpreter.leave_scope();
         //     result
         // }
-        // RuntimeValue::Primitive(native_fn) => native_fn(interpreter, &fn_args),
+        RuntimeValue::Primitive(f) => f.apply(interpreter, &fn_args),
         other => Err(EvaluationError::WrongType {
             expected: "Fn, FnWithCaptures, Primitive",
             realized: other.clone(),
