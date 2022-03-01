@@ -2,7 +2,7 @@ use crate::collections::{PersistentList, PersistentMap, PersistentSet, Persisten
 use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter, InterpreterError};
 use crate::namespace::{Namespace, NamespaceDesc, DEFAULT_NAME};
 use crate::reader::{read, Identifier, Symbol};
-use crate::value::{exception, new_atom, NativeFn, RuntimeValue};
+use crate::value::{exception, AtomRef, NativeFn, RuntimeValue};
 use itertools::Itertools;
 use std::fmt::Write;
 use std::io::{BufRead, Write as IOWrite};
@@ -450,7 +450,7 @@ fn to_atom(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<Runti
             realized: args.len(),
         });
     }
-    Ok(new_atom(args[0].clone()))
+    Ok(RuntimeValue::Atom(AtomRef::new(args[0].clone())))
 }
 
 fn is_atom(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<RuntimeValue> {

@@ -5,16 +5,20 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct AtomImpl(Rc<RefCell<RuntimeValue>>);
+pub struct AtomRef(Rc<RefCell<RuntimeValue>>);
 
-impl Hash for AtomImpl {
+impl Hash for AtomRef {
     fn hash<H: Hasher>(&self, state: &mut H) {
         let inner = self.0.borrow();
         inner.hash(state);
     }
 }
 
-impl AtomImpl {
+impl AtomRef {
+    pub fn new(value: RuntimeValue) -> Self {
+        AtomRef(Rc::new(RefCell::new(value)))
+    }
+
     pub fn value(&self) -> Ref<'_, RuntimeValue> {
         self.0.borrow()
     }
@@ -24,8 +28,4 @@ impl AtomImpl {
         *inner = value.clone();
         value.clone()
     }
-}
-
-pub fn new_atom(data: RuntimeValue) -> RuntimeValue {
-    RuntimeValue::Atom(AtomImpl(Rc::new(RefCell::new(data))))
 }

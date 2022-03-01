@@ -1,21 +1,22 @@
 mod atom;
+mod var;
 
 use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter};
-use crate::namespace::Var;
 use crate::reader::{Atom, Form, Identifier, Symbol};
 use crate::writer::{
     unescape_string, write_bool, write_fn, write_identifer, write_keyword, write_list, write_map,
     write_nil, write_number, write_primitive, write_set, write_string, write_symbol, write_var,
     write_vector,
 };
-pub use atom::{new_atom, AtomImpl};
+pub use atom::AtomRef;
 use itertools::{sorted, Itertools};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
 use std::mem::discriminant;
+pub use var::Var;
 
 pub fn exception(msg: &str, data: RuntimeValue) -> ExceptionImpl {
     ExceptionImpl::User(UserException {
@@ -496,7 +497,7 @@ pub enum RuntimeValue {
     Primitive(Primitive),
     Exception(ExceptionImpl),
     // FnWithCaptures(FnWithCapturesImpl),
-    Atom(AtomImpl),
+    Atom(AtomRef),
     // Macro(FnImpl),
 }
 

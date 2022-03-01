@@ -1,11 +1,11 @@
 use crate::analyzer::{AnalysisError, Analyzer};
 use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::lang::core;
-use crate::namespace::{Context as NamespaceContext, NamespaceDesc, NamespaceError, Var};
+use crate::namespace::{Context as NamespaceContext, NamespaceDesc, NamespaceError};
 use crate::reader::{read, Form, Identifier, ReadError, Symbol};
 use crate::value::{
     exception_from_system_err, BodyForm, CatchForm, DefForm, ExceptionImpl, FnForm, IfForm,
-    LetForm, RuntimeValue, SpecialForm, TryForm,
+    LetForm, RuntimeValue, SpecialForm, TryForm, Var,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -831,12 +831,12 @@ impl Interpreter {
 mod test {
     use super::{EvaluationError, Interpreter};
     use crate::collections::{PersistentList, PersistentMap, PersistentVector};
-    use crate::namespace::new_var;
     use crate::reader::{self, Symbol};
     use crate::testing::run_eval_test;
     use crate::value::{
-        exception, new_atom,
+        exception,
         RuntimeValue::{self, *},
+        Var,
     };
 
     fn read_one_value(input: &str) -> RuntimeValue {
@@ -954,11 +954,11 @@ mod test {
     #[test]
     fn test_basic_def() {
         let test_cases = vec![
-            ("(def! a 3)", RuntimeValue::Var(new_var(Number(3)))),
+            ("(def! a 3)", RuntimeValue::Var(Var::new(Number(3)))),
             ("(def! a 3) (+ a 1)", Number(4)),
             ("(def! a (+ 1 7)) (+ a 1)", Number(9)),
-            ("(def! some-num 3)", RuntimeValue::Var(new_var(Number(3)))),
-            ("(def! SOME-NUM 4)", RuntimeValue::Var(new_var(Number(4)))),
+            ("(def! some-num 3)", RuntimeValue::Var(Var::new(Number(3)))),
+            ("(def! SOME-NUM 4)", RuntimeValue::Var(Var::new(Number(4)))),
         ];
         run_eval_test(&test_cases);
     }

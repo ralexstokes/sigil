@@ -1,12 +1,7 @@
-mod var;
-
 use crate::reader::{Identifier, Symbol};
-use crate::value::RuntimeValue;
+use crate::value::{RuntimeValue, Var};
 use std::collections::HashMap;
 use thiserror::Error;
-pub use var::new_var;
-
-pub use var::Var;
 
 pub const DEFAULT_NAME: &str = "core";
 

@@ -10,10 +10,6 @@ pub enum Var {
     Unbound,
 }
 
-pub fn new_var(value: RuntimeValue) -> Var {
-    Var::Bound(Rc::new(RefCell::new(value)))
-}
-
 impl Hash for Var {
     fn hash<H: Hasher>(&self, state: &mut H) {
         discriminant(self).hash(state);
@@ -29,6 +25,10 @@ impl Hash for Var {
 }
 
 impl Var {
+    pub fn new(value: RuntimeValue) -> Self {
+        Var::Bound(Rc::new(RefCell::new(value)))
+    }
+
     pub fn value(&self) -> RuntimeValue {
         match self {
             Var::Bound(inner) => inner.borrow().clone(),
@@ -43,7 +43,7 @@ impl Var {
                 let mut data = inner.borrow_mut();
                 *data = value;
             }
-            Var::Unbound => *self = new_var(value),
+            Var::Unbound => *self = Var::new(value),
         }
     }
 }

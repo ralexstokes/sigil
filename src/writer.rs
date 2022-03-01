@@ -1,5 +1,5 @@
-use crate::namespace::Var;
 use crate::reader::{Identifier, Symbol};
+use crate::value::Var;
 use itertools::join;
 use std::fmt::{self, Display, Write};
 use std::string::String as StdString;
