@@ -427,7 +427,11 @@ impl Analyzer {
         let body = body
             .iter()
             .map(|form| self.analyze(form))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| {
+                self.scopes.pop();
+                err
+            })?;
 
         self.scopes.pop();
 
@@ -652,9 +656,13 @@ impl Analyzer {
         let body = args[1..]
             .iter()
             .map(|form| self.analyze(form))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| {
+                self.scopes.pop();
+                err
+            })?;
 
-        self.scopes.pop().unwrap();
+        self.scopes.pop();
 
         Ok(CatchForm {
             exception_binding,

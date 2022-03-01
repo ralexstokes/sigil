@@ -2,7 +2,7 @@ use crate::collections::{PersistentList, PersistentMap, PersistentSet, Persisten
 use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter, InterpreterError};
 use crate::namespace::{Namespace, NamespaceDesc, DEFAULT_NAME};
 use crate::reader::{read, Identifier, Symbol};
-use crate::value::{exception, NativeFn, RuntimeValue};
+use crate::value::{exception, new_atom, NativeFn, RuntimeValue};
 use itertools::Itertools;
 use std::fmt::Write;
 use std::io::{BufRead, Write as IOWrite};
@@ -82,6 +82,7 @@ const BINDINGS: &[(&str, NativeFn)] = &[
     ("meta", to_meta),
     ("with-meta", with_meta),
     ("zero?", is_zero),
+    ("ns", set_ns),
 ];
 
 pub fn namespace() -> NamespaceDesc<'static> {
@@ -449,9 +450,7 @@ fn to_atom(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<Runti
             realized: args.len(),
         });
     }
-    // TODO
-    // Ok(atom_with_value(args[0].clone()))
-    Ok(RuntimeValue::Nil)
+    Ok(new_atom(args[0].clone()))
 }
 
 fn is_atom(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<RuntimeValue> {
@@ -462,8 +461,7 @@ fn is_atom(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<Runti
         });
     }
     match args[0] {
-        // TODO
-        // RuntimeValue::Atom(_) => Ok(RuntimeValue::Bool(true)),
+        RuntimeValue::Atom(_) => Ok(RuntimeValue::Bool(true)),
         _ => Ok(RuntimeValue::Bool(false)),
     }
 }
@@ -476,10 +474,8 @@ fn deref(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<Runtime
         });
     }
     match &args[0] {
-        // TODO
-        // RuntimeValue::Atom(inner) => Ok(atom_impl_into_inner(inner)),
-        // RuntimeValue::Var(var) => var_impl_into_inner(var)
-        //     .ok_or_else(|| EvaluationError::CannotDerefUnboundVar(RuntimeValue::Var(var.clone()))),
+        RuntimeValue::Atom(atom) => Ok(atom.value().clone()),
+        RuntimeValue::Var(var) => Ok(var.value()),
         other => Err(EvaluationError::WrongType {
             expected: "Atom, Var",
             realized: other.clone(),
@@ -495,12 +491,7 @@ fn reset_atom(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<Ru
         });
     }
     match &args[0] {
-        // TODO
-        // RuntimeValue::Atom(inner) => {
-        //     let value = args[1].clone();
-        //     *inner.borrow_mut() = value.clone();
-        //     Ok(value)
-        // }
+        RuntimeValue::Atom(atom) => Ok(atom.reset(&args[1])),
         other => Err(EvaluationError::WrongType {
             expected: "Atom",
             realized: other.clone(),
@@ -519,44 +510,37 @@ fn swap_atom(
         });
     }
     match &args[0] {
-        // TODO
-        // RuntimeValue::Atom(cell) => match &args[1] {
-        //     RuntimeValue::Fn(f) => {
-        //         let mut inner = cell.borrow_mut();
-        //         let original_value = inner.clone();
-        //         let mut fn_args = vec![original_value];
-        //         fn_args.extend_from_slice(&args[2..]);
-        //         let new_value = interpreter.apply_fn_inner(f, &fn_args, fn_args.len())?;
-        //         *inner = new_value.clone();
-        //         Ok(new_value)
-        //     }
-        //     RuntimeValue::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
-        //         interpreter.extend_from_captures(captures)?;
-        //         let mut inner = cell.borrow_mut();
-        //         let original_value = inner.clone();
-        //         let mut fn_args = vec![original_value];
-        //         fn_args.extend_from_slice(&args[2..]);
-        //         let new_value = interpreter.apply_fn_inner(f, &fn_args, fn_args.len());
-        //         interpreter.leave_scope();
+        RuntimeValue::Atom(atom) => match &args[1] {
+            RuntimeValue::Fn(f) => {
+                let mut fn_args = vec![atom.value().clone()];
+                fn_args.extend_from_slice(&args[2..]);
+                let new_value = interpreter.apply_fn(f, fn_args)?;
+                Ok(atom.reset(&new_value))
+            }
+            // RuntimeValue::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
+            //     interpreter.extend_from_captures(captures)?;
+            //     let mut inner = cell.borrow_mut();
+            //     let original_value = inner.clone();
+            //     let mut fn_args = vec![original_value];
+            //     fn_args.extend_from_slice(&args[2..]);
+            //     let new_value = interpreter.apply_fn_inner(f, &fn_args, fn_args.len());
+            //     interpreter.leave_scope();
 
-        //         let new_value = new_value?;
-        //         *inner = new_value.clone();
-        //         Ok(new_value)
-        //     }
-        //     RuntimeValue::Primitive(native_fn) => {
-        //         let mut inner = cell.borrow_mut();
-        //         let original_value = inner.clone();
-        //         let mut fn_args = vec![original_value];
-        //         fn_args.extend_from_slice(&args[2..]);
-        //         let new_value = native_fn(interpreter, &fn_args)?;
-        //         *inner = new_value.clone();
-        //         Ok(new_value)
-        //     }
-        //     other => Err(EvaluationError::WrongType {
-        //         expected: "Fn, FnWithCaptures, Primitive",
-        //         realized: other.clone(),
-        //     }),
-        // },
+            //     let new_value = new_value?;
+            //     *inner = new_value.clone();
+            //     Ok(new_value)
+            // }
+            RuntimeValue::Primitive(f) => {
+                let mut fn_args = vec![atom.value().clone()];
+                fn_args.extend_from_slice(&args[2..]);
+                let new_value = f.apply(interpreter, &fn_args)?;
+                Ok(atom.reset(&new_value))
+            }
+            other => Err(EvaluationError::WrongType {
+                expected: "Fn, FnWithCaptures, Primitive",
+                realized: other.clone(),
+            }),
+        },
         other => Err(EvaluationError::WrongType {
             expected: "Atom",
             realized: other.clone(),
@@ -1350,6 +1334,28 @@ fn is_zero(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<Runti
         RuntimeValue::Number(n) => Ok(RuntimeValue::Bool(*n == 0)),
         other => Err(EvaluationError::WrongType {
             expected: "Number",
+            realized: other.clone(),
+        }),
+    }
+}
+
+fn set_ns(interpreter: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<RuntimeValue> {
+    if args.len() != 1 {
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
+    }
+    match &args[0] {
+        RuntimeValue::Symbol(Symbol {
+            identifier,
+            namespace: None,
+        }) => {
+            interpreter.set_current_namespace(identifier);
+            Ok(RuntimeValue::Nil)
+        }
+        other => Err(EvaluationError::WrongType {
+            expected: "Symbol without namespace",
             realized: other.clone(),
         }),
     }

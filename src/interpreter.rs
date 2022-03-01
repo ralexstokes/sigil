@@ -305,10 +305,14 @@ impl Interpreter {
             .intern_namespace(&name, namespace);
 
         if let Some(source) = source {
-            // self.interpret(source)?;
+            self.interpret(source)?;
         }
 
         Ok(())
+    }
+
+    pub fn set_current_namespace(&mut self, name: &Identifier) {
+        self.namespaces.borrow_mut().set_current_namespace(name);
     }
 
     /// Store `args` in the var referenced by `COMMAND_LINE_ARGS_SYMBOL`.
@@ -781,14 +785,15 @@ impl Interpreter {
                 // TODO?
                 form.clone()
             }
-            RuntimeValue::Primitive(f) => {
+            RuntimeValue::Primitive(..) => {
                 // TODO?
                 form.clone()
             }
-            RuntimeValue::Exception(exc) => {
+            RuntimeValue::Exception(..) => {
                 // TODO?
                 form.clone()
             }
+            RuntimeValue::Atom(..) => form.clone(),
         };
         Ok(value)
     }
@@ -824,12 +829,13 @@ impl Interpreter {
 
 #[cfg(test)]
 mod test {
+    use super::{EvaluationError, Interpreter};
     use crate::collections::{PersistentList, PersistentMap, PersistentVector};
     use crate::namespace::new_var;
     use crate::reader::{self, Symbol};
     use crate::testing::run_eval_test;
     use crate::value::{
-        exception,
+        exception, new_atom,
         RuntimeValue::{self, *},
     };
 
@@ -841,6 +847,10 @@ mod test {
             .expect("some");
 
         (&form).into()
+    }
+
+    fn exception_value(msg: &str, data: &RuntimeValue) -> RuntimeValue {
+        RuntimeValue::Exception(exception(msg, data.clone()))
     }
 
     #[test]
@@ -1155,60 +1165,59 @@ mod test {
 
     #[test]
     fn test_basic_atoms() {
-        unimplemented!();
-        // let test_cases = vec![
-        //     ("(atom 5)", atom_with_value(Number(5))),
-        //     ("(atom? (atom 5))", Bool(true)),
-        //     ("(atom? nil)", Bool(false)),
-        //     ("(atom? 1)", Bool(false)),
-        //     ("(def! a (atom 5)) (deref a)", Number(5)),
-        //     ("(def! a (atom 5)) @a", Number(5)),
-        //     ("(def! a (atom (fn* [a] (+ a 1)))) (@a 4)", Number(5)),
-        //     ("(def! a (atom 5)) (reset! a 10)", Number(10)),
-        //     ("(def! a (atom 5)) (reset! a 10) @a", Number(10)),
-        //     (
-        //         "(def! a (atom 5)) (def! inc (fn* [x] (+ x 1))) (swap! a inc)",
-        //         Number(6),
-        //     ),
-        //     ("(def! a (atom 5)) (swap! a + 1 2 3 4 5)", Number(20)),
-        //     (
-        //         "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (deref a)",
-        //         Number(20),
-        //     ),
-        //     (
-        //         "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (reset! a 10)",
-        //         Number(10),
-        //     ),
-        //     (
-        //         "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (reset! a 10) (deref a)",
-        //         Number(10),
-        //     ),
-        //     (
-        //         "(def! a (atom 7)) (def! f (fn* [] (swap! a inc))) (f) (f)",
-        //         Number(9),
-        //     ),
-        //     (
-        //         "(def! g (let* [a (atom 0)] (fn* [] (swap! a inc)))) (def! a (atom 1)) (g) (g) (g)",
-        //         Number(3),
-        //     ),
-        //     (
-        //         "(def! e (atom {:+ +})) (swap! e assoc :- -) ((get @e :+) 7 8)",
-        //         Number(15),
-        //     ),
-        //     (
-        //         "(def! e (atom {:+ +})) (swap! e assoc :- -) ((get @e :-) 11 8)",
-        //         Number(3),
-        //     ),
-        //     (
-        //         "(def! e (atom {:+ +})) (swap! e assoc :- -) (swap! e assoc :foo ()) (get @e :foo)",
-        //         list_with_values(vec![]),
-        //     ),
-        //     (
-        //         "(def! e (atom {:+ +})) (swap! e assoc :- -) (swap! e assoc :bar '(1 2 3)) (get @e :bar)",
-        //         list_with_values(vec![Number(1), Number(2), Number(3)]),
-        //     ),
-        // ];
-        // run_eval_test(&test_cases);
+        let test_cases = vec![
+            // ("(atom 5)", new_atom(Number(5))),
+            // ("(atom? (atom 5))", Bool(true)),
+            // ("(atom? nil)", Bool(false)),
+            // ("(atom? 1)", Bool(false)),
+            // ("(def! a (atom 5)) (deref a)", Number(5)),
+            // ("(def! a (atom 5)) @a", Number(5)),
+            // ("(def! a (atom (fn* [a] (+ a 1)))) (@a 4)", Number(5)),
+            // ("(def! a (atom 5)) (reset! a 10)", Number(10)),
+            // ("(def! a (atom 5)) (reset! a 10) @a", Number(10)),
+            // (
+            //     "(def! a (atom 5)) (def! inc (fn* [x] (+ x 1))) (swap! a inc)",
+            //     Number(6),
+            // ),
+            // ("(def! a (atom 5)) (swap! a + 1 2 3 4 5)", Number(20)),
+            // (
+            //     "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (deref a)",
+            //     Number(20),
+            // ),
+            // (
+            //     "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (reset! a 10)",
+            //     Number(10),
+            // ),
+            // (
+            //     "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (reset! a 10) (deref a)",
+            //     Number(10),
+            // ),
+            (
+                "(def! a (atom 7)) (def! f (fn* [] (swap! a inc))) (f) (f)",
+                Number(9),
+            ),
+            // (
+            //     "(def! g (let* [a (atom 0)] (fn* [] (swap! a inc)))) (def! a (atom 1)) (g) (g) (g)",
+            //     Number(3),
+            // ),
+            // (
+            //     "(def! e (atom {:+ +})) (swap! e assoc :- -) ((get @e :+) 7 8)",
+            //     Number(15),
+            // ),
+            // (
+            //     "(def! e (atom {:+ +})) (swap! e assoc :- -) ((get @e :-) 11 8)",
+            //     Number(3),
+            // ),
+            // (
+            //     "(def! e (atom {:+ +})) (swap! e assoc :- -) (swap! e assoc :foo ()) (get @e :foo)",
+            //     RuntimeValue::List(PersistentList::new()),
+            // ),
+            // (
+            //     "(def! e (atom {:+ +})) (swap! e assoc :- -) (swap! e assoc :bar '(1 2 3)) (get @e :bar)",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![Number(1), Number(2), Number(3)])),
+            // ),
+        ];
+        run_eval_test(&test_cases);
     }
 
     #[test]
@@ -1506,10 +1515,6 @@ mod test {
 
     #[test]
     fn test_basic_try_catch() {
-        fn exception_value(msg: &str, data: &RuntimeValue) -> RuntimeValue {
-            RuntimeValue::Exception(exception(msg, data.clone()))
-        }
-
         let exc = exception_value(
             "test",
             &RuntimeValue::Map(PersistentMap::from_iter(vec![(
@@ -1521,14 +1526,16 @@ mod test {
             )])),
         );
         let test_cases = vec![
-            // NOTE: these are errors from uncaught exceptions now...
-            // TODO: map to evaluation error test cases
-            // let basic_exc = exception_value("", &String("test".to_string()));
-            // ( "(throw \"test\")", basic_exc),
-            // ( "(throw {:msg :foo})", exception_value("", &map_with_values(vec![(Keyword("msg".to_string(), None), Keyword("foo".to_string(), None))]))),
             (
                 "(try* (throw '(1 2 3)) (catch* e e))",
-                exception_value("", &RuntimeValue::List(PersistentList::from_iter(vec![Number(1), Number(2), Number(3)]))),
+                exception_value(
+                    "",
+                    &RuntimeValue::List(PersistentList::from_iter(vec![
+                        Number(1),
+                        Number(2),
+                        Number(3),
+                    ])),
+                ),
             ),
             ("(try* 22)", Number(22)),
             ("(try* (prn 222) 22)", Number(22)),
@@ -1611,18 +1618,6 @@ mod test {
                 Number(2222),
             ),
             (
-                "(((fn* [a] (fn* [] (try* (throw (ex-info \"\" {:foo 2})) (catch* e (prn e) a)))) 2222))",
-                Number(2222),
-            ),
-            (
-                "(try* abc (catch* exc (prn exc) 2222))",
-                Number(2222),
-            ),
-            (
-                "(try* (abc 1 2) (catch* exc (prn exc)))",
-                Nil,
-            ),
-            (
                 "(try* (nth () 1) (catch* exc (prn exc)))",
                 Nil,
             ),
@@ -1632,6 +1627,78 @@ mod test {
             ),
         ];
         run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_advanced_try_catch() {
+        let test_cases = vec![
+            // NOTE: test fn captures
+            (
+                "(((fn* [a] (fn* [] (try* (throw (ex-info \"\" {:foo 2})) (catch* e (prn e) a)))) 2222))",
+                Number(2222),
+            ),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_ensure_exceptions_raise_err() {
+        let basic_exc = exception_value("", &String("test".to_string()));
+        let test_cases = vec![
+            ("(throw \"test\")", basic_exc),
+            (
+                "(throw {:msg :foo})",
+                exception_value(
+                    "",
+                    &RuntimeValue::Map(PersistentMap::from_iter(vec![(
+                        Keyword(Symbol {
+                            identifier: "msg".to_string(),
+                            namespace: None,
+                        }),
+                        Keyword(Symbol {
+                            identifier: "foo".to_string(),
+                            namespace: None,
+                        }),
+                    )])),
+                ),
+            ),
+        ];
+
+        for (source, expected_result) in test_cases {
+            let mut interpreter = Interpreter::default();
+            match interpreter.interpret(source) {
+                Ok(value) => panic!("expected error, but got {value:#?}"),
+                Err(err) => match err {
+                    EvaluationError::Exception(exc) => {
+                        assert_eq!(expected_result, RuntimeValue::Exception(exc))
+                    }
+                    other => panic!("got an unexpected error {other}"),
+                },
+            }
+        }
+    }
+
+    #[test]
+    fn test_ensure_analysis_failures_are_not_captured_as_exceptions() {
+        let test_cases = vec![
+            "(try* abc (catch* exc (prn exc) 2222))",
+            "(try* (abc 1 2) (catch* exc (prn exc)))",
+        ];
+
+        for source in test_cases {
+            let mut interpreter = Interpreter::default();
+            match interpreter.interpret(source) {
+                Ok(value) => panic!("expected error, but got {value:#?}"),
+                Err(err) => match err {
+                    EvaluationError::Exception(..) => {
+                        panic!("got an exception {err:#?} when we expect an error")
+                    }
+                    _ => {
+                        // TODO match expected error...
+                    }
+                },
+            }
+        }
     }
 
     #[test]

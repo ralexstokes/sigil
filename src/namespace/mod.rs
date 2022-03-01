@@ -43,6 +43,11 @@ impl Context {
         &self.namespaces[self.current_namespace]
     }
 
+    pub fn set_current_namespace(&mut self, name: &Identifier) {
+        let index = self.create_if_missing(name);
+        self.current_namespace = index;
+    }
+
     pub fn current_namespace_mut(&mut self) -> &mut Namespace {
         &mut self.namespaces[self.current_namespace]
     }

@@ -1,3 +1,5 @@
+mod atom;
+
 use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter};
 use crate::namespace::Var;
@@ -7,6 +9,7 @@ use crate::writer::{
     write_nil, write_number, write_primitive, write_set, write_string, write_symbol, write_var,
     write_vector,
 };
+pub use atom::{new_atom, AtomImpl};
 use itertools::{sorted, Itertools};
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -157,8 +160,6 @@ impl Primitive {
 //         *self.data.borrow_mut() = Some(value);
 //     }
 // }
-
-// type AtomImpl = Rc<RefCell<RuntimeValue>>;
 
 #[derive(Clone, Debug)]
 pub struct UserException {
@@ -495,7 +496,7 @@ pub enum RuntimeValue {
     Primitive(Primitive),
     Exception(ExceptionImpl),
     // FnWithCaptures(FnWithCapturesImpl),
-    // Atom(AtomImpl),
+    Atom(AtomImpl),
     // Macro(FnImpl),
 }
 
@@ -522,7 +523,7 @@ impl fmt::Display for RuntimeValue {
             // FnWithCaptures(..) => write!(f, "<fn* +captures>",),
             RuntimeValue::Fn(..) => write_fn(f),
             RuntimeValue::Primitive(..) => write_primitive(f),
-            // Atom(v) => write!(f, "(atom {})", *v.borrow()),
+            RuntimeValue::Atom(v) => write!(f, "(atom {})", v.value()),
             // Macro(_) => write!(f, "<macro>"),
             RuntimeValue::Exception(exception) => {
                 write!(f, "{}", exception)
