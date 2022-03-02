@@ -3,11 +3,11 @@ mod var;
 
 use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter};
-use crate::reader::{Atom, Form, Identifier, Symbol};
+use crate::reader::{Atom, Identifier, Symbol};
 use crate::writer::{
-    unescape_string, write_bool, write_fn, write_identifer, write_keyword, write_list, write_map,
-    write_nil, write_number, write_primitive, write_set, write_string, write_symbol, write_var,
-    write_vector,
+    unescape_string, write_bool, write_fn, write_identifer, write_keyword, write_list, write_macro,
+    write_map, write_nil, write_number, write_primitive, write_set, write_special_form,
+    write_string, write_symbol, write_var, write_vector,
 };
 pub use atom::AtomRef;
 use itertools::{sorted, Itertools};
@@ -90,15 +90,6 @@ impl Primitive {
         self.0(interpreter, args)
     }
 }
-
-// #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-// pub struct FnImpl {
-//     pub body: PersistentList<RuntimeValue>,
-//     pub arity: usize,
-//     // allow for nested fns
-//     pub level: usize,
-//     pub variadic: bool,
-// }
 
 // #[derive(Debug, Clone, Eq)]
 // pub struct FnWithCapturesImpl {
@@ -307,10 +298,10 @@ pub enum SpecialForm {
     Quote(Box<RuntimeValue>),
     // (quasiquote form)
     Quasiquote(Box<RuntimeValue>),
-    // // (unquote form)
-    // Unquote(Box<RuntimeValue>),
-    // // (splice-unquote form)
-    // SpliceUnquote(Box<RuntimeValue>),
+    // (unquote form)
+    Unquote(Box<RuntimeValue>),
+    // (splice-unquote form)
+    SpliceUnquote(Box<RuntimeValue>),
     // (defmacro! symbol fn*-form)
     Defmacro(Symbol, FnForm),
     // (macroexpand macro-form)
@@ -437,6 +428,13 @@ impl FnForm {
     }
 }
 
+// #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+// pub enum QuasiquoteForm {
+//     Form(Box<RuntimeValue>),
+//     Unquote(Box<RuntimeValue>),
+//     SpliceUnquote(Box<RuntimeValue>),
+// }
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct TryForm {
     pub body: BodyForm,
@@ -462,22 +460,6 @@ impl From<&Atom> for RuntimeValue {
     }
 }
 
-// this `From` impl provides for a translation from a `Form` to an `RuntimeValue`
-// without doing any actual analysis, e.g. when producing a `quote` form.
-impl From<&Form> for RuntimeValue {
-    fn from(form: &Form) -> Self {
-        match form {
-            Form::Atom(atom) => atom.into(),
-            Form::List(coll) => RuntimeValue::List(coll.iter().map(From::from).collect()),
-            Form::Vector(coll) => RuntimeValue::Vector(coll.iter().map(From::from).collect()),
-            Form::Map(coll) => {
-                RuntimeValue::Map(coll.iter().map(|(k, v)| (k.into(), v.into())).collect())
-            }
-            Form::Set(coll) => RuntimeValue::Set(coll.iter().map(From::from).collect()),
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RuntimeValue {
     Nil,
@@ -498,7 +480,7 @@ pub enum RuntimeValue {
     Exception(ExceptionImpl),
     // FnWithCaptures(FnWithCapturesImpl),
     Atom(AtomRef),
-    // Macro(FnImpl),
+    Macro(FnForm),
 }
 
 impl fmt::Display for RuntimeValue {
@@ -516,19 +498,16 @@ impl fmt::Display for RuntimeValue {
             RuntimeValue::Vector(elems) => write_vector(f, elems),
             RuntimeValue::Map(elems) => write_map(f, elems),
             RuntimeValue::Set(elems) => write_set(f, elems),
-            RuntimeValue::SpecialForm(_) => {
-                // TODO
-                //  write_fn(f),
-                write_nil(f)
-            }
+            RuntimeValue::SpecialForm(form) => write_special_form(f, form),
             // FnWithCaptures(..) => write!(f, "<fn* +captures>",),
             RuntimeValue::Fn(..) => write_fn(f),
             RuntimeValue::Primitive(..) => write_primitive(f),
-            RuntimeValue::Atom(v) => write!(f, "(atom {})", v.value()),
             // Macro(_) => write!(f, "<macro>"),
             RuntimeValue::Exception(exception) => {
                 write!(f, "{}", exception)
             }
+            RuntimeValue::Atom(v) => write!(f, "(atom {})", v.value()),
+            RuntimeValue::Macro(..) => write_macro(f),
         }
     }
 }

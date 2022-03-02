@@ -1,4 +1,4 @@
-(ns 'core)
+;; (ns 'core)
 
 ;; (defmacro! defmacro
 ;;   (fn* [macro-name macro-args & body]
@@ -20,7 +20,7 @@
 (def! inc (fn* [x] (+ x 1)))
 ;; (defn inc [x]
 ;;   (+ x 1))
-(def! decc (fn* [x] (- x 1)))
+(def! dec (fn* [x] (- x 1)))
 ;; (defn dec [x]
 ;;   (- x 1))
 

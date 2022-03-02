@@ -110,17 +110,28 @@ pub enum QuoteError {
 #[error("{0}")]
 pub enum QuasiquoteError {
     Arity(#[from] ArityError),
+    UnquoteError(#[from] UnquoteError),
+    SpliceUnquoteError(#[from] SpliceUnquoteError),
+}
+
+#[derive(Debug, Clone, Error)]
+#[error("{0}")]
+pub enum QuotingError {
+    #[error("form called outside a `quasiquote` context")]
+    OutsideQuotedContext,
 }
 
 #[derive(Debug, Clone, Error)]
 #[error("{0}")]
 pub enum UnquoteError {
+    Quoting(#[from] QuotingError),
     Arity(#[from] ArityError),
 }
 
 #[derive(Debug, Clone, Error)]
 #[error("{0}")]
 pub enum SpliceUnquoteError {
+    Quoting(#[from] QuotingError),
     Arity(#[from] ArityError),
 }
 
@@ -303,6 +314,15 @@ fn analyze_tail_fn_parameters(parameters: &[Identifier]) -> AnalysisResult<Optio
     }
 }
 
+fn verify_quasiquoted_context(contexts: &[Context]) -> Result<(), QuotingError> {
+    for context in contexts.iter().rev() {
+        if matches!(context, Context::Quasiquote) {
+            return Ok(());
+        }
+    }
+    Err(QuotingError::OutsideQuotedContext)
+}
+
 type LexicalScope = HashSet<Identifier>;
 
 type GlobalScope = HashSet<Symbol>;
@@ -319,11 +339,19 @@ fn identifier_is_in_lexical_scope(scopes: &Scopes, identifier: &Identifier) -> b
 }
 
 #[derive(Debug)]
+enum Context {
+    Default,
+    Quote,
+    Quasiquote,
+}
+
+#[derive(Debug)]
 pub struct Analyzer {
     namespaces: Rc<RefCell<NamespaceContext>>,
     scopes: Scopes,
     // track mutations to namespaces, e.g. via simulated `def!`
     global_scope: GlobalScope,
+    contexts: Vec<Context>,
 }
 
 impl Analyzer {
@@ -332,11 +360,13 @@ impl Analyzer {
             namespaces,
             scopes: vec![],
             global_scope: GlobalScope::default(),
+            contexts: vec![Context::Default],
         }
     }
 
     pub fn reset(&mut self) {
         debug_assert!(self.scopes.is_empty());
+        debug_assert!(self.contexts.len() == 1);
         self.global_scope.clear();
     }
 
@@ -344,7 +374,7 @@ impl Analyzer {
     fn analyze_def(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         verify_arity(args, 1..3).map_err(DefError::from)?;
 
-        let name = extract_symbol(&args[0]).map_err(DefError::from)?.clone();
+        let name = extract_symbol(&args[0]).map_err(DefError::from)?;
 
         // NOTE: insert before analyzing value in the event that it recursively captures `name`
         self.global_scope.insert(name.clone());
@@ -364,7 +394,7 @@ impl Analyzer {
         verify_arity(args, 1..2).map_err(VarError::from)?;
 
         let symbol = extract_symbol(&args[0])
-            .map(|identifier| RuntimeValue::SpecialForm(SpecialForm::Var(identifier.clone())))
+            .map(|identifier| RuntimeValue::SpecialForm(SpecialForm::Var(identifier)))
             .map_err(VarError::from)?;
 
         Ok(symbol)
@@ -379,6 +409,7 @@ impl Analyzer {
         E: From<LexicalError>,
         AnalysisError: From<E>,
     {
+        // TODO make sure names are not special forms...
         match lexical_mode {
             LexicalMode::Bound => {
                 let mut bindings = vec![];
@@ -534,7 +565,7 @@ impl Analyzer {
         })
     }
 
-    // (fn [parameters*] body*)
+    // (fn* [parameters*] body*)
     fn analyze_fn(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         let fn_form = self.extract_fn_form(args)?;
 
@@ -542,53 +573,78 @@ impl Analyzer {
     }
 
     // (quote form)
-    fn analyze_quote(&self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
+    fn analyze_quote(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         verify_arity(args, 1..2).map_err(QuoteError::from)?;
 
+        self.contexts.push(Context::Quote);
+
+        let analyzed_form = self.analyze(&args[0])?;
+
+        self.contexts.pop();
+
         Ok(RuntimeValue::SpecialForm(SpecialForm::Quote(Box::new(
-            RuntimeValue::from(&args[0]),
+            analyzed_form,
         ))))
     }
 
     // (quasiquote form)
-    fn analyze_quasiquote(&self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
+    fn analyze_quasiquote(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         verify_arity(args, 1..2).map_err(QuasiquoteError::from)?;
 
+        self.contexts.push(Context::Quasiquote);
+
+        let analyzed_form = self.analyze(&args[0])?;
+
+        self.contexts.pop();
+
         Ok(RuntimeValue::SpecialForm(SpecialForm::Quasiquote(
-            Box::new(RuntimeValue::from(&args[0])),
+            Box::new(analyzed_form),
         )))
     }
 
-    // TODO: only try these in the context of `quasiquote`, like `try/catch`
-    // // (unquote form)
-    // fn analyze_unquote(& self, args: & [Form]) -> AnalysisResult<RuntimeValue> {
-    //     verify_arity(args, 1..2).map_err(UnquoteError::from)?;
+    // (unquote form)
+    fn analyze_unquote(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
+        verify_quasiquoted_context(&self.contexts).map_err(UnquoteError::from)?;
 
-    //     let form = self.analyze(&args[0])?;
+        verify_arity(args, 1..2).map_err(UnquoteError::from)?;
 
-    //     Ok(RuntimeValue::Unquote(Box::new(form)))
-    // }
+        let form = self.analyze(&args[0])?;
 
-    // // (splice-unquote form)
-    // fn analyze_splice_unquote(& self, args: & [Form]) -> AnalysisResult<RuntimeValue> {
-    //     verify_arity(args, 1..2).map_err(SpliceUnquoteError::from)?;
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Unquote(Box::new(
+            form,
+        ))))
+    }
 
-    //     let form = self.analyze(&args[0])?;
+    // (splice-unquote form)
+    fn analyze_splice_unquote(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
+        verify_quasiquoted_context(&self.contexts).map_err(SpliceUnquoteError::from)?;
 
-    //     Ok(RuntimeValue::SpliceUnquote(Box::new(form)))
-    // }
+        verify_arity(args, 1..2).map_err(SpliceUnquoteError::from)?;
+
+        let form = self.analyze(&args[0])?;
+
+        Ok(RuntimeValue::SpecialForm(SpecialForm::SpliceUnquote(
+            Box::new(form),
+        )))
+    }
 
     // (defmacro! symbol fn*-form)
     fn analyze_defmacro(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         verify_arity(args, 2..3).map_err(DefmacroError::from)?;
 
         let name = extract_symbol(&args[0]).map_err(DefmacroError::from)?;
-        let body = self.extract_fn_form(&args[1..])?;
+        let body = match self.analyze(&args[1])? {
+            RuntimeValue::SpecialForm(SpecialForm::Fn(fn_form)) => fn_form,
+            _ => {
+                return Err(DefmacroError::Type(TypeError {
+                    expected: "fn* form".to_string(),
+                    provided: args[1].clone(),
+                })
+                .into());
+            }
+        };
 
-        Ok(RuntimeValue::SpecialForm(SpecialForm::Defmacro(
-            name.clone(),
-            body,
-        )))
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Defmacro(name, body)))
     }
 
     // (macroexpand form)
@@ -692,6 +748,8 @@ impl Analyzer {
                 "fn*" => self.analyze_fn(operands),
                 "quote" => self.analyze_quote(operands),
                 "quasiquote" => self.analyze_quasiquote(operands),
+                "unquote" => self.analyze_unquote(operands),
+                "splice-unquote" => self.analyze_splice_unquote(operands),
                 "defmacro!" => self.analyze_defmacro(operands),
                 "macroexpand" => self.analyze_macroexpand(operands),
                 "try*" => self.analyze_try(operands),
@@ -736,11 +794,20 @@ impl Analyzer {
         }
     }
 
+    fn should_not_resolve_symbols(&self) -> bool {
+        let current_context = self.contexts.last().expect("at least one global context");
+        matches!(current_context, Context::Quote | Context::Quasiquote)
+    }
+
     pub fn analyze_symbol(&self, symbol: &Symbol) -> AnalysisResult<RuntimeValue> {
         if symbol.namespace.is_none()
             && identifier_is_in_lexical_scope(&self.scopes, &symbol.identifier)
         {
             return Ok(RuntimeValue::LexicalSymbol(symbol.identifier.clone()));
+        }
+
+        if self.should_not_resolve_symbols() {
+            return Ok(RuntimeValue::Symbol(symbol.clone()));
         }
 
         let result = self

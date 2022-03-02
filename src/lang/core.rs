@@ -589,6 +589,22 @@ fn concat(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<Runtim
     Ok(RuntimeValue::List(PersistentList::from_iter(elems)))
 }
 
+pub(crate) fn to_vec(elem: &RuntimeValue) -> EvaluationResult<RuntimeValue> {
+    match elem {
+        RuntimeValue::List(elems) => Ok(RuntimeValue::Vector(PersistentVector::from_iter(
+            elems.iter().cloned(),
+        ))),
+        RuntimeValue::Vector(elems) => Ok(RuntimeValue::Vector(PersistentVector::from_iter(
+            elems.iter().cloned(),
+        ))),
+        RuntimeValue::Nil => Ok(RuntimeValue::Vector(PersistentVector::new())),
+        other => Err(EvaluationError::WrongType {
+            expected: "List, Vector, Nil",
+            realized: other.clone(),
+        }),
+    }
+}
+
 fn vec(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<RuntimeValue> {
     if args.len() != 1 {
         return Err(EvaluationError::WrongArity {
@@ -596,21 +612,7 @@ fn vec(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<RuntimeVa
             realized: args.len(),
         });
     }
-    match &args[0] {
-        RuntimeValue::List(elems) => Ok(RuntimeValue::Vector(PersistentVector::from_iter(
-            elems.iter().cloned(),
-        ))),
-        RuntimeValue::Vector(elems) => Ok(RuntimeValue::Vector(PersistentVector::from_iter(
-            elems.iter().cloned(),
-        ))),
-        RuntimeValue::Nil => Ok(RuntimeValue::Vector(PersistentVector::from_iter(
-            [].iter().cloned(),
-        ))),
-        other => Err(EvaluationError::WrongType {
-            expected: "List, Vector, Nil",
-            realized: other.clone(),
-        }),
-    }
+    to_vec(&args[0])
 }
 
 fn nth(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<RuntimeValue> {
@@ -808,13 +810,13 @@ fn map(interpreter: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult
     };
     let mut result = Vec::with_capacity(fn_args.len());
     match &args[0] {
-        // TODO
-        // RuntimeValue::Fn(f) => {
-        //     for arg in fn_args {
-        //         let mapped_arg = interpreter.apply_fn_inner(f, [arg], 1)?;
-        //         result.push(mapped_arg);
-        //     }
-        // }
+        RuntimeValue::Fn(f) => {
+            for arg in fn_args {
+                let arg_wrapper = vec![arg.clone()];
+                let mapped_arg = interpreter.apply_fn(f, arg_wrapper)?;
+                result.push(mapped_arg);
+            }
+        }
         // RuntimeValue::FnWithCaptures(FnWithCapturesImpl { f, captures }) => {
         //     interpreter.extend_from_captures(captures)?;
         //     for arg in fn_args {
@@ -823,12 +825,12 @@ fn map(interpreter: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult
         //     }
         //     interpreter.leave_scope();
         // }
-        // RuntimeValue::Primitive(native_fn) => {
-        //     for arg in fn_args {
-        //         let mapped_arg = native_fn(interpreter, &[arg.clone()])?;
-        //         result.push(mapped_arg);
-        //     }
-        // }
+        RuntimeValue::Primitive(p) => {
+            for arg in fn_args {
+                let mapped_arg = p.apply(interpreter, &[arg.clone()])?;
+                result.push(mapped_arg);
+            }
+        }
         other => {
             return Err(EvaluationError::WrongType {
                 expected: "Fn, FnWithCaptures, Primitive",
