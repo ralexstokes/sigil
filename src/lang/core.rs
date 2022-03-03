@@ -73,9 +73,9 @@ const BINDINGS: &[(&str, NativeFn)] = &[
     ("last", last),
     ("string?", is_string),
     ("number?", is_number),
-    // ("fn?", is_fn),
+    ("fn?", is_fn),
     ("conj", conj),
-    // ("macro?", is_macro),
+    ("macro?", is_macro),
     ("time-ms", time_in_millis),
     ("seq", to_seq),
     ("readline", readline),
@@ -589,8 +589,14 @@ fn concat(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<Runtim
     Ok(RuntimeValue::List(PersistentList::from_iter(elems)))
 }
 
-pub(crate) fn to_vec(elem: &RuntimeValue) -> EvaluationResult<RuntimeValue> {
-    match elem {
+fn vec(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<RuntimeValue> {
+    if args.len() != 1 {
+        return Err(EvaluationError::WrongArity {
+            expected: 1,
+            realized: args.len(),
+        });
+    }
+    match &args[0] {
         RuntimeValue::List(elems) => Ok(RuntimeValue::Vector(PersistentVector::from_iter(
             elems.iter().cloned(),
         ))),
@@ -603,16 +609,6 @@ pub(crate) fn to_vec(elem: &RuntimeValue) -> EvaluationResult<RuntimeValue> {
             realized: other.clone(),
         }),
     }
-}
-
-fn vec(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<RuntimeValue> {
-    if args.len() != 1 {
-        return Err(EvaluationError::WrongArity {
-            expected: 1,
-            realized: args.len(),
-        });
-    }
-    to_vec(&args[0])
 }
 
 fn nth(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<RuntimeValue> {
@@ -873,14 +869,14 @@ is_type!(is_map, RuntimeValue::Map(..));
 is_type!(is_set, RuntimeValue::Set(..));
 is_type!(is_string, RuntimeValue::String(..));
 is_type!(is_number, RuntimeValue::Number(..));
-// is_type!(
-//     is_fn,
-//     // RuntimeValue::Fn(..),
-//     // RuntimeValue::FnWithCaptures(..),
-//     RuntimeValue::Primitive(..),
-//     RuntimeValue::Macro(..)
-// );
-// is_type!(is_macro, RuntimeValue::Macro(..));
+is_type!(
+    is_fn,
+    RuntimeValue::Fn(..),
+    // RuntimeValue::FnWithCaptures(..),
+    RuntimeValue::Primitive(..),
+    RuntimeValue::Macro(..)
+);
+is_type!(is_macro, RuntimeValue::Macro(..));
 
 fn to_symbol(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<RuntimeValue> {
     if args.len() != 1 {
@@ -1365,750 +1361,841 @@ fn set_ns(interpreter: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationRes
 
 #[cfg(test)]
 mod tests {
-    // use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
-    // use crate::testing::run_eval_test;
-    // use crate::value::RuntimeValue::*;
+    use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
+    use crate::reader::Symbol;
+    use crate::testing::run_eval_test;
+    use crate::value::RuntimeValue;
 
-    // #[test]
-    // fn test_basic_prelude() {
-    //     let test_cases = vec![
-    //         ("(list)", RuntimeValue::List(PersistentList::from_iter(vec![])),
-    //         (
-    //             "(list 1 2)",
-    //             RuntimeValue::List(PersistentList::from_iter([Number(1), Number(2)].iter().cloned()),
-    //         ),
-    //         ("(list? (list 1))", Bool(true)),
-    //         ("(list? (list))", Bool(true)),
-    //         ("(list? [1 2])", Bool(false)),
-    //         ("(empty? (list))", Bool(true)),
-    //         ("(empty? (list 1))", Bool(false)),
-    //         ("(empty? [1 2 3])", Bool(false)),
-    //         ("(empty? [])", Bool(true)),
-    //         ("(count nil)", Number(0)),
-    //         ("(count \"hi\")", Number(2)),
-    //         ("(count \"\")", Number(0)),
-    //         ("(count (list))", Number(0)),
-    //         ("(count (list 44 42 41))", Number(3)),
-    //         ("(count [])", Number(0)),
-    //         ("(count [1 2 3])", Number(3)),
-    //         ("(count {})", Number(0)),
-    //         ("(count {:a 1 :b 2})", Number(2)),
-    //         ("(count #{})", Number(0)),
-    //         ("(count #{:a 1 :b 2})", Number(4)),
-    //         ("(if (< 2 3) 12 13)", Number(12)),
-    //         ("(> 13 12)", Bool(true)),
-    //         ("(> 13 13)", Bool(false)),
-    //         ("(> 12 13)", Bool(false)),
-    //         ("(< 13 12)", Bool(false)),
-    //         ("(< 13 13)", Bool(false)),
-    //         ("(< 12 13)", Bool(true)),
-    //         ("(<= 12 12)", Bool(true)),
-    //         ("(<= 13 12)", Bool(false)),
-    //         ("(<= 12 13)", Bool(true)),
-    //         ("(>= 13 12)", Bool(true)),
-    //         ("(>= 13 13)", Bool(true)),
-    //         ("(>= 13 14)", Bool(false)),
-    //         ("(= 12 12)", Bool(true)),
-    //         ("(= 12 13)", Bool(false)),
-    //         ("(= 13 12)", Bool(false)),
-    //         ("(= 0 0)", Bool(true)),
-    //         ("(= 1 0)", Bool(false)),
-    //         ("(= true true)", Bool(true)),
-    //         ("(= true false)", Bool(false)),
-    //         ("(= false false)", Bool(true)),
-    //         ("(= nil nil)", Bool(true)),
-    //         ("(= (list) (list))", Bool(true)),
-    //         ("(= (list) ())", Bool(true)),
-    //         ("(= (list 1 2) '(1 2))", Bool(true)),
-    //         ("(= (list 1 ) ())", Bool(false)),
-    //         ("(= (list ) '(1))", Bool(false)),
-    //         ("(= 0 (list))", Bool(false)),
-    //         ("(= (list) 0)", Bool(false)),
-    //         ("(= (list nil) (list))", Bool(false)),
-    //         ("(= 1 (+ 1 1))", Bool(false)),
-    //         ("(= 2 (+ 1 1))", Bool(true)),
-    //         ("(= nil (+ 1 1))", Bool(false)),
-    //         ("(= nil nil)", Bool(true)),
-    //         ("(= \"\" \"\")", Bool(true)),
-    //         ("(= \"abc\" \"abc\")", Bool(true)),
-    //         ("(= \"\" \"abc\")", Bool(false)),
-    //         ("(= \"abc\" \"\")", Bool(false)),
-    //         ("(= \"abc\" \"def\")", Bool(false)),
-    //         ("(= \"abc\" \"ABC\")", Bool(false)),
-    //         ("(= (list) \"\")", Bool(false)),
-    //         ("(= \"\" (list))", Bool(false)),
-    //         ("(= :abc :abc)", Bool(true)),
-    //         ("(= :abc :def)", Bool(false)),
-    //         ("(= :abc \":abc\")", Bool(false)),
-    //         ("(= (list :abc) (list :abc))", Bool(true)),
-    //         ("(= [] (list))", Bool(true)),
-    //         ("(= [7 8] [7 8])", Bool(true)),
-    //         ("(= [:abc] [:abc])", Bool(true)),
-    //         ("(= (list 1 2) [1 2])", Bool(true)),
-    //         ("(= (list 1) [])", Bool(false)),
-    //         ("(= [] (list 1))", Bool(false)),
-    //         ("(= [] [1])", Bool(false)),
-    //         ("(= 0 [])", Bool(false)),
-    //         ("(= [] 0)", Bool(false)),
-    //         ("(= [] \"\")", Bool(false)),
-    //         ("(= \"\" [])", Bool(false)),
-    //         ("(= [(list)] (list []))", Bool(true)),
-    //         ("(= 'abc 'abc)", Bool(true)),
-    //         ("(= 'abc 'abdc)", Bool(false)),
-    //         ("(= 'abc \"abc\")", Bool(false)),
-    //         ("(= \"abc\" 'abc)", Bool(false)),
-    //         ("(= \"abc\" (str 'abc))", Bool(true)),
-    //         ("(= 'abc nil)", Bool(false)),
-    //         ("(= nil 'abc)", Bool(false)),
-    //         ("(= {} {})", Bool(true)),
-    //         ("(= {} (hash-map))", Bool(true)),
-    //         ("(= {:a 11 :b 22} (hash-map :b 22 :a 11))", Bool(true)),
-    //         (
-    //             "(= {:a 11 :b [22 33]} (hash-map :b [22 33] :a 11))",
-    //             Bool(true),
-    //         ),
-    //         (
-    //             "(= {:a 11 :b {:c 22}} (hash-map :b (hash-map :c 22) :a 11))",
-    //             Bool(true),
-    //         ),
-    //         ("(= {:a 11 :b 22} (hash-map :b 23 :a 11))", Bool(false)),
-    //         ("(= {:a 11 :b 22} (hash-map :a 11))", Bool(false)),
-    //         ("(= {:a [11 22]} {:a (list 11 22)})", Bool(true)),
-    //         ("(= {:a 11 :b 22} (list :a 11 :b 22))", Bool(false)),
-    //         ("(= {} [])", Bool(false)),
-    //         ("(= [] {})", Bool(false)),
-    //         (
-    //             "(= [1 2 (list 3 4 [5 6])] (list 1 2 [3 4 (list 5 6)]))",
-    //             Bool(true),
-    //         ),
-    //         (
-    //             "(read-string \"(+ 1 2)\")",
-    //             List(PersistentList::from_iter(vec![
-    //                 Symbol("+".to_string(), None),
-    //                 Number(1),
-    //                 Number(2),
-    //             ])),
-    //         ),
-    //         (
-    //             "(read-string \"(1 2 (3 4) nil)\")",
-    //             List(PersistentList::from_iter(vec![
-    //                 Number(1),
-    //                 Number(2),
-    //                 List(PersistentList::from_iter(vec![Number(3), Number(4)])),
-    //                 Nil,
-    //             ])),
-    //         ),
-    //         ("(= nil (read-string \"nil\"))", Bool(true)),
-    //         ("(read-string \"7 ;; comment\")", Number(7)),
-    //         ("(read-string \"7;;!\")", Number(7)),
-    //         ("(read-string \"7;;#\")", Number(7)),
-    //         ("(read-string \"7;;$\")", Number(7)),
-    //         ("(read-string \"7;;%\")", Number(7)),
-    //         ("(read-string \"7;;'\")", Number(7)),
-    //         ("(read-string \"7;;\\\\\")", Number(7)),
-    //         ("(read-string \"7;;////////\")", Number(7)),
-    //         ("(read-string \"7;;`\")", Number(7)),
-    //         ("(read-string \"7;; &()*+,-./:;<=>?@[]^_{|}~\")", Number(7)),
-    //         ("(read-string \";; comment\")", Nil),
-    //         ("(eval (list + 1 2 3))", Number(6)),
-    //         ("(eval (read-string \"(+ 2 3)\"))", Number(5)),
-    //         (
-    //             "(def! a 1) (let* [a 12] (eval (read-string \"a\")))",
-    //             Number(1),
-    //         ),
-    //         (
-    //             "(let* [b 12] (do (eval (read-string \"(def! aa 7)\")) aa))",
-    //             Number(7),
-    //         ),
-    //         ("(str)", String("".to_string())),
-    //         ("(str \"\")", String("".to_string())),
-    //         ("(str \"hi\" 3 :foo)", String("hi3:foo".to_string())),
-    //         ("(str \"hi   \" 3 :foo)", String("hi   3:foo".to_string())),
-    //         ("(str [])", String("[]".to_string())),
-    //         ("(str [\"hi\"])", String("[\"hi\"]".to_string())),
-    //         (
-    //             "(str \"A\" {:abc \"val\"} \"Z\")",
-    //             String("A{:abc \"val\"}Z".to_string()),
-    //         ),
-    //         (
-    //             "(str true \".\" false \".\" nil \".\" :keyw \".\" 'symb)",
-    //             String("true.false.nil.:keyw.symb".to_string()),
-    //         ),
-    //         (
-    //             "(str true \".\" false \".\" nil \".\" :keyw \".\" 'symb)",
-    //             String("true.false.nil.:keyw.symb".to_string()),
-    //         ),
-    //         (
-    //             "(pr-str \"A\" {:abc \"val\"} \"Z\")",
-    //             String("\"A\" {:abc \"val\"} \"Z\"".to_string()),
-    //         ),
-    //         (
-    //             "(pr-str true \".\" false \".\" nil \".\" :keyw \".\" 'symb)",
-    //             String("true \".\" false \".\" nil \".\" :keyw \".\" symb".to_string()),
-    //         ),
-    //         (
-    //             "(cons 1 (list))",
-    //             RuntimeValue::List(PersistentList::from_iter([Number(1)].iter().cloned()),
-    //         ),
-    //         ("(cons 1 [])", RuntimeValue::List(PersistentList::from_iter([Number(1)].iter().cloned())),
-    //         (
-    //             "(cons 1 (list 2))",
-    //             RuntimeValue::List(PersistentList::from_iter([Number(1), Number(2)].iter().cloned()),
-    //         ),
-    //         (
-    //             "(cons 1 (list 2 3))",
-    //             RuntimeValue::List(PersistentList::from_iter([Number(1), Number(2), Number(3)].iter().cloned()),
-    //         ),
-    //         (
-    //             "(cons 1 [2 3])",
-    //             RuntimeValue::List(PersistentList::from_iter([Number(1), Number(2), Number(3)].iter().cloned()),
-    //         ),
-    //         (
-    //             "(cons [1] [2 3])",
-    //             RuntimeValue::List(PersistentList::from_iter(
-    //                 [RuntimeValue::Vector(PersistentVector::from_iter(vec![Number(1)]), Number(2), Number(3)]
-    //                     .iter()
-    //                     .cloned(),
-    //             ),
-    //         ),
-    //         (
-    //             "(def! a [2 3]) (cons 1 a)",
-    //             RuntimeValue::List(PersistentList::from_iter([Number(1), Number(2), Number(3)].iter().cloned()),
-    //         ),
-    //         (
-    //             "(def! a [2 3]) (cons 1 a) a",
-    //             RuntimeValue::Vector(PersistentVector::from_iter(vec![Number(2), Number(3)]),
-    //         ),
-    //         (
-    //             "(cons (list 1) (list 2 3))",
-    //             RuntimeValue::List(PersistentList::from_iter(
-    //                 [
-    //                     RuntimeValue::List(PersistentList::from_iter([Number(1)].iter().cloned()),
-    //                     Number(2),
-    //                     Number(3),
-    //                 ]
-    //                 .iter()
-    //                 .cloned(),
-    //             ),
-    //         ),
-    //         ("(concat)", List(PersistentList::new())),
-    //         ("(concat (concat))", List(PersistentList::new())),
-    //         ("(concat (list) (list))", List(PersistentList::new())),
-    //         ("(= () (concat))", Bool(true)),
-    //         (
-    //             "(concat (list 1 2))",
-    //             RuntimeValue::List(PersistentList::from_iter([Number(1), Number(2)].iter().cloned()),
-    //         ),
-    //         (
-    //             "(concat (list 1) (list 2 3))",
-    //             RuntimeValue::List(PersistentList::from_iter([Number(1), Number(2), Number(3)].iter().cloned()),
-    //         ),
-    //         (
-    //             "(concat (list 1) [3 3] (list 2 3))",
-    //             RuntimeValue::List(PersistentList::from_iter(
-    //                 [Number(1), Number(3), Number(3), Number(2), Number(3)]
-    //                     .iter()
-    //                     .cloned(),
-    //             ),
-    //         ),
-    //         (
-    //             "(concat [1 2] '(3 4) [5 6])",
-    //             RuntimeValue::List(PersistentList::from_iter(
-    //                 [
-    //                     Number(1),
-    //                     Number(2),
-    //                     Number(3),
-    //                     Number(4),
-    //                     Number(5),
-    //                     Number(6),
-    //                 ]
-    //                 .iter()
-    //                 .cloned(),
-    //             ),
-    //         ),
-    //         (
-    //             "(concat (list 1) (list 2 3) (list (list 4 5) 6))",
-    //             RuntimeValue::List(PersistentList::from_iter(
-    //                 [
-    //                     Number(1),
-    //                     Number(2),
-    //                     Number(3),
-    //                     RuntimeValue::List(PersistentList::from_iter([Number(4), Number(5)].iter().cloned()),
-    //                     Number(6),
-    //                 ]
-    //                 .iter()
-    //                 .cloned(),
-    //             ),
-    //         ),
-    //         (
-    //             "(def! a (list 1 2)) (def! b (list 3 4)) (concat a b (list 5 6))",
-    //             RuntimeValue::List(PersistentList::from_iter(
-    //                 [
-    //                     Number(1),
-    //                     Number(2),
-    //                     Number(3),
-    //                     Number(4),
-    //                     Number(5),
-    //                     Number(6),
-    //                 ]
-    //                 .iter()
-    //                 .cloned(),
-    //             ),
-    //         ),
-    //         (
-    //             "(def! a (list 1 2)) (def! b (list 3 4)) (concat a b (list 5 6)) a",
-    //             RuntimeValue::List(PersistentList::from_iter([Number(1), Number(2)].iter().cloned()),
-    //         ),
-    //         (
-    //             "(def! a (list 1 2)) (def! b (list 3 4)) (concat a b (list 5 6)) b",
-    //             RuntimeValue::List(PersistentList::from_iter([Number(3), Number(4)].iter().cloned()),
-    //         ),
-    //         (
-    //             "(concat [1 2])",
-    //             RuntimeValue::List(PersistentList::from_iter([Number(1), Number(2)].iter().cloned()),
-    //         ),
-    //         (
-    //             "(vec '(1 2 3))",
-    //             RuntimeValue::Vector(PersistentVector::from_iter([Number(1), Number(2), Number(3)].iter().cloned()),
-    //         ),
-    //         (
-    //             "(vec [1 2 3])",
-    //             RuntimeValue::Vector(PersistentVector::from_iter([Number(1), Number(2), Number(3)].iter().cloned()),
-    //         ),
-    //         ("(vec nil)", RuntimeValue::Vector(PersistentVector::from_iter([].iter().cloned())),
-    //         ("(vec '())", RuntimeValue::Vector(PersistentVector::from_iter([].iter().cloned())),
-    //         ("(vec [])", RuntimeValue::Vector(PersistentVector::from_iter([].iter().cloned())),
-    //         (
-    //             "(def! a '(1 2)) (vec a)",
-    //             RuntimeValue::Vector(PersistentVector::from_iter([Number(1), Number(2)].iter().cloned()),
-    //         ),
-    //         (
-    //             "(def! a '(1 2)) (vec a) a",
-    //             RuntimeValue::List(PersistentList::from_iter([Number(1), Number(2)].iter().cloned()),
-    //         ),
-    //         (
-    //             "(vec '(1))",
-    //             RuntimeValue::Vector(PersistentVector::from_iter([Number(1)].iter().cloned()),
-    //         ),
-    //         ("(nth [1 2 3] 2)", Number(3)),
-    //         ("(nth [1] 0)", Number(1)),
-    //         ("(nth [1 2 nil] 2)", Nil),
-    //         ("(nth '(1 2 3) 1)", Number(2)),
-    //         ("(nth '(1 2 3) 0)", Number(1)),
-    //         ("(nth '(1 2 nil) 2)", Nil),
-    //         ("(first '(1 2 3))", Number(1)),
-    //         ("(first '())", Nil),
-    //         ("(first [1 2 3])", Number(1)),
-    //         ("(first [10])", Number(10)),
-    //         ("(first [])", Nil),
-    //         ("(first nil)", Nil),
-    //         (
-    //             "(rest '(1 2 3))",
-    //             RuntimeValue::List(PersistentList::from_iter([Number(2), Number(3)].iter().cloned()),
-    //         ),
-    //         ("(rest '(1))", RuntimeValue::List(PersistentList::from_iter(vec![])),
-    //         ("(rest '())", List(PersistentList::new())),
-    //         (
-    //             "(rest [1 2 3])",
-    //             RuntimeValue::List(PersistentList::from_iter([Number(2), Number(3)].iter().cloned()),
-    //         ),
-    //         ("(rest [])", List(PersistentList::new())),
-    //         ("(rest nil)", List(PersistentList::new())),
-    //         ("(rest [10])", List(PersistentList::new())),
-    //         (
-    //             "(rest [10 11 12])",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![Number(11), Number(12)]),
-    //         ),
-    //         (
-    //             "(rest (cons 10 [11 12]))",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![Number(11), Number(12)]),
-    //         ),
-    //         ("(apply str [1 2 3])", String("123".to_string())),
-    //         ("(apply str '(1 2 3))", String("123".to_string())),
-    //         ("(apply str 0 1 2 '(1 2 3))", String("012123".to_string())),
-    //         ("(apply + '(2 3))", Number(5)),
-    //         ("(apply + 4 '(5))", Number(9)),
-    //         ("(apply + 4 [5])", Number(9)),
-    //         ("(apply list ())", RuntimeValue::List(PersistentList::from_iter(vec![])),
-    //         ("(apply list [])", RuntimeValue::List(PersistentList::from_iter(vec![])),
-    //         ("(apply symbol? (list 'two))", Bool(true)),
-    //         ("(apply (fn* [a b] (+ a b)) '(2 3))", Number(5)),
-    //         ("(apply (fn* [a b] (+ a b)) 4 '(5))", Number(9)),
-    //         ("(apply (fn* [a b] (+ a b)) [2 3])", Number(5)),
-    //         ("(apply (fn* [a b] (+ a b)) 4 [5])", Number(9)),
-    //         ("(apply (fn* [& rest] (list? rest)) [1 2 3])", Bool(true)),
-    //         ("(apply (fn* [& rest] (list? rest)) [])", Bool(true)),
-    //         ("(apply (fn* [a & rest] (list? rest)) [1])", Bool(true)),
-    //         (
-    //             "(def! inc (fn* [a] (+ a 1))) (map inc [1 2 3])",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![Number(2), Number(3), Number(4)]),
-    //         ),
-    //         (
-    //             "(map inc '(1 2 3))",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![Number(2), Number(3), Number(4)]),
-    //         ),
-    //         (
-    //             "(map (fn* [x] (* 2 x)) [1 2 3])",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![Number(2), Number(4), Number(6)]),
-    //         ),
-    //         (
-    //             "(map (fn* [& args] (list? args)) [1 2])",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![Bool(true), Bool(true)]),
-    //         ),
-    //         (
-    //             "(map symbol? '(nil false true))",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![Bool(false), Bool(false), Bool(false)]),
-    //         ),
-    //         (
-    //             "(def! f (fn* [a] (fn* [b] (+ a b)))) (map (f 23) (list 1 2))",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![Number(24), Number(25)]),
-    //         ),
-    //         (
-    //             "(def! state (atom 0)) (def! f (fn* [a] (swap! state (fn* [state a] (let [x (+ a state)] (/ 1 x))) a))) (map f '(1 0))",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![Number(1), Number(1)]),
-    //         ),
-    //         ("(= () (map str ()))", Bool(true)),
-    //         ("(nil? nil)", Bool(true)),
-    //         ("(nil? true)", Bool(false)),
-    //         ("(nil? false)", Bool(false)),
-    //         ("(nil? [1 2 3])", Bool(false)),
-    //         ("(true? true)", Bool(true)),
-    //         ("(true? nil)", Bool(false)),
-    //         ("(true? false)", Bool(false)),
-    //         ("(true? true?)", Bool(false)),
-    //         ("(true? [1 2 3])", Bool(false)),
-    //         ("(false? false)", Bool(true)),
-    //         ("(false? nil)", Bool(false)),
-    //         ("(false? true)", Bool(false)),
-    //         ("(false? [1 2 3])", Bool(false)),
-    //         ("(symbol? 'a)", Bool(true)),
-    //         ("(symbol? 'foo/a)", Bool(true)),
-    //         ("(symbol? :foo/a)", Bool(false)),
-    //         ("(symbol? :a)", Bool(false)),
-    //         ("(symbol? false)", Bool(false)),
-    //         ("(symbol? true)", Bool(false)),
-    //         ("(symbol? nil)", Bool(false)),
-    //         ("(symbol? (symbol \"abc\"))", Bool(true)),
-    //         ("(symbol? [1 2 3])", Bool(false)),
-    //         ("(symbol \"hi\")", Symbol("hi".to_string(), None)),
-    //         ("(keyword \"hi\")", Keyword("hi".to_string(), None)),
-    //         ("(keyword :hi)", Keyword("hi".to_string(), None)),
-    //         ("(keyword? :a)", Bool(true)),
-    //         ("(keyword? false)", Bool(false)),
-    //         ("(keyword? 'abc)", Bool(false)),
-    //         ("(keyword? \"hi\")", Bool(false)),
-    //         ("(keyword? \"\")", Bool(false)),
-    //         ("(keyword? (keyword \"abc\"))", Bool(true)),
-    //         (
-    //             "(keyword? (first (keys {\":abc\" 123 \":def\" 456})))",
-    //             Bool(false),
-    //         ),
-    //         ("(vector)", Vector(PersistentVector::new())),
-    //         (
-    //             "(vector 1)",
-    //             RuntimeValue::Vector(PersistentVector::from_iter([Number(1)].iter().cloned()),
-    //         ),
-    //         (
-    //             "(vector 1 2 3)",
-    //             RuntimeValue::Vector(PersistentVector::from_iter([Number(1), Number(2), Number(3)].iter().cloned()),
-    //         ),
-    //         ("(vector? [1 2])", Bool(true)),
-    //         ("(vector? '(1 2))", Bool(false)),
-    //         ("(vector? :hi)", Bool(false)),
-    //         ("(= [] (vector))", Bool(true)),
-    //         ("(sequential? '(1 2))", Bool(true)),
-    //         ("(sequential? [1 2])", Bool(true)),
-    //         ("(sequential? :hi)", Bool(false)),
-    //         ("(sequential? nil)", Bool(false)),
-    //         ("(sequential? \"abc\")", Bool(false)),
-    //         ("(sequential? sequential?)", Bool(false)),
-    //         ("(hash-map)", Map(PersistentMap::new())),
-    //         (
-    //             "(hash-map :a 2)",
-    //             map_with_values(
-    //                 [(Keyword("a".to_string(), None), Number(2))]
-    //                     .iter()
-    //                     .cloned(),
-    //             ),
-    //         ),
-    //         ("(map? {:a 1 :b 2})", Bool(true)),
-    //         ("(map? {})", Bool(true)),
-    //         ("(map? '())", Bool(false)),
-    //         ("(map? [])", Bool(false)),
-    //         ("(map? 'abc)", Bool(false)),
-    //         ("(map? :abc)", Bool(false)),
-    //         ("(map? [1 2])", Bool(false)),
-    //         (
-    //             "(assoc {} :a 1)",
-    //             map_with_values(
-    //                 [(Keyword("a".to_string(), None), Number(1))]
-    //                     .iter()
-    //                     .cloned(),
-    //             ),
-    //         ),
-    //         (
-    //             "(assoc {} :a 1 :b 3)",
-    //             map_with_values(
-    //                 [
-    //                     (Keyword("a".to_string(), None), Number(1)),
-    //                     (Keyword("b".to_string(), None), Number(3)),
-    //                 ]
-    //                 .iter()
-    //                 .cloned(),
-    //             ),
-    //         ),
-    //         (
-    //             "(assoc {:a 1} :b 3)",
-    //             map_with_values(
-    //                 [
-    //                     (Keyword("a".to_string(), None), Number(1)),
-    //                     (Keyword("b".to_string(), None), Number(3)),
-    //                 ]
-    //                 .iter()
-    //                 .cloned(),
-    //             ),
-    //         ),
-    //         (
-    //             "(assoc {:a 1} :a 3 :c 33)",
-    //             map_with_values(vec![
-    //                 (Keyword("a".to_string(), None), Number(3)),
-    //                 (Keyword("c".to_string(), None), Number(33)),
-    //             ]),
-    //         ),
-    //         (
-    //             "(assoc {} :a nil)",
-    //             map_with_values(vec![(Keyword("a".to_string(), None), Nil)]),
-    //         ),
-    //         ("(dissoc {})", map_with_values([].iter().cloned())),
-    //         ("(dissoc {} :a)", map_with_values([].iter().cloned())),
-    //         (
-    //             "(dissoc {:a 1 :b 3} :a)",
-    //             map_with_values(
-    //                 [(Keyword("b".to_string(), None), Number(3))]
-    //                     .iter()
-    //                     .cloned(),
-    //             ),
-    //         ),
-    //         (
-    //             "(dissoc {:a 1 :b 3} :a :b :c)",
-    //             map_with_values([].iter().cloned()),
-    //         ),
-    //         ("(count (keys (assoc {} :b 2 :c 3)))", Number(2)),
-    //         ("(get {:a 1} :a)", Number(1)),
-    //         ("(get {:a 1} :b)", Nil),
-    //         ("(get nil :b)", Nil),
-    //         ("(contains? {:a 1} :b)", Bool(false)),
-    //         ("(contains? {:a 1} :a)", Bool(true)),
-    //         ("(contains? {:abc nil} :abc)", Bool(true)),
-    //         ("(contains? nil :abc)", Bool(false)),
-    //         ("(contains? nil 'abc)", Bool(false)),
-    //         ("(contains? nil [1 2 3])", Bool(false)),
-    //         ("(keyword? (nth (keys {:abc 123 :def 456}) 0))", Bool(true)),
-    //         ("(keyword? (nth (vals {123 :abc 456 :def}) 0))", Bool(true)),
-    //         ("(keys {})", Nil),
-    //         ("(keys nil)", Nil),
-    //         (
-    //             "(= (set '(:a :b :c)) (set (keys {:a 1 :b 2 :c 3})))",
-    //             Bool(true),
-    //         ),
-    //         (
-    //             "(= (set '(:a :c)) (set (keys {:a 1 :b 2 :c 3})))",
-    //             Bool(false),
-    //         ),
-    //         ("(vals {})", Nil),
-    //         ("(vals nil)", Nil),
-    //         (
-    //             "(= (set '(1 2 3)) (set (vals {:a 1 :b 2 :c 3})))",
-    //             Bool(true),
-    //         ),
-    //         (
-    //             "(= (set '(1 2)) (set (vals {:a 1 :b 2 :c 3})))",
-    //             Bool(false),
-    //         ),
-    //         ("(last '(1 2 3))", Number(3)),
-    //         ("(last [1 2 3])", Number(3)),
-    //         ("(last '())", Nil),
-    //         ("(last [])", Nil),
-    //         ("(not [])", Bool(false)),
-    //         ("(not '(1 2 3))", Bool(false)),
-    //         ("(not nil)", Bool(true)),
-    //         ("(not true)", Bool(false)),
-    //         ("(not false)", Bool(true)),
-    //         ("(not 1)", Bool(false)),
-    //         ("(not 0)", Bool(false)),
-    //         ("(not :foo)", Bool(false)),
-    //         ("(not \"a\")", Bool(false)),
-    //         ("(not \"\")", Bool(false)),
-    //         ("(not (= 1 1))", Bool(false)),
-    //         ("(not (= 1 2))", Bool(true)),
-    //         ("(set nil)", Set(PersistentSet::new())),
-    //         // NOTE: these all rely on an _unguaranteed_ insertion order...
-    //         (
-    //             "(set \"hi\")",
-    //             RuntimeValue::Set(PersistentSet::from_iter(vec![String("h".to_string()), String("i".to_string())]),
-    //         ),
-    //         ("(set '(1 2))", RuntimeValue::Set(PersistentSet::from_iter(vec![Number(1), Number(2)])),
-    //         (
-    //             "(set '(1 2 1 2 1 2 2 2 2))",
-    //             RuntimeValue::Set(PersistentSet::from_iter(vec![Number(1), Number(2)]),
-    //         ),
-    //         (
-    //             "(set [1 2 1 2 1 2 2 2 2])",
-    //             RuntimeValue::Set(PersistentSet::from_iter(vec![Number(1), Number(2)]),
-    //         ),
-    //         (
-    //             "(set {1 2 3 4})",
-    //             RuntimeValue::Set(PersistentSet::from_iter(vec![
-    //                 RuntimeValue::Vector(PersistentVector::from_iter(vec![Number(1), Number(2)]),
-    //                 RuntimeValue::Vector(PersistentVector::from_iter(vec![Number(3), Number(4)]),
-    //             ]),
-    //         ),
-    //         (
-    //             "(set #{1 2 3 4})",
-    //             RuntimeValue::Set(PersistentSet::from_iter(vec![Number(1), Number(2), Number(3), Number(4)]),
-    //         ),
-    //         ("(set? #{1 2 3 4})", Bool(true)),
-    //         ("(set? nil)", Bool(false)),
-    //         ("(set? '())", Bool(false)),
-    //         ("(set? [])", Bool(false)),
-    //         ("(set? {})", Bool(false)),
-    //         ("(set? #{})", Bool(true)),
-    //         ("(set? \"a\")", Bool(false)),
-    //         ("(set? :a)", Bool(false)),
-    //         ("(set? 'a)", Bool(false)),
-    //         ("(string? nil)", Bool(false)),
-    //         ("(string? true)", Bool(false)),
-    //         ("(string? false)", Bool(false)),
-    //         ("(string? [1 2 3])", Bool(false)),
-    //         ("(string? 1)", Bool(false)),
-    //         ("(string? :hi)", Bool(false)),
-    //         ("(string? \"hi\")", Bool(true)),
-    //         ("(string? string?)", Bool(false)),
-    //         ("(number? nil)", Bool(false)),
-    //         ("(number? true)", Bool(false)),
-    //         ("(number? false)", Bool(false)),
-    //         ("(number? [1 2 3])", Bool(false)),
-    //         ("(number? 1)", Bool(true)),
-    //         ("(number? -1)", Bool(true)),
-    //         ("(number? :hi)", Bool(false)),
-    //         ("(number? \"hi\")", Bool(false)),
-    //         ("(number? string?)", Bool(false)),
-    //         ("(fn? nil)", Bool(false)),
-    //         ("(fn? true)", Bool(false)),
-    //         ("(fn? false)", Bool(false)),
-    //         ("(fn? [1 2 3])", Bool(false)),
-    //         ("(fn? 1)", Bool(false)),
-    //         ("(fn? -1)", Bool(false)),
-    //         ("(fn? :hi)", Bool(false)),
-    //         ("(fn? \"hi\")", Bool(false)),
-    //         ("(fn? string?)", Bool(true)),
-    //         ("(fn? (fn* [a] a))", Bool(true)),
-    //         ("(def! foo (fn* [a] a)) (fn? foo)", Bool(true)),
-    //         ("(defmacro! foo (fn* [a] a)) (fn? foo)", Bool(true)),
-    //         ("(conj (list) 1)", RuntimeValue::List(PersistentList::from_iter(vec![Number(1)])),
-    //         (
-    //             "(conj (list 1) 2)",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![Number(2), Number(1)]),
-    //         ),
-    //         (
-    //             "(conj (list 1 2) 3)",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![Number(3), Number(1), Number(2)]),
-    //         ),
-    //         (
-    //             "(conj (list 2 3) 4 5 6)",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![Number(6), Number(5), Number(4), Number(2), Number(3)]),
-    //         ),
-    //         (
-    //             "(conj (list 1) (list 2 3))",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![
-    //                 RuntimeValue::List(PersistentList::from_iter(vec![Number(2), Number(3)]),
-    //                 Number(1),
-    //             ]),
-    //         ),
-    //         ("(conj [] 1)", RuntimeValue::Vector(PersistentVector::from_iter(vec![Number(1)])),
-    //         (
-    //             "(conj [1] 2)",
-    //             RuntimeValue::Vector(PersistentVector::from_iter(vec![Number(1), Number(2)]),
-    //         ),
-    //         (
-    //             "(conj [1 2 3] 4)",
-    //             RuntimeValue::Vector(PersistentVector::from_iter(vec![Number(1), Number(2), Number(3), Number(4)]),
-    //         ),
-    //         (
-    //             "(conj [1 2 3] 4 5)",
-    //             RuntimeValue::Vector(PersistentVector::from_iter(vec![Number(1), Number(2), Number(3), Number(4), Number(5)]),
-    //         ),
-    //         (
-    //             "(conj '(1 2 3) 4 5)",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![Number(5), Number(4), Number(1), Number(2), Number(3)]),
-    //         ),
-    //         (
-    //             "(conj [3] [4 5])",
-    //             RuntimeValue::Vector(PersistentVector::from_iter(vec![
-    //                 Number(3),
-    //                 RuntimeValue::Vector(PersistentVector::from_iter(vec![Number(4), Number(5)]),
-    //             ]),
-    //         ),
-    //         (
-    //             "(conj {:c :d} [1 2] {:a :b :c :e})",
-    //             map_with_values(vec![
-    //                 (
-    //                     Keyword("c".to_string(), None),
-    //                     Keyword("e".to_string(), None),
-    //                 ),
-    //                 (
-    //                     Keyword("a".to_string(), None),
-    //                     Keyword("b".to_string(), None),
-    //                 ),
-    //                 (Number(1), Number(2)),
-    //             ]),
-    //         ),
-    //         (
-    //             "(conj #{1 2} 1 3 2 2 2 2 1)",
-    //             RuntimeValue::Set(PersistentSet::from_iter(vec![Number(1), Number(2), Number(3)]),
-    //         ),
-    //         ("(macro? nil)", Bool(false)),
-    //         ("(macro? true)", Bool(false)),
-    //         ("(macro? false)", Bool(false)),
-    //         ("(macro? [1 2 3])", Bool(false)),
-    //         ("(macro? 1)", Bool(false)),
-    //         ("(macro? -1)", Bool(false)),
-    //         ("(macro? :hi)", Bool(false)),
-    //         ("(macro? \"hi\")", Bool(false)),
-    //         ("(macro? string?)", Bool(false)),
-    //         ("(macro? {})", Bool(false)),
-    //         ("(macro? (fn* [a] a))", Bool(false)),
-    //         ("(def! foo (fn* [a] a)) (macro? foo)", Bool(false)),
-    //         ("(defmacro! foo (fn* [a] a)) (macro? foo)", Bool(true)),
-    //         ("(number? (time-ms))", Bool(true)),
-    //         ("(seq nil)", Nil),
-    //         ("(seq \"\")", Nil),
-    //         (
-    //             "(seq \"ab\")",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![String("a".to_string()), String("b".to_string())]),
-    //         ),
-    //         ("(apply str (seq \"ab\"))", String("ab".to_string())),
-    //         ("(seq '())", Nil),
-    //         ("(seq '(1 2))", RuntimeValue::List(PersistentList::from_iter(vec![Number(1), Number(2)])),
-    //         ("(seq [])", Nil),
-    //         ("(seq [1 2])", RuntimeValue::List(PersistentList::from_iter(vec![Number(1), Number(2)])),
-    //         ("(seq {})", Nil),
-    //         (
-    //             "(seq {1 2})",
-    //             RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Vector(PersistentVector::from_iter(vec![Number(1), Number(2)])]),
-    //         ),
-    //         ("(seq #{})", Nil),
-    //         ("(= (set '(1 2)) (set (seq #{1 2})))", Bool(true)),
-    //         ("(zero? 0)", Bool(true)),
-    //         ("(zero? 10)", Bool(false)),
-    //         ("(zero? -10)", Bool(false)),
-    //     ];
-    //     run_eval_test(&test_cases);
-    // }
+    #[test]
+    fn test_basic_prelude() {
+        let test_cases = vec![
+            ("(list)", RuntimeValue::List(PersistentList::new())),
+            (
+                "(list 1 2)",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                ])),
+            ),
+            ("(list? (list 1))", RuntimeValue::Bool(true)),
+            ("(list? (list))", RuntimeValue::Bool(true)),
+            ("(list? [1 2])", RuntimeValue::Bool(false)),
+            ("(empty? (list))", RuntimeValue::Bool(true)),
+            ("(empty? (list 1))", RuntimeValue::Bool(false)),
+            ("(empty? [1 2 3])", RuntimeValue::Bool(false)),
+            ("(empty? [])", RuntimeValue::Bool(true)),
+            ("(count nil)", RuntimeValue::Number(0)),
+            ("(count \"hi\")", RuntimeValue::Number(2)),
+            ("(count \"\")", RuntimeValue::Number(0)),
+            ("(count (list))", RuntimeValue::Number(0)),
+            ("(count (list 44 42 41))", RuntimeValue::Number(3)),
+            ("(count [])", RuntimeValue::Number(0)),
+            ("(count [1 2 3])", RuntimeValue::Number(3)),
+            ("(count {})", RuntimeValue::Number(0)),
+            ("(count {:a 1 :b 2})", RuntimeValue::Number(2)),
+            ("(count #{})", RuntimeValue::Number(0)),
+            ("(count #{:a 1 :b 2})", RuntimeValue::Number(4)),
+            ("(if (< 2 3) 12 13)", RuntimeValue::Number(12)),
+            ("(> 13 12)", RuntimeValue::Bool(true)),
+            ("(> 13 13)", RuntimeValue::Bool(false)),
+            ("(> 12 13)", RuntimeValue::Bool(false)),
+            ("(< 13 12)", RuntimeValue::Bool(false)),
+            ("(< 13 13)", RuntimeValue::Bool(false)),
+            ("(< 12 13)", RuntimeValue::Bool(true)),
+            ("(<= 12 12)", RuntimeValue::Bool(true)),
+            ("(<= 13 12)", RuntimeValue::Bool(false)),
+            ("(<= 12 13)", RuntimeValue::Bool(true)),
+            ("(>= 13 12)", RuntimeValue::Bool(true)),
+            ("(>= 13 13)", RuntimeValue::Bool(true)),
+            ("(>= 13 14)", RuntimeValue::Bool(false)),
+            ("(= 12 12)", RuntimeValue::Bool(true)),
+            ("(= 12 13)", RuntimeValue::Bool(false)),
+            ("(= 13 12)", RuntimeValue::Bool(false)),
+            ("(= 0 0)", RuntimeValue::Bool(true)),
+            ("(= 1 0)", RuntimeValue::Bool(false)),
+            ("(= true true)", RuntimeValue::Bool(true)),
+            ("(= true false)", RuntimeValue::Bool(false)),
+            ("(= false false)", RuntimeValue::Bool(true)),
+            ("(= nil nil)", RuntimeValue::Bool(true)),
+            ("(= (list) (list))", RuntimeValue::Bool(true)),
+            ("(= (list) ())", RuntimeValue::Bool(true)),
+            ("(= (list 1 2) '(1 2))", RuntimeValue::Bool(true)),
+            ("(= (list 1 ) ())", RuntimeValue::Bool(false)),
+            ("(= (list ) '(1))", RuntimeValue::Bool(false)),
+            ("(= 0 (list))", RuntimeValue::Bool(false)),
+            ("(= (list) 0)", RuntimeValue::Bool(false)),
+            ("(= (list nil) (list))", RuntimeValue::Bool(false)),
+            ("(= 1 (+ 1 1))", RuntimeValue::Bool(false)),
+            ("(= 2 (+ 1 1))", RuntimeValue::Bool(true)),
+            ("(= nil (+ 1 1))", RuntimeValue::Bool(false)),
+            ("(= nil nil)", RuntimeValue::Bool(true)),
+            ("(= \"\" \"\")", RuntimeValue::Bool(true)),
+            ("(= \"abc\" \"abc\")", RuntimeValue::Bool(true)),
+            ("(= \"\" \"abc\")", RuntimeValue::Bool(false)),
+            ("(= \"abc\" \"\")", RuntimeValue::Bool(false)),
+            ("(= \"abc\" \"def\")", RuntimeValue::Bool(false)),
+            ("(= \"abc\" \"ABC\")", RuntimeValue::Bool(false)),
+            ("(= (list) \"\")", RuntimeValue::Bool(false)),
+            ("(= \"\" (list))", RuntimeValue::Bool(false)),
+            ("(= :abc :abc)", RuntimeValue::Bool(true)),
+            ("(= :abc :def)", RuntimeValue::Bool(false)),
+            ("(= :abc \":abc\")", RuntimeValue::Bool(false)),
+            ("(= (list :abc) (list :abc))", RuntimeValue::Bool(true)),
+            ("(= [] (list))", RuntimeValue::Bool(true)),
+            ("(= [7 8] [7 8])", RuntimeValue::Bool(true)),
+            ("(= [:abc] [:abc])", RuntimeValue::Bool(true)),
+            ("(= (list 1 2) [1 2])", RuntimeValue::Bool(true)),
+            ("(= (list 1) [])", RuntimeValue::Bool(false)),
+            ("(= [] (list 1))", RuntimeValue::Bool(false)),
+            ("(= [] [1])", RuntimeValue::Bool(false)),
+            ("(= 0 [])", RuntimeValue::Bool(false)),
+            ("(= [] 0)", RuntimeValue::Bool(false)),
+            ("(= [] \"\")", RuntimeValue::Bool(false)),
+            ("(= \"\" [])", RuntimeValue::Bool(false)),
+            ("(= [(list)] (list []))", RuntimeValue::Bool(true)),
+            ("(= 'abc 'abc)", RuntimeValue::Bool(true)),
+            ("(= 'abc 'abdc)", RuntimeValue::Bool(false)),
+            ("(= 'abc \"abc\")", RuntimeValue::Bool(false)),
+            ("(= \"abc\" 'abc)", RuntimeValue::Bool(false)),
+            ("(= \"abc\" (str 'abc))", RuntimeValue::Bool(true)),
+            ("(= 'abc nil)", RuntimeValue::Bool(false)),
+            ("(= nil 'abc)", RuntimeValue::Bool(false)),
+            ("(= {} {})", RuntimeValue::Bool(true)),
+            ("(= {} (hash-map))", RuntimeValue::Bool(true)),
+            (
+                "(= {:a 11 :b 22} (hash-map :b 22 :a 11))",
+                RuntimeValue::Bool(true),
+            ),
+            (
+                "(= {:a 11 :b [22 33]} (hash-map :b [22 33] :a 11))",
+                RuntimeValue::Bool(true),
+            ),
+            (
+                "(= {:a 11 :b {:c 22}} (hash-map :b (hash-map :c 22) :a 11))",
+                RuntimeValue::Bool(true),
+            ),
+            (
+                "(= {:a 11 :b 22} (hash-map :b 23 :a 11))",
+                RuntimeValue::Bool(false),
+            ),
+            (
+                "(= {:a 11 :b 22} (hash-map :a 11))",
+                RuntimeValue::Bool(false),
+            ),
+            (
+                "(= {:a [11 22]} {:a (list 11 22)})",
+                RuntimeValue::Bool(true),
+            ),
+            (
+                "(= {:a 11 :b 22} (list :a 11 :b 22))",
+                RuntimeValue::Bool(false),
+            ),
+            ("(= {} [])", RuntimeValue::Bool(false)),
+            ("(= [] {})", RuntimeValue::Bool(false)),
+            (
+                "(= [1 2 (list 3 4 [5 6])] (list 1 2 [3 4 (list 5 6)]))",
+                RuntimeValue::Bool(true),
+            ),
+            (
+                "(read-string \"(+ 1 2)\")",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Symbol(Symbol {
+                        identifier: "+".to_string(),
+                        namespace: None,
+                    }),
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                ])),
+            ),
+            (
+                "(read-string \"(1 2 (3 4) nil)\")",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                    RuntimeValue::List(PersistentList::from_iter([
+                        RuntimeValue::Number(3),
+                        RuntimeValue::Number(4),
+                    ])),
+                    RuntimeValue::Nil,
+                ])),
+            ),
+            ("(= nil (read-string \"nil\"))", RuntimeValue::Bool(true)),
+            ("(read-string \"7 ;; comment\")", RuntimeValue::Number(7)),
+            ("(read-string \"7;;!\")", RuntimeValue::Number(7)),
+            ("(read-string \"7;;#\")", RuntimeValue::Number(7)),
+            ("(read-string \"7;;$\")", RuntimeValue::Number(7)),
+            ("(read-string \"7;;%\")", RuntimeValue::Number(7)),
+            ("(read-string \"7;;'\")", RuntimeValue::Number(7)),
+            ("(read-string \"7;;\\\\\")", RuntimeValue::Number(7)),
+            ("(read-string \"7;;////////\")", RuntimeValue::Number(7)),
+            ("(read-string \"7;;`\")", RuntimeValue::Number(7)),
+            (
+                "(read-string \"7;; &()*+,-./:;<=>?@[]^_{|}~\")",
+                RuntimeValue::Number(7),
+            ),
+            ("(read-string \";; comment\")", RuntimeValue::Nil),
+            ("(eval (list + 1 2 3))", RuntimeValue::Number(6)),
+            ("(eval (read-string \"(+ 2 3)\"))", RuntimeValue::Number(5)),
+            (
+                "(def! a 1) (let* [a 12] (eval (read-string \"a\")))",
+                RuntimeValue::Number(1),
+            ),
+            (
+                "(let* [b 12] (do (eval (read-string \"(def! aa 7)\")) aa))",
+                RuntimeValue::Number(7),
+            ),
+            ("(str)", RuntimeValue::String("".to_string())),
+            ("(str \"\")", RuntimeValue::String("".to_string())),
+            (
+                "(str \"hi\" 3 :foo)",
+                RuntimeValue::String("hi3:foo".to_string()),
+            ),
+            (
+                "(str \"hi   \" 3 :foo)",
+                RuntimeValue::String("hi   3:foo".to_string()),
+            ),
+            ("(str [])", RuntimeValue::String("[]".to_string())),
+            (
+                "(str [\"hi\"])",
+                RuntimeValue::String("[\"hi\"]".to_string()),
+            ),
+            (
+                "(str \"A\" {:abc \"val\"} \"Z\")",
+                RuntimeValue::String("A{:abc \"val\"}Z".to_string()),
+            ),
+            (
+                "(str true \".\" false \".\" nil \".\" :keyw \".\" 'symb)",
+                RuntimeValue::String("true.false.nil.:keyw.symb".to_string()),
+            ),
+            (
+                "(str true \".\" false \".\" nil \".\" :keyw \".\" 'symb)",
+                RuntimeValue::String("true.false.nil.:keyw.symb".to_string()),
+            ),
+            (
+                "(pr-str \"A\" {:abc \"val\"} \"Z\")",
+                RuntimeValue::String("\"A\" {:abc \"val\"} \"Z\"".to_string()),
+            ),
+            (
+                "(pr-str true \".\" false \".\" nil \".\" :keyw \".\" 'symb)",
+                RuntimeValue::String(
+                    "true \".\" false \".\" nil \".\" :keyw \".\" symb".to_string(),
+                ),
+            ),
+            (
+                "(cons 1 (list))",
+                RuntimeValue::List(PersistentList::from_iter([RuntimeValue::Number(1)])),
+            ),
+            (
+                "(cons 1 [])",
+                RuntimeValue::List(PersistentList::from_iter([RuntimeValue::Number(1)])),
+            ),
+            (
+                "(cons 1 (list 2))",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                ])),
+            ),
+            (
+                "(cons 1 (list 2 3))",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                    RuntimeValue::Number(3),
+                ])),
+            ),
+            (
+                "(cons 1 [2 3])",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                    RuntimeValue::Number(3),
+                ])),
+            ),
+            (
+                "(cons [1] [2 3])",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Vector(PersistentVector::from_iter([RuntimeValue::Number(1)])),
+                    RuntimeValue::Number(2),
+                    RuntimeValue::Number(3),
+                ])),
+            ),
+            (
+                "(def! a [2 3]) (cons 1 a)",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                    RuntimeValue::Number(3),
+                ])),
+            ),
+            (
+                "(def! a [2 3]) (cons 1 a) a",
+                RuntimeValue::Vector(PersistentVector::from_iter([
+                    RuntimeValue::Number(2),
+                    RuntimeValue::Number(3),
+                ])),
+            ),
+            (
+                "(cons (list 1) (list 2 3))",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::List(PersistentList::from_iter([RuntimeValue::Number(1)])),
+                    RuntimeValue::Number(2),
+                    RuntimeValue::Number(3),
+                ])),
+            ),
+            ("(concat)", RuntimeValue::List(PersistentList::new())),
+            (
+                "(concat (concat))",
+                RuntimeValue::List(PersistentList::new()),
+            ),
+            (
+                "(concat (list) (list))",
+                RuntimeValue::List(PersistentList::new()),
+            ),
+            ("(= () (concat))", RuntimeValue::Bool(true)),
+            (
+                "(concat (list 1 2))",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                ])),
+            ),
+            (
+                "(concat (list 1) (list 2 3))",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                    RuntimeValue::Number(3),
+                ])),
+            ),
+            (
+                "(concat (list 1) [3 3] (list 2 3))",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(3),
+                    RuntimeValue::Number(3),
+                    RuntimeValue::Number(2),
+                    RuntimeValue::Number(3),
+                ])),
+            ),
+            (
+                "(concat [1 2] '(3 4) [5 6])",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                    RuntimeValue::Number(3),
+                    RuntimeValue::Number(4),
+                    RuntimeValue::Number(5),
+                    RuntimeValue::Number(6),
+                ])),
+            ),
+            (
+                "(concat (list 1) (list 2 3) (list (list 4 5) 6))",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                    RuntimeValue::Number(3),
+                    RuntimeValue::List(PersistentList::from_iter([
+                        RuntimeValue::Number(4),
+                        RuntimeValue::Number(5),
+                    ])),
+                    RuntimeValue::Number(6),
+                ])),
+            ),
+            (
+                "(def! a (list 1 2)) (def! b (list 3 4)) (concat a b (list 5 6))",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                    RuntimeValue::Number(3),
+                    RuntimeValue::Number(4),
+                    RuntimeValue::Number(5),
+                    RuntimeValue::Number(6),
+                ])),
+            ),
+            (
+                "(def! a (list 1 2)) (def! b (list 3 4)) (concat a b (list 5 6)) a",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                ])),
+            ),
+            (
+                "(def! a (list 1 2)) (def! b (list 3 4)) (concat a b (list 5 6)) b",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(3),
+                    RuntimeValue::Number(4),
+                ])),
+            ),
+            (
+                "(concat [1 2])",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                ])),
+            ),
+            (
+                "(vec '(1 2 3))",
+                RuntimeValue::Vector(PersistentVector::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                    RuntimeValue::Number(3),
+                ])),
+            ),
+            (
+                "(vec [1 2 3])",
+                RuntimeValue::Vector(PersistentVector::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                    RuntimeValue::Number(3),
+                ])),
+            ),
+            ("(vec nil)", RuntimeValue::Vector(PersistentVector::new())),
+            ("(vec '())", RuntimeValue::Vector(PersistentVector::new())),
+            ("(vec [])", RuntimeValue::Vector(PersistentVector::new())),
+            (
+                "(def! a '(1 2)) (vec a)",
+                RuntimeValue::Vector(PersistentVector::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                ])),
+            ),
+            (
+                "(def! a '(1 2)) (vec a) a",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(1),
+                    RuntimeValue::Number(2),
+                ])),
+            ),
+            (
+                "(vec '(1))",
+                RuntimeValue::Vector(PersistentVector::from_iter([RuntimeValue::Number(1)])),
+            ),
+            ("(nth [1 2 3] 2)", RuntimeValue::Number(3)),
+            ("(nth [1] 0)", RuntimeValue::Number(1)),
+            ("(nth [1 2 nil] 2)", RuntimeValue::Nil),
+            ("(nth '(1 2 3) 1)", RuntimeValue::Number(2)),
+            ("(nth '(1 2 3) 0)", RuntimeValue::Number(1)),
+            ("(nth '(1 2 nil) 2)", RuntimeValue::Nil),
+            ("(first '(1 2 3))", RuntimeValue::Number(1)),
+            ("(first '())", RuntimeValue::Nil),
+            ("(first [1 2 3])", RuntimeValue::Number(1)),
+            ("(first [10])", RuntimeValue::Number(10)),
+            ("(first [])", RuntimeValue::Nil),
+            ("(first nil)", RuntimeValue::Nil),
+            (
+                "(rest '(1 2 3))",
+                RuntimeValue::List(PersistentList::from_iter([
+                    RuntimeValue::Number(2),
+                    RuntimeValue::Number(3),
+                ])),
+            ),
+            ("(rest '(1))", RuntimeValue::List(PersistentList::new())),
+            ("(rest '())", RuntimeValue::List(PersistentList::new())),
+            // (
+            //     "(rest [1 2 3])",
+            //     RuntimeValue::List(PersistentList::from_iter([RuntimeValue::Number(2), RuntimeValue::Number(3)].iter().cloned()),
+            // ),
+            // ("(rest [])", RuntimeValue::List(PersistentList::new())),
+            // ("(rest nil)", RuntimeValue::List(PersistentList::new())),
+            // ("(rest [10])", RuntimeValue::List(PersistentList::new())),
+            // (
+            //     "(rest [10 11 12])",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(11), RuntimeValue::Number(12)]),
+            // ),
+            // (
+            //     "(rest (cons 10 [11 12]))",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(11), RuntimeValue::Number(12)]),
+            // ),
+            // ("(apply str [1 2 3])", String("123".to_string())),
+            // ("(apply str '(1 2 3))", String("123".to_string())),
+            // ("(apply str 0 1 2 '(1 2 3))", String("012123".to_string())),
+            // ("(apply + '(2 3))", RuntimeValue::Number(5)),
+            // ("(apply + 4 '(5))", RuntimeValue::Number(9)),
+            // ("(apply + 4 [5])", RuntimeValue::Number(9)),
+            // ("(apply list ())", RuntimeValue::List(PersistentList::from_iter(vec![])),
+            // ("(apply list [])", RuntimeValue::List(PersistentList::from_iter(vec![])),
+            // ("(apply symbol? (list 'two))", RuntimeValue::Bool(true)),
+            // ("(apply (fn* [a b] (+ a b)) '(2 3))", RuntimeValue::Number(5)),
+            // ("(apply (fn* [a b] (+ a b)) 4 '(5))", RuntimeValue::Number(9)),
+            // ("(apply (fn* [a b] (+ a b)) [2 3])", RuntimeValue::Number(5)),
+            // ("(apply (fn* [a b] (+ a b)) 4 [5])", RuntimeValue::Number(9)),
+            // ("(apply (fn* [& rest] (list? rest)) [1 2 3])", RuntimeValue::Bool(true)),
+            // ("(apply (fn* [& rest] (list? rest)) [])", RuntimeValue::Bool(true)),
+            // ("(apply (fn* [a & rest] (list? rest)) [1])", RuntimeValue::Bool(true)),
+            // (
+            //     "(def! inc (fn* [a] (+ a 1))) (map inc [1 2 3])",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(2), RuntimeValue::Number(3), RuntimeValue::Number(4)]),
+            // ),
+            // (
+            //     "(map inc '(1 2 3))",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(2), RuntimeValue::Number(3), RuntimeValue::Number(4)]),
+            // ),
+            // (
+            //     "(map (fn* [x] (* 2 x)) [1 2 3])",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(2), RuntimeValue::Number(4), RuntimeValue::Number(6)]),
+            // ),
+            // (
+            //     "(map (fn* [& args] (list? args)) [1 2])",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Bool(true), Bool(true)]),
+            // ),
+            // (
+            //     "(map symbol? '(nil false true))",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Bool(false), Bool(false), Bool(false)]),
+            // ),
+            // (
+            //     "(def! f (fn* [a] (fn* [b] (+ a b)))) (map (f 23) (list 1 2))",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(24), RuntimeValue::Number(25)]),
+            // ),
+            // (
+            //     "(def! state (atom 0)) (def! f (fn* [a] (swap! state (fn* [state a] (let [x (+ a state)] (/ 1 x))) a))) (map f '(1 0))",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(1), RuntimeValue::Number(1)]),
+            // ),
+            // ("(= () (map str ()))", RuntimeValue::Bool(true)),
+            // ("(nil? nil)", RuntimeValue::Bool(true)),
+            // ("(nil? true)", RuntimeValue::Bool(false)),
+            // ("(nil? false)", RuntimeValue::Bool(false)),
+            // ("(nil? [1 2 3])", RuntimeValue::Bool(false)),
+            // ("(true? true)", RuntimeValue::Bool(true)),
+            // ("(true? nil)", RuntimeValue::Bool(false)),
+            // ("(true? false)", RuntimeValue::Bool(false)),
+            // ("(true? true?)", RuntimeValue::Bool(false)),
+            // ("(true? [1 2 3])", RuntimeValue::Bool(false)),
+            // ("(false? false)", RuntimeValue::Bool(true)),
+            // ("(false? nil)", RuntimeValue::Bool(false)),
+            // ("(false? true)", RuntimeValue::Bool(false)),
+            // ("(false? [1 2 3])", RuntimeValue::Bool(false)),
+            // ("(symbol? 'a)", RuntimeValue::Bool(true)),
+            // ("(symbol? 'foo/a)", RuntimeValue::Bool(true)),
+            // ("(symbol? :foo/a)", RuntimeValue::Bool(false)),
+            // ("(symbol? :a)", RuntimeValue::Bool(false)),
+            // ("(symbol? false)", RuntimeValue::Bool(false)),
+            // ("(symbol? true)", RuntimeValue::Bool(false)),
+            // ("(symbol? nil)", RuntimeValue::Bool(false)),
+            // ("(symbol? (symbol \"abc\"))", RuntimeValue::Bool(true)),
+            // ("(symbol? [1 2 3])", RuntimeValue::Bool(false)),
+            // ("(symbol \"hi\")", Symbol("hi".to_string(), None)),
+            // ("(keyword \"hi\")", Keyword("hi".to_string(), None)),
+            // ("(keyword :hi)", Keyword("hi".to_string(), None)),
+            // ("(keyword? :a)", RuntimeValue::Bool(true)),
+            // ("(keyword? false)", RuntimeValue::Bool(false)),
+            // ("(keyword? 'abc)", RuntimeValue::Bool(false)),
+            // ("(keyword? \"hi\")", RuntimeValue::Bool(false)),
+            // ("(keyword? \"\")", RuntimeValue::Bool(false)),
+            // ("(keyword? (keyword \"abc\"))", RuntimeValue::Bool(true)),
+            // (
+            //     "(keyword? (first (keys {\":abc\" 123 \":def\" 456})))",
+            //     RuntimeValue::Bool(false),
+            // ),
+            // ("(vector)", Vector(PersistentVector::new())),
+            // (
+            //     "(vector 1)",
+            //     RuntimeValue::Vector(PersistentVector::from_iter([RuntimeValue::Number(1)].iter().cloned()),
+            // ),
+            // (
+            //     "(vector 1 2 3)",
+            //     RuntimeValue::Vector(PersistentVector::from_iter([RuntimeValue::Number(1), RuntimeValue::Number(2), RuntimeValue::Number(3)].iter().cloned()),
+            // ),
+            // ("(vector? [1 2])", RuntimeValue::Bool(true)),
+            // ("(vector? '(1 2))", RuntimeValue::Bool(false)),
+            // ("(vector? :hi)", RuntimeValue::Bool(false)),
+            // ("(= [] (vector))", RuntimeValue::Bool(true)),
+            // ("(sequential? '(1 2))", RuntimeValue::Bool(true)),
+            // ("(sequential? [1 2])", RuntimeValue::Bool(true)),
+            // ("(sequential? :hi)", RuntimeValue::Bool(false)),
+            // ("(sequential? nil)", RuntimeValue::Bool(false)),
+            // ("(sequential? \"abc\")", RuntimeValue::Bool(false)),
+            // ("(sequential? sequential?)", RuntimeValue::Bool(false)),
+            // ("(hash-map)", Map(PersistentMap::new())),
+            // (
+            //     "(hash-map :a 2)",
+            //     map_with_values(
+            //         [(Keyword("a".to_string(), None), RuntimeValue::Number(2))]
+            //             .iter()
+            //             .cloned(),
+            //     ),
+            // ),
+            // ("(map? {:a 1 :b 2})", RuntimeValue::Bool(true)),
+            // ("(map? {})", RuntimeValue::Bool(true)),
+            // ("(map? '())", RuntimeValue::Bool(false)),
+            // ("(map? [])", RuntimeValue::Bool(false)),
+            // ("(map? 'abc)", RuntimeValue::Bool(false)),
+            // ("(map? :abc)", RuntimeValue::Bool(false)),
+            // ("(map? [1 2])", RuntimeValue::Bool(false)),
+            // (
+            //     "(assoc {} :a 1)",
+            //     map_with_values(
+            //         [(Keyword("a".to_string(), None), RuntimeValue::Number(1))]
+            //             .iter()
+            //             .cloned(),
+            //     ),
+            // ),
+            // (
+            //     "(assoc {} :a 1 :b 3)",
+            //     map_with_values(
+            //         [
+            //             (Keyword("a".to_string(), None), RuntimeValue::Number(1)),
+            //             (Keyword("b".to_string(), None), RuntimeValue::Number(3)),
+            //         ]
+            //         .iter()
+            //         .cloned(),
+            //     ),
+            // ),
+            // (
+            //     "(assoc {:a 1} :b 3)",
+            //     map_with_values(
+            //         [
+            //             (Keyword("a".to_string(), None), RuntimeValue::Number(1)),
+            //             (Keyword("b".to_string(), None), RuntimeValue::Number(3)),
+            //         ]
+            //         .iter()
+            //         .cloned(),
+            //     ),
+            // ),
+            // (
+            //     "(assoc {:a 1} :a 3 :c 33)",
+            //     map_with_values(vec![
+            //         (Keyword("a".to_string(), None), RuntimeValue::Number(3)),
+            //         (Keyword("c".to_string(), None), RuntimeValue::Number(33)),
+            //     ]),
+            // ),
+            // (
+            //     "(assoc {} :a nil)",
+            //     map_with_values(vec![(Keyword("a".to_string(), None), RuntimeValue::Nil)]),
+            // ),
+            // ("(dissoc {})", map_with_values([].iter().cloned())),
+            // ("(dissoc {} :a)", map_with_values([].iter().cloned())),
+            // (
+            //     "(dissoc {:a 1 :b 3} :a)",
+            //     map_with_values(
+            //         [(Keyword("b".to_string(), None), RuntimeValue::Number(3))]
+            //             .iter()
+            //             .cloned(),
+            //     ),
+            // ),
+            // (
+            //     "(dissoc {:a 1 :b 3} :a :b :c)",
+            //     map_with_values([].iter().cloned()),
+            // ),
+            // ("(count (keys (assoc {} :b 2 :c 3)))", RuntimeValue::Number(2)),
+            // ("(get {:a 1} :a)", RuntimeValue::Number(1)),
+            // ("(get {:a 1} :b)", RuntimeValue::Nil),
+            // ("(get nil :b)", RuntimeValue::Nil),
+            // ("(contains? {:a 1} :b)", RuntimeValue::Bool(false)),
+            // ("(contains? {:a 1} :a)", RuntimeValue::Bool(true)),
+            // ("(contains? {:abc nil} :abc)", RuntimeValue::Bool(true)),
+            // ("(contains? nil :abc)", RuntimeValue::Bool(false)),
+            // ("(contains? nil 'abc)", RuntimeValue::Bool(false)),
+            // ("(contains? nil [1 2 3])", RuntimeValue::Bool(false)),
+            // ("(keyword? (nth (keys {:abc 123 :def 456}) 0))", RuntimeValue::Bool(true)),
+            // ("(keyword? (nth (vals {123 :abc 456 :def}) 0))", RuntimeValue::Bool(true)),
+            // ("(keys {})", RuntimeValue::Nil),
+            // ("(keys nil)", RuntimeValue::Nil),
+            // (
+            //     "(= (set '(:a :b :c)) (set (keys {:a 1 :b 2 :c 3})))",
+            //     RuntimeValue::Bool(true),
+            // ),
+            // (
+            //     "(= (set '(:a :c)) (set (keys {:a 1 :b 2 :c 3})))",
+            //     RuntimeValue::Bool(false),
+            // ),
+            // ("(vals {})", RuntimeValue::Nil),
+            // ("(vals nil)", RuntimeValue::Nil),
+            // (
+            //     "(= (set '(1 2 3)) (set (vals {:a 1 :b 2 :c 3})))",
+            //     RuntimeValue::Bool(true),
+            // ),
+            // (
+            //     "(= (set '(1 2)) (set (vals {:a 1 :b 2 :c 3})))",
+            //     RuntimeValue::Bool(false),
+            // ),
+            // ("(last '(1 2 3))", RuntimeValue::Number(3)),
+            // ("(last [1 2 3])", RuntimeValue::Number(3)),
+            // ("(last '())", RuntimeValue::Nil),
+            // ("(last [])", RuntimeValue::Nil),
+            // ("(not [])", RuntimeValue::Bool(false)),
+            // ("(not '(1 2 3))", RuntimeValue::Bool(false)),
+            // ("(not nil)", RuntimeValue::Bool(true)),
+            // ("(not true)", RuntimeValue::Bool(false)),
+            // ("(not false)", RuntimeValue::Bool(true)),
+            // ("(not 1)", RuntimeValue::Bool(false)),
+            // ("(not 0)", RuntimeValue::Bool(false)),
+            // ("(not :foo)", RuntimeValue::Bool(false)),
+            // ("(not \"a\")", RuntimeValue::Bool(false)),
+            // ("(not \"\")", RuntimeValue::Bool(false)),
+            // ("(not (= 1 1))", RuntimeValue::Bool(false)),
+            // ("(not (= 1 2))", RuntimeValue::Bool(true)),
+            // ("(set nil)", Set(PersistentSet::new())),
+            // // NOTE: these all rely on an _unguaranteed_ insertion order...
+            // (
+            //     "(set \"hi\")",
+            //     RuntimeValue::Set(PersistentSet::from_iter(vec![String("h".to_string()), String("i".to_string())]),
+            // ),
+            // ("(set '(1 2))", RuntimeValue::Set(PersistentSet::from_iter(vec![RuntimeValue::Number(1), RuntimeValue::Number(2)])),
+            // (
+            //     "(set '(1 2 1 2 1 2 2 2 2))",
+            //     RuntimeValue::Set(PersistentSet::from_iter(vec![RuntimeValue::Number(1), RuntimeValue::Number(2)]),
+            // ),
+            // (
+            //     "(set [1 2 1 2 1 2 2 2 2])",
+            //     RuntimeValue::Set(PersistentSet::from_iter(vec![RuntimeValue::Number(1), RuntimeValue::Number(2)]),
+            // ),
+            // (
+            //     "(set {1 2 3 4})",
+            //     RuntimeValue::Set(PersistentSet::from_iter(vec![
+            //         RuntimeValue::Vector(PersistentVector::from_iter(vec![RuntimeValue::Number(1), RuntimeValue::Number(2)]),
+            //         RuntimeValue::Vector(PersistentVector::from_iter(vec![RuntimeValue::Number(3), RuntimeValue::Number(4)]),
+            //     ]),
+            // ),
+            // (
+            //     "(set #{1 2 3 4})",
+            //     RuntimeValue::Set(PersistentSet::from_iter(vec![RuntimeValue::Number(1), RuntimeValue::Number(2), RuntimeValue::Number(3), RuntimeValue::Number(4)]),
+            // ),
+            // ("(set? #{1 2 3 4})", RuntimeValue::Bool(true)),
+            // ("(set? nil)", RuntimeValue::Bool(false)),
+            // ("(set? '())", RuntimeValue::Bool(false)),
+            // ("(set? [])", RuntimeValue::Bool(false)),
+            // ("(set? {})", RuntimeValue::Bool(false)),
+            // ("(set? #{})", RuntimeValue::Bool(true)),
+            // ("(set? \"a\")", RuntimeValue::Bool(false)),
+            // ("(set? :a)", RuntimeValue::Bool(false)),
+            // ("(set? 'a)", RuntimeValue::Bool(false)),
+            // ("(string? nil)", RuntimeValue::Bool(false)),
+            // ("(string? true)", RuntimeValue::Bool(false)),
+            // ("(string? false)", RuntimeValue::Bool(false)),
+            // ("(string? [1 2 3])", RuntimeValue::Bool(false)),
+            // ("(string? 1)", RuntimeValue::Bool(false)),
+            // ("(string? :hi)", RuntimeValue::Bool(false)),
+            // ("(string? \"hi\")", RuntimeValue::Bool(true)),
+            // ("(string? string?)", RuntimeValue::Bool(false)),
+            // ("(number? nil)", RuntimeValue::Bool(false)),
+            // ("(number? true)", RuntimeValue::Bool(false)),
+            // ("(number? false)", RuntimeValue::Bool(false)),
+            // ("(number? [1 2 3])", RuntimeValue::Bool(false)),
+            // ("(number? 1)", RuntimeValue::Bool(true)),
+            // ("(number? -1)", RuntimeValue::Bool(true)),
+            // ("(number? :hi)", RuntimeValue::Bool(false)),
+            // ("(number? \"hi\")", RuntimeValue::Bool(false)),
+            // ("(number? string?)", RuntimeValue::Bool(false)),
+            // ("(fn? nil)", RuntimeValue::Bool(false)),
+            // ("(fn? true)", RuntimeValue::Bool(false)),
+            // ("(fn? false)", RuntimeValue::Bool(false)),
+            // ("(fn? [1 2 3])", RuntimeValue::Bool(false)),
+            // ("(fn? 1)", RuntimeValue::Bool(false)),
+            // ("(fn? -1)", RuntimeValue::Bool(false)),
+            // ("(fn? :hi)", RuntimeValue::Bool(false)),
+            // ("(fn? \"hi\")", RuntimeValue::Bool(false)),
+            // ("(fn? string?)", RuntimeValue::Bool(true)),
+            // ("(fn? (fn* [a] a))", RuntimeValue::Bool(true)),
+            // ("(def! foo (fn* [a] a)) (fn? foo)", RuntimeValue::Bool(true)),
+            // ("(defmacro! foo (fn* [a] a)) (fn? foo)", RuntimeValue::Bool(true)),
+            // ("(conj (list) 1)", RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(1)])),
+            // (
+            //     "(conj (list 1) 2)",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(2), RuntimeValue::Number(1)]),
+            // ),
+            // (
+            //     "(conj (list 1 2) 3)",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(3), RuntimeValue::Number(1), RuntimeValue::Number(2)]),
+            // ),
+            // (
+            //     "(conj (list 2 3) 4 5 6)",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(6), RuntimeValue::Number(5), RuntimeValue::Number(4), RuntimeValue::Number(2), RuntimeValue::Number(3)]),
+            // ),
+            // (
+            //     "(conj (list 1) (list 2 3))",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![
+            //         RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(2), RuntimeValue::Number(3)]),
+            //         RuntimeValue::Number(1),
+            //     ]),
+            // ),
+            // ("(conj [] 1)", RuntimeValue::Vector(PersistentVector::from_iter(vec![RuntimeValue::Number(1)])),
+            // (
+            //     "(conj [1] 2)",
+            //     RuntimeValue::Vector(PersistentVector::from_iter(vec![RuntimeValue::Number(1), RuntimeValue::Number(2)]),
+            // ),
+            // (
+            //     "(conj [1 2 3] 4)",
+            //     RuntimeValue::Vector(PersistentVector::from_iter(vec![RuntimeValue::Number(1), RuntimeValue::Number(2), RuntimeValue::Number(3), RuntimeValue::Number(4)]),
+            // ),
+            // (
+            //     "(conj [1 2 3] 4 5)",
+            //     RuntimeValue::Vector(PersistentVector::from_iter(vec![RuntimeValue::Number(1), RuntimeValue::Number(2), RuntimeValue::Number(3), RuntimeValue::Number(4), RuntimeValue::Number(5)]),
+            // ),
+            // (
+            //     "(conj '(1 2 3) 4 5)",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(5), RuntimeValue::Number(4), RuntimeValue::Number(1), RuntimeValue::Number(2), RuntimeValue::Number(3)]),
+            // ),
+            // (
+            //     "(conj [3] [4 5])",
+            //     RuntimeValue::Vector(PersistentVector::from_iter(vec![
+            //         RuntimeValue::Number(3),
+            //         RuntimeValue::Vector(PersistentVector::from_iter(vec![RuntimeValue::Number(4), RuntimeValue::Number(5)]),
+            //     ]),
+            // ),
+            // (
+            //     "(conj {:c :d} [1 2] {:a :b :c :e})",
+            //     map_with_values(vec![
+            //         (
+            //             Keyword("c".to_string(), None),
+            //             Keyword("e".to_string(), None),
+            //         ),
+            //         (
+            //             Keyword("a".to_string(), None),
+            //             Keyword("b".to_string(), None),
+            //         ),
+            //         (RuntimeValue::Number(1), RuntimeValue::Number(2)),
+            //     ]),
+            // ),
+            // (
+            //     "(conj #{1 2} 1 3 2 2 2 2 1)",
+            //     RuntimeValue::Set(PersistentSet::from_iter(vec![RuntimeValue::Number(1), RuntimeValue::Number(2), RuntimeValue::Number(3)]),
+            // ),
+            // ("(macro? nil)", RuntimeValue::Bool(false)),
+            // ("(macro? true)", RuntimeValue::Bool(false)),
+            // ("(macro? false)", RuntimeValue::Bool(false)),
+            // ("(macro? [1 2 3])", RuntimeValue::Bool(false)),
+            // ("(macro? 1)", RuntimeValue::Bool(false)),
+            // ("(macro? -1)", RuntimeValue::Bool(false)),
+            // ("(macro? :hi)", RuntimeValue::Bool(false)),
+            // ("(macro? \"hi\")", RuntimeValue::Bool(false)),
+            // ("(macro? string?)", RuntimeValue::Bool(false)),
+            // ("(macro? {})", RuntimeValue::Bool(false)),
+            // ("(macro? (fn* [a] a))", RuntimeValue::Bool(false)),
+            // ("(def! foo (fn* [a] a)) (macro? foo)", RuntimeValue::Bool(false)),
+            // ("(defmacro! foo (fn* [a] a)) (macro? foo)", RuntimeValue::Bool(true)),
+            // ("(number? (time-ms))", RuntimeValue::Bool(true)),
+            // ("(seq nil)", RuntimeValue::Nil),
+            // ("(seq \"\")", RuntimeValue::Nil),
+            // (
+            //     "(seq \"ab\")",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![String("a".to_string()), String("b".to_string())]),
+            // ),
+            // ("(apply str (seq \"ab\"))", String("ab".to_string())),
+            // ("(seq '())", RuntimeValue::Nil),
+            // ("(seq '(1 2))", RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(1), RuntimeValue::Number(2)])),
+            // ("(seq [])", RuntimeValue::Nil),
+            // ("(seq [1 2])", RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Number(1), RuntimeValue::Number(2)])),
+            // ("(seq {})", RuntimeValue::Nil),
+            // (
+            //     "(seq {1 2})",
+            //     RuntimeValue::List(PersistentList::from_iter(vec![RuntimeValue::Vector(PersistentVector::from_iter(vec![RuntimeValue::Number(1), RuntimeValue::Number(2)])]))),
+            // ),
+            // ("(seq #{})", RuntimeValue::Nil),
+            // ("(= (set '(1 2)) (set (seq #{1 2})))", RuntimeValue::Bool(true)),
+            // ("(zero? 0)", RuntimeValue::Bool(true)),
+            // ("(zero? 10)", RuntimeValue::Bool(false)),
+            ("(zero? -10)", RuntimeValue::Bool(false)),
+        ];
+        run_eval_test(&test_cases);
+    }
 
-    // #[test]
-    // fn test_core_macros() {
-    //     let test_cases = &[("(defn f [x] (let [y 29] (+ x y))) (f 1)", Number(30))];
-    //     run_eval_test(test_cases);
-    // }
+    #[test]
+    fn test_core_macros() {
+        let test_cases = &[(
+            "(defn f [x] (let [y 29] (+ x y))) (f 1)",
+            RuntimeValue::Number(30),
+        )];
+        run_eval_test(test_cases);
+    }
 }

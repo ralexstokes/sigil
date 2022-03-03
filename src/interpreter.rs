@@ -118,9 +118,7 @@ fn eval_quasiquote_list_inner<'a>(
     elems: impl Iterator<Item = &'a RuntimeValue>,
 ) -> EvaluationResult<RuntimeValue> {
     let mut result = RuntimeValue::List(PersistentList::new());
-    dbg!(&result);
     for form in elems {
-        dbg!(form);
         match form {
             RuntimeValue::SpecialForm(SpecialForm::SpliceUnquote(form)) => {
                 result = RuntimeValue::List(PersistentList::from_iter(vec![
@@ -133,13 +131,12 @@ fn eval_quasiquote_list_inner<'a>(
                 ]));
             }
             form => {
-                dbg!(form);
                 result = RuntimeValue::List(PersistentList::from_iter(vec![
                     RuntimeValue::Symbol(Symbol {
                         identifier: "cons".to_string(),
                         namespace: Some("core".to_string()),
                     }),
-                    dbg!(eval_quasiquote(form)?),
+                    eval_quasiquote(form)?,
                     result,
                 ]));
             }
@@ -148,15 +145,124 @@ fn eval_quasiquote_list_inner<'a>(
     Ok(result)
 }
 
+fn eval_quasiquote_body_form(BodyForm { body }: &BodyForm) -> EvaluationResult<Vec<RuntimeValue>> {
+    body.iter()
+        .map(|form| eval_quasiquote(form))
+        .collect::<Result<Vec<_>, EvaluationError>>()
+}
+
+fn eval_quasiquote_let_form(
+    LetForm {
+        bindings,
+        body,
+        forward_declarations,
+    }: &LetForm,
+) -> EvaluationResult<RuntimeValue> {
+    let bindings = bindings
+        .iter()
+        .map(|(name, value)| Ok((name.clone(), Box::new(eval_quasiquote(value)?))))
+        .collect::<Result<Vec<_>, EvaluationError>>()?;
+    let body = eval_quasiquote_body_form(body)?;
+    let form = LetForm {
+        bindings,
+        body: BodyForm { body: body },
+        forward_declarations: forward_declarations.clone(),
+    };
+    Ok(RuntimeValue::SpecialForm(SpecialForm::Let(form)))
+}
+
+fn eval_quasiquote_if_form(
+    IfForm {
+        predicate,
+        consequent,
+        alternate,
+    }: &IfForm,
+) -> EvaluationResult<RuntimeValue> {
+    let predicate = eval_quasiquote(&predicate)?;
+    let consequent = eval_quasiquote(&consequent)?;
+    let alternate = if let Some(alternate) = alternate {
+        Some(Box::new(eval_quasiquote(&alternate)?))
+    } else {
+        None
+    };
+    Ok(RuntimeValue::SpecialForm(SpecialForm::If(IfForm {
+        predicate: Box::new(predicate),
+        consequent: Box::new(consequent),
+        alternate,
+    })))
+}
+
 fn eval_quasiquote_special_form(form: &SpecialForm) -> EvaluationResult<RuntimeValue> {
-    match form {
-        SpecialForm::Unquote(form) => Ok(*form.clone()),
-        _ => Ok(RuntimeValue::SpecialForm(form.clone())),
-    }
+    let form = match form {
+        SpecialForm::Def(form) => match form {
+            DefForm::Bound(name, value) => RuntimeValue::SpecialForm(SpecialForm::Def(
+                DefForm::Bound(name.clone(), Box::new(eval_quasiquote(value)?)),
+            )),
+            other => RuntimeValue::SpecialForm(SpecialForm::Def(other.clone())),
+        },
+        SpecialForm::Var(..) => RuntimeValue::SpecialForm(form.clone()),
+        SpecialForm::Let(form) => eval_quasiquote_let_form(form)?,
+        SpecialForm::Loop(form) => eval_quasiquote_let_form(form)?,
+        SpecialForm::Recur(form) => RuntimeValue::SpecialForm(SpecialForm::Recur(BodyForm {
+            body: eval_quasiquote_body_form(form)?,
+        })),
+        SpecialForm::If(form) => eval_quasiquote_if_form(form)?,
+        SpecialForm::Do(form) => RuntimeValue::SpecialForm(SpecialForm::Do(BodyForm {
+            body: eval_quasiquote_body_form(form)?,
+        })),
+        SpecialForm::Fn(form) => RuntimeValue::SpecialForm(SpecialForm::Fn(FnForm {
+            parameters: form.parameters.clone(),
+            variadic: form.variadic.clone(),
+            body: BodyForm {
+                body: eval_quasiquote_body_form(&form.body)?,
+            },
+        })),
+        SpecialForm::Quote(form) => {
+            RuntimeValue::SpecialForm(SpecialForm::Quote(Box::new(eval_quasiquote(form)?)))
+        }
+        SpecialForm::Quasiquote(form) => {
+            RuntimeValue::SpecialForm(SpecialForm::Quasiquote(Box::new(eval_quasiquote(form)?)))
+        }
+        SpecialForm::Unquote(form) => *form.clone(),
+        SpecialForm::SpliceUnquote(form) => {
+            RuntimeValue::SpecialForm(SpecialForm::SpliceUnquote(Box::new(eval_quasiquote(form)?)))
+        }
+        SpecialForm::Defmacro(name, form) => RuntimeValue::SpecialForm(SpecialForm::Defmacro(
+            name.clone(),
+            FnForm {
+                parameters: form.parameters.clone(),
+                variadic: form.variadic.clone(),
+                body: BodyForm {
+                    body: eval_quasiquote_body_form(&form.body)?,
+                },
+            },
+        )),
+        SpecialForm::Macroexpand(form) => {
+            RuntimeValue::SpecialForm(SpecialForm::Macroexpand(Box::new(eval_quasiquote(form)?)))
+        }
+        SpecialForm::Try(TryForm { body, catch }) => {
+            let catch = if let Some(catch) = catch {
+                Some(CatchForm {
+                    exception_binding: catch.exception_binding.clone(),
+                    body: BodyForm {
+                        body: eval_quasiquote_body_form(body)?,
+                    },
+                })
+            } else {
+                None
+            };
+            RuntimeValue::SpecialForm(SpecialForm::Try(TryForm {
+                body: BodyForm {
+                    body: eval_quasiquote_body_form(body)?,
+                },
+                catch,
+            }))
+        }
+    };
+    Ok(form)
 }
 
 fn eval_quasiquote(form: &RuntimeValue) -> EvaluationResult<RuntimeValue> {
-    dbg!(form);
     match form {
         RuntimeValue::SpecialForm(form) => eval_quasiquote_special_form(form),
         RuntimeValue::List(elems) => eval_quasiquote_list_inner(elems.reverse().iter()),
@@ -170,7 +276,7 @@ fn eval_quasiquote(form: &RuntimeValue) -> EvaluationResult<RuntimeValue> {
         elem @ RuntimeValue::Map(_) | elem @ RuntimeValue::Symbol(..) => Ok(
             RuntimeValue::SpecialForm(SpecialForm::Quote(Box::new(elem.clone()))),
         ),
-        v => Ok(dbg!(v.clone())),
+        v => Ok(v.clone()),
     }
 }
 
@@ -344,34 +450,6 @@ impl Interpreter {
         let _ = self.scopes.pop().expect("no underflow in scope stack");
     }
 
-    // fn apply_macro(
-    //     &mut self,
-    //     f: &FnImpl,
-    //     operands: &PersistentList<Value>,
-    // ) -> EvaluationResult<Value> {
-    //     let result = self.apply_fn_inner(f, operands, operands.len())?;
-    //     if let Value::List(forms) = result {
-    //         return self.expand_macro_if_present(&forms);
-    //     }
-    //     Ok(result)
-    // }
-
-    // fn expand_macro_if_present(
-    //     &mut self,
-    //     forms: &PersistentList<Value>,
-    // ) -> EvaluationResult<Value> {
-    //     if let Some(first) = forms.first() {
-    //         let rest = forms.drop_first().expect("list is not empty");
-    //         if let Some(expansion) = self.get_macro_expansion(first, &rest) {
-    //             expansion
-    //         } else {
-    //             Ok(Value::List(forms.clone()))
-    //         }
-    //     } else {
-    //         Ok(Value::List(PersistentList::new()))
-    //     }
-    // }
-
     // pub fn extend_from_captures(
     //     &mut self,
     //     captures: &HashMap<String, Option<Value>>,
@@ -386,30 +464,6 @@ impl Interpreter {
     //         }
     //     }
     //     Ok(())
-    // }
-
-    // pub(crate) fn get_macro_expansion(
-    //     &mut self,
-    //     operator: &Value,
-    //     operands: &PersistentList<Value>,
-    // ) -> Option<EvaluationResult<Value>> {
-    //     match operator {
-    //         Value::Symbol(identifier, ns_opt) => {
-    //             if let Ok(Value::Macro(f)) = self.resolve_symbol(identifier, ns_opt.as_ref()) {
-    //                 Some(self.apply_macro(&f, operands))
-    //             } else {
-    //                 None
-    //             }
-    //         }
-    //         Value::Var(v) => {
-    //             if let Some(Value::Macro(f)) = var_impl_into_inner(v) {
-    //                 Some(self.apply_macro(&f, operands))
-    //             } else {
-    //                 None
-    //             }
-    //         }
-    //         _ => None,
-    //     }
     // }
 
     fn resolve_in_lexical_scopes(&self, identifier: &Identifier) -> RuntimeValue {
@@ -574,7 +628,6 @@ impl Interpreter {
 
     fn eval_quasiquote(&mut self, form: &RuntimeValue) -> EvaluationResult<RuntimeValue> {
         let expansion = eval_quasiquote(form)?;
-        dbg!(&expansion);
         self.evaluate_analyzed_form(&expansion)
     }
 
@@ -684,7 +737,6 @@ impl Interpreter {
     ) -> EvaluationResult<RuntimeValue> {
         if let Some(operator) = coll.first() {
             let operands = coll.drop_first().unwrap();
-            // TODO loop macroexpand
             match self.evaluate_analyzed_form(operator)? {
                 RuntimeValue::Fn(f) => {
                     let operands = operands
@@ -700,7 +752,10 @@ impl Interpreter {
                         .collect::<Result<Vec<RuntimeValue>, _>>()?;
                     f.apply(self, &operands)
                 }
-                RuntimeValue::Macro(f) => self.apply_macro(&f, &operands),
+                RuntimeValue::Macro(f) => {
+                    let expansion = self.apply_macro(&f, &operands)?;
+                    self.evaluate_analyzed_form(&expansion)
+                }
                 v => Err(EvaluationError::CannotInvoke(v)),
             }
         } else {
@@ -822,7 +877,7 @@ mod test {
     use crate::reader::{self, Form, Symbol};
     use crate::testing::run_eval_test;
     use crate::value::{
-        exception,
+        exception, AtomRef,
         RuntimeValue::{self, *},
         Var,
     };
@@ -1168,56 +1223,63 @@ mod test {
     #[test]
     fn test_basic_atoms() {
         let test_cases = vec![
-            // ("(atom 5)", new_atom(Number(5))),
-            // ("(atom? (atom 5))", Bool(true)),
-            // ("(atom? nil)", Bool(false)),
-            // ("(atom? 1)", Bool(false)),
-            // ("(def! a (atom 5)) (deref a)", Number(5)),
-            // ("(def! a (atom 5)) @a", Number(5)),
-            // ("(def! a (atom (fn* [a] (+ a 1)))) (@a 4)", Number(5)),
-            // ("(def! a (atom 5)) (reset! a 10)", Number(10)),
-            // ("(def! a (atom 5)) (reset! a 10) @a", Number(10)),
-            // (
-            //     "(def! a (atom 5)) (def! inc (fn* [x] (+ x 1))) (swap! a inc)",
-            //     Number(6),
-            // ),
-            // ("(def! a (atom 5)) (swap! a + 1 2 3 4 5)", Number(20)),
-            // (
-            //     "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (deref a)",
-            //     Number(20),
-            // ),
-            // (
-            //     "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (reset! a 10)",
-            //     Number(10),
-            // ),
-            // (
-            //     "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (reset! a 10) (deref a)",
-            //     Number(10),
-            // ),
+            ("(atom 5)", RuntimeValue::Atom(AtomRef::new(Number(5)))),
+            ("(atom? (atom 5))", Bool(true)),
+            ("(atom? nil)", Bool(false)),
+            ("(atom? 1)", Bool(false)),
+            ("(def! a (atom 5)) (deref a)", Number(5)),
+            ("(def! a (atom 5)) @a", Number(5)),
+            ("(def! a (atom (fn* [a] (+ a 1)))) (@a 4)", Number(5)),
+            ("(def! a (atom 5)) (reset! a 10)", Number(10)),
+            ("(def! a (atom 5)) (reset! a 10) @a", Number(10)),
+            (
+                "(def! a (atom 5)) (def! inc (fn* [x] (+ x 1))) (swap! a inc)",
+                Number(6),
+            ),
+            ("(def! a (atom 5)) (swap! a + 1 2 3 4 5)", Number(20)),
+            (
+                "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (deref a)",
+                Number(20),
+            ),
+            (
+                "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (reset! a 10)",
+                Number(10),
+            ),
+            (
+                "(def! a (atom 5)) (swap! a + 1 2 3 4 5) (reset! a 10) (deref a)",
+                Number(10),
+            ),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_advanced_atoms() {
+        let test_cases = vec![
             (
                 "(def! a (atom 7)) (def! f (fn* [] (swap! a inc))) (f) (f)",
                 Number(9),
             ),
-            // (
-            //     "(def! g (let* [a (atom 0)] (fn* [] (swap! a inc)))) (def! a (atom 1)) (g) (g) (g)",
-            //     Number(3),
-            // ),
-            // (
-            //     "(def! e (atom {:+ +})) (swap! e assoc :- -) ((get @e :+) 7 8)",
-            //     Number(15),
-            // ),
-            // (
-            //     "(def! e (atom {:+ +})) (swap! e assoc :- -) ((get @e :-) 11 8)",
-            //     Number(3),
-            // ),
-            // (
-            //     "(def! e (atom {:+ +})) (swap! e assoc :- -) (swap! e assoc :foo ()) (get @e :foo)",
-            //     RuntimeValue::List(PersistentList::new()),
-            // ),
-            // (
-            //     "(def! e (atom {:+ +})) (swap! e assoc :- -) (swap! e assoc :bar '(1 2 3)) (get @e :bar)",
-            //     RuntimeValue::List(PersistentList::from_iter(vec![Number(1), Number(2), Number(3)])),
-            // ),
+            (
+                "(def! g (let* [a (atom 0)] (fn* [] (swap! a inc)))) (def! a (atom 1)) (g) (g) (g)",
+                Number(3),
+            ),
+            (
+                "(def! e (atom {:+ +})) (swap! e assoc :- -) ((get @e :+) 7 8)",
+                Number(15),
+            ),
+            (
+                "(def! e (atom {:+ +})) (swap! e assoc :- -) ((get @e :-) 11 8)",
+                Number(3),
+            ),
+            (
+                "(def! e (atom {:+ +})) (swap! e assoc :- -) (swap! e assoc :foo ()) (get @e :foo)",
+                RuntimeValue::List(PersistentList::new()),
+            ),
+            (
+                "(def! e (atom {:+ +})) (swap! e assoc :- -) (swap! e assoc :bar '(1 2 3)) (get @e :bar)",
+                RuntimeValue::List(PersistentList::from_iter(vec![Number(1), Number(2), Number(3)])),
+            ),
         ];
         run_eval_test(&test_cases);
     }
@@ -1403,47 +1465,65 @@ mod test {
                 "(defmacro! unless (fn* [pred a b] `(if ~pred ~b ~a))) (unless false 7 8)",
                 Number(7),
             ),
-            // ("(defmacro! unless (fn* [pred a b] `(if ~pred ~b ~a))) (unless true 7 8)", Number(8)),
-            // ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (unless false 7 8)", Number(7)),
-            // ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (unless true 7 8)", Number(8)),
-            // ("(defmacro! one (fn* [] 1)) (macroexpand (one))", Number(1)),
-            // ("(defmacro! unless (fn* [pred a b] `(if ~pred ~b ~a))) (macroexpand '(unless PRED A B))",
-            //     read_one_value("(if PRED B A)")
-            // ),
-            // ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (macroexpand '(unless PRED A B))",
-            //     read_one_value("(if (not PRED) A B)")
-            // ),
-            // ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (macroexpand '(unless 2 3 4))",
-            //     read_one_value("(if (not 2) 3 4)")
-            // ),
-            // ("(defmacro! identity (fn* [x] x)) (let* [a 123] (macroexpand (identity a)))",
-            //     Number(123),
-            // ),
-            // ("(defmacro! identity (fn* [x] x)) (let* [a 123] (identity a))",
-            //     Number(123),
-            // ),
-            // ("(macroexpand (cond))", Nil),
-            // ("(cond)", Nil),
-            // ("(macroexpand '(cond X Y))",
-            //     read_one_value("(if X Y (cond))")
-            // ),
-            // ("(cond true 7)", Number(7)),
-            // ("(cond true 7 true 8)", Number(7)),
-            // ("(cond false 7)", Nil),
-            // ("(cond false 7 true 8)", Number(8)),
-            // ("(cond false 7 false 8 :else 9)", Number(9)),
-            // ("(cond false 7 (= 2 2) 8 :else 9)", Number(8)),
-            // ("(cond false 7 false 8 false 9)", Nil),
-            // ("(let* [x (cond false :no true :yes)] x)", Keyword(Symbol {
-            //     identifier: "yes".to_string(),
-            //     namespace: None,
-            // })),
-            // ("(macroexpand '(cond X Y Z T))",
-            //     read_one_value("(if X Y (cond Z T))")
-            // ),
-            // ("(def! x 2) (defmacro! a (fn* [] x)) (a)", Number(2)),
-            // ("(def! x 2) (defmacro! a (fn* [] x)) (let* [x 3] (a))", Number(2)),
-            // ("(def! f (fn* [x] (number? x))) (defmacro! m f) [(f (+ 1 1)) (m (+ 1 1))]", RuntimeValue::Vector(PersistentVector::from_iter(vec![Bool(true), Bool(false)]))),
+            (
+                "(defmacro! unless (fn* [pred a b] `(if ~pred ~b ~a))) (unless true 7 8)",
+                Number(8),
+            ),
+            ("(defmacro! one (fn* [] 1)) (macroexpand (one))", Number(1)),
+            (
+                "(defmacro! identity (fn* [x] x)) (let* [a 123] (macroexpand (identity a)))",
+                Number(123),
+            ),
+            (
+                "(defmacro! identity (fn* [x] x)) (let* [a 123] (identity a))",
+                Number(123),
+            ),
+            ("(def! x 2) (defmacro! a (fn* [] x)) (a)", Number(2)),
+            (
+                "(def! x 2) (defmacro! a (fn* [] x)) (let* [x 3] (a))",
+                Number(2),
+            ),
+        ];
+        run_eval_test(&test_cases);
+    }
+
+    #[test]
+    fn test_advanced_macros() {
+        let test_cases = vec![
+            ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (unless false 7 8)", Number(7)),
+            ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (unless true 7 8)", Number(8)),
+            ("(defmacro! unless (fn* [pred a b] `(if ~pred ~b ~a))) (macroexpand '(unless PRED A B))",
+                read_one_value("(if PRED B A)")
+            ),
+            ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (macroexpand '(unless PRED A B))",
+                read_one_value("(if (not PRED) A B)")
+            ),
+            ("(defmacro! unless (fn* [pred a b] (list 'if (list 'not pred) a b))) (macroexpand '(unless 2 3 4))",
+                read_one_value("(if (not 2) 3 4)")
+            ),
+            ("(macroexpand (cond))", Nil),
+            ("(cond)", Nil),
+            ("(macroexpand '(cond X Y))",
+                read_one_value("(if X Y (cond))")
+            ),
+            ("(cond true 7)", Number(7)),
+            ("(cond true 7 true 8)", Number(7)),
+            ("(cond false 7)", Nil),
+            ("(cond false 7 true 8)", Number(8)),
+            ("(cond false 7 false 8 :else 9)", Number(9)),
+            ("(cond false 7 (= 2 2) 8 :else 9)", Number(8)),
+            ("(cond false 7 false 8 false 9)", Nil),
+            ("(let* [x (cond false :no true :yes)] x)", Keyword(Symbol {
+                identifier: "yes".to_string(),
+                namespace: None,
+            })),
+            ("(macroexpand '(cond X Y Z T))",
+                read_one_value("(if X Y (cond Z T))")
+            ),
+            (
+                "(def! f (fn* [x] (number? x))) (defmacro! m f) [(f (+ 1 1)) (m (+ 1 1))]",
+                RuntimeValue::Vector(PersistentVector::from_iter(vec![Bool(true), Bool(false)])),
+            ),
         ];
         run_eval_test(&test_cases);
     }

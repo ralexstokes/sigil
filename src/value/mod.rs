@@ -428,13 +428,6 @@ impl FnForm {
     }
 }
 
-// #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-// pub enum QuasiquoteForm {
-//     Form(Box<RuntimeValue>),
-//     Unquote(Box<RuntimeValue>),
-//     SpliceUnquote(Box<RuntimeValue>),
-// }
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct TryForm {
     pub body: BodyForm,
