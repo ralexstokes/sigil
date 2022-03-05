@@ -3,13 +3,13 @@ use crate::{
     namespace::{Context as NamespaceContext, NamespaceError},
     reader::{Atom, Form, Identifier, Symbol},
     value::{
-        BodyForm, CatchForm, DefForm, FnForm, IfForm, LetForm, LexicalBindings, LexicalForm,
-        RuntimeValue, SpecialForm, TryForm,
+        BodyForm, CatchForm, DefForm, FnForm, FnImpl, FnWithCapturesImpl, IfForm, LetForm,
+        LexicalBindings, LexicalForm, RuntimeValue, SpecialForm, TryForm,
     },
 };
 use itertools::Itertools;
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 use thiserror::Error;
@@ -329,13 +329,28 @@ type GlobalScope = HashSet<Symbol>;
 
 type Scopes = Vec<LexicalScope>;
 
-fn identifier_is_in_lexical_scope(scopes: &Scopes, identifier: &Identifier) -> bool {
-    for scope in scopes.iter().rev() {
+fn lexical_frame_for_identifier(scopes: &Scopes, identifier: &Identifier) -> Option<usize> {
+    for (index, scope) in scopes.iter().enumerate().rev() {
         if scope.contains(identifier) {
-            return true;
+            return Some(index);
         }
     }
-    false
+    None
+}
+
+fn is_forward_visible(form: &Form) -> bool {
+    match form {
+        Form::List(elems) => {
+            if let Some(first) = elems.first() {
+                return matches!(first, Form::Atom(Atom::Symbol(Symbol{
+                    identifier,
+                    namespace: None
+                })) if identifier == "fn*");
+            }
+            false
+        }
+        _ => false,
+    }
 }
 
 #[derive(Debug)]
@@ -351,6 +366,9 @@ pub struct Analyzer {
     scopes: Scopes,
     // track mutations to namespaces, e.g. via simulated `def!`
     global_scope: GlobalScope,
+    // track identifiers that outlive their lexical lifetime
+    captures: Scopes,
+    forward_declarations: Vec<HashMap<Identifier, bool>>,
     contexts: Vec<Context>,
 }
 
@@ -360,6 +378,8 @@ impl Analyzer {
             namespaces,
             scopes: vec![],
             global_scope: GlobalScope::default(),
+            captures: vec![],
+            forward_declarations: vec![],
             contexts: vec![Context::Default],
         }
     }
@@ -367,7 +387,13 @@ impl Analyzer {
     pub fn reset(&mut self) {
         debug_assert!(self.scopes.is_empty());
         debug_assert!(self.contexts.len() == 1);
+        debug_assert!(self.captures.is_empty());
+        debug_assert!(self.forward_declarations.is_empty());
         self.global_scope.clear();
+    }
+
+    fn current_lexical_frame(&self) -> usize {
+        self.scopes.len() - 1
     }
 
     // (def! name value?)
@@ -409,17 +435,32 @@ impl Analyzer {
         E: From<LexicalError>,
         AnalysisError: From<E>,
     {
-        // TODO make sure names are not special forms...
         match lexical_mode {
             LexicalMode::Bound => {
-                let mut bindings = vec![];
+                let mut names = vec![];
+                let mut values = vec![];
                 for (name, value) in bindings_form.iter().tuples() {
                     let analyzed_name =
                         extract_symbol_without_namespace(name).map_err(|e| E::from(e.into()))?;
+                    let forward_visible = is_forward_visible(value);
+                    if forward_visible {
+                        let forward_decls = self.forward_declarations.last_mut().unwrap();
+                        forward_decls.insert(analyzed_name.clone(), false);
+                    }
+                    names.push((analyzed_name, forward_visible));
+                    values.push(value);
+                }
+
+                let mut bindings = vec![];
+                for ((analyzed_name, forward_visible), value) in
+                    names.iter().zip(values.into_iter())
+                {
                     let analyzed_value = self.analyze(value)?;
                     bindings.push((analyzed_name.clone(), Box::new(analyzed_value)));
-                    let current_scope = self.scopes.last_mut().unwrap();
-                    current_scope.insert(analyzed_name);
+                    if !forward_visible {
+                        let current_scope = self.scopes.last_mut().unwrap();
+                        current_scope.insert(analyzed_name.clone());
+                    }
                 }
                 Ok(LexicalBindings::Bound(bindings))
             }
@@ -452,6 +493,10 @@ impl Analyzer {
         let (bindings_form, body) = extract_lexical_form(forms, lexical_mode).map_err(E::from)?;
 
         self.scopes.push(LexicalScope::default());
+        self.captures.push(LexicalScope::default());
+        if matches!(lexical_mode, LexicalMode::Bound) {
+            self.forward_declarations.push(Default::default());
+        }
 
         let bindings = self.analyze_lexical_bindings::<E>(&bindings_form, lexical_mode)?;
 
@@ -465,17 +510,31 @@ impl Analyzer {
             })?;
 
         self.scopes.pop();
+        let captures = self.captures.pop().unwrap();
+        let forward_declarations = if matches!(lexical_mode, LexicalMode::Bound) {
+            let forward_decls = self.forward_declarations.pop().unwrap();
+            let mut result = HashSet::new();
+            for (name, &used) in &forward_decls {
+                if used {
+                    result.insert(bindings.index_for_name(name));
+                }
+            }
+            Some(result)
+        } else {
+            None
+        };
 
         Ok(LexicalForm {
             bindings,
             body: BodyForm { body },
+            forward_declarations,
+            captures,
         })
     }
 
     // (let* [bindings*] body*)
     fn analyze_let(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         let lexical_form = self.analyze_lexical_form::<LetError>(args, LexicalMode::Bound)?;
-        let forward_declarations = lexical_form.resolve_forward_declarations();
         let bindings = match lexical_form.bindings {
             LexicalBindings::Bound(bindings) => bindings,
             LexicalBindings::Unbound(..) => {
@@ -485,14 +544,13 @@ impl Analyzer {
         Ok(RuntimeValue::SpecialForm(SpecialForm::Let(LetForm {
             bindings,
             body: lexical_form.body,
-            forward_declarations,
+            forward_declarations: lexical_form.forward_declarations.unwrap(),
         })))
     }
 
     // (loop* [bindings*] body*)
     fn analyze_loop(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
         let lexical_form = self.analyze_lexical_form::<LoopError>(args, LexicalMode::Bound)?;
-        let forward_declarations = lexical_form.resolve_forward_declarations();
         let bindings = match lexical_form.bindings {
             LexicalBindings::Bound(bindings) => bindings,
             LexicalBindings::Unbound(..) => {
@@ -502,7 +560,7 @@ impl Analyzer {
         Ok(RuntimeValue::SpecialForm(SpecialForm::Loop(LetForm {
             bindings,
             body: lexical_form.body,
-            forward_declarations,
+            forward_declarations: lexical_form.forward_declarations.unwrap(),
         })))
     }
 
@@ -548,9 +606,19 @@ impl Analyzer {
         })))
     }
 
-    fn extract_fn_form(&mut self, args: &[Form]) -> AnalysisResult<FnForm> {
-        let LexicalForm { bindings, body } =
-            self.analyze_lexical_form::<FnError>(args, LexicalMode::Unbound)?;
+    fn analyze_fn_body(&mut self, BodyForm { body }: BodyForm) -> AnalysisResult<BodyForm> {
+        // TODO hoisting...
+        Ok(BodyForm { body })
+    }
+
+    // (fn* [parameters*] body*)
+    fn analyze_fn(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
+        let LexicalForm {
+            bindings,
+            body,
+            captures,
+            ..
+        } = self.analyze_lexical_form::<FnError>(args, LexicalMode::Unbound)?;
         let parameters = match bindings {
             LexicalBindings::Unbound(parameters) => parameters,
             _ => unreachable!("lexical bindings have been validated to only have unbound symbols"),
@@ -558,18 +626,25 @@ impl Analyzer {
 
         let (parameters, variadic) = analyze_fn_parameters(parameters)?;
 
-        Ok(FnForm {
+        let body = self.analyze_fn_body(body)?;
+
+        let fn_form = FnForm {
             parameters,
             variadic,
             body,
-        })
-    }
+        };
+        let fn_impl = if captures.is_empty() {
+            FnImpl::Default(fn_form)
+        } else {
+            FnImpl::WithCaptures(FnWithCapturesImpl {
+                form: fn_form,
+                captures: HashMap::from_iter(
+                    captures.iter().map(|identifier| (identifier.clone(), None)),
+                ),
+            })
+        };
 
-    // (fn* [parameters*] body*)
-    fn analyze_fn(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
-        let fn_form = self.extract_fn_form(args)?;
-
-        Ok(RuntimeValue::SpecialForm(SpecialForm::Fn(fn_form)))
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Fn(fn_impl)))
     }
 
     // (quote form)
@@ -634,7 +709,12 @@ impl Analyzer {
 
         let name = extract_symbol(&args[0]).map_err(DefmacroError::from)?;
         let body = match self.analyze(&args[1])? {
-            RuntimeValue::SpecialForm(SpecialForm::Fn(fn_form)) => fn_form,
+            RuntimeValue::SpecialForm(SpecialForm::Fn(fn_form)) => match fn_form {
+                FnImpl::Default(fn_form) => fn_form,
+                FnImpl::WithCaptures(..) => unimplemented!(
+                    "macros cannot captures over their external environment currently"
+                ),
+            },
             _ => {
                 return Err(DefmacroError::Type(TypeError {
                     expected: "fn* form".to_string(),
@@ -799,15 +879,30 @@ impl Analyzer {
         matches!(current_context, Context::Quote | Context::Quasiquote)
     }
 
-    pub fn analyze_symbol(&self, symbol: &Symbol) -> AnalysisResult<RuntimeValue> {
-        if symbol.namespace.is_none()
-            && identifier_is_in_lexical_scope(&self.scopes, &symbol.identifier)
-        {
-            return Ok(RuntimeValue::LexicalSymbol(symbol.identifier.clone()));
-        }
-
+    fn analyze_symbol(&mut self, symbol: &Symbol) -> AnalysisResult<RuntimeValue> {
         if self.should_not_resolve_symbols() {
             return Ok(RuntimeValue::Symbol(symbol.clone()));
+        }
+
+        if symbol.simple() {
+            if let Some(forward_decls) = self.forward_declarations.last_mut() {
+                if let Some(used) = forward_decls.get_mut(&symbol.identifier) {
+                    *used = true;
+                    return Ok(RuntimeValue::LexicalSymbol(symbol.identifier.clone()));
+                }
+            }
+
+            if let Some(origin_frame) =
+                lexical_frame_for_identifier(&self.scopes, &symbol.identifier)
+            {
+                let identifier = symbol.identifier.clone();
+
+                if origin_frame < self.current_lexical_frame() {
+                    let captures = self.captures.last_mut().unwrap();
+                    captures.insert(identifier.clone());
+                }
+                return Ok(RuntimeValue::LexicalSymbol(identifier));
+            }
         }
 
         let result = self
@@ -864,5 +959,108 @@ impl Analyzer {
             ),
         };
         Ok(analyzed_form)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        namespace::Context as NamespaceContext,
+        reader::read,
+        value::{BodyForm, FnForm, FnImpl, FnWithCapturesImpl, LetForm, RuntimeValue, SpecialForm},
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_analysis_no_captures() {
+        let namespaces = Rc::new(RefCell::new(NamespaceContext::default()));
+        let mut analyzer = Analyzer::new(namespaces);
+
+        let source = "(let* [x 3] (fn* [y] y))";
+        let form = read(source).expect("is valid source");
+        let result = analyzer.analyze(&form[0]).expect("can be analyzed");
+
+        let param = Identifier::from("y");
+        let fn_form = RuntimeValue::SpecialForm(SpecialForm::Fn(FnImpl::Default(FnForm {
+            parameters: vec![param.clone()],
+            variadic: None,
+            body: BodyForm {
+                body: vec![RuntimeValue::LexicalSymbol(param)],
+            },
+        })));
+        let expected_form = RuntimeValue::SpecialForm(SpecialForm::Let(LetForm {
+            bindings: vec![(Identifier::from("x"), Box::new(RuntimeValue::Number(3)))],
+            body: BodyForm {
+                body: vec![fn_form],
+            },
+            forward_declarations: HashSet::new(),
+        }));
+
+        assert_eq!(result, expected_form);
+    }
+
+    #[test]
+    fn test_analysis_with_captures() {
+        let namespaces = Rc::new(RefCell::new(NamespaceContext::default()));
+        let mut analyzer = Analyzer::new(namespaces);
+
+        let source = "(let* [x 3] (fn* [] x))";
+        let form = read(source).expect("is valid source");
+        let result = analyzer.analyze(&form[0]).expect("can be analyzed");
+
+        let param = Identifier::from("x");
+        let fn_form =
+            RuntimeValue::SpecialForm(SpecialForm::Fn(FnImpl::WithCaptures(FnWithCapturesImpl {
+                form: FnForm {
+                    parameters: vec![],
+                    variadic: None,
+                    body: BodyForm {
+                        body: vec![RuntimeValue::LexicalSymbol(param.clone())],
+                    },
+                },
+                captures: HashMap::from_iter([(param.clone(), None)]),
+            })));
+        let expected_form = RuntimeValue::SpecialForm(SpecialForm::Let(LetForm {
+            bindings: vec![(Identifier::from("x"), Box::new(RuntimeValue::Number(3)))],
+            body: BodyForm {
+                body: vec![fn_form],
+            },
+            forward_declarations: HashSet::new(),
+        }));
+
+        assert_eq!(result, expected_form);
+    }
+
+    #[test]
+    fn test_analysis_with_nested_captures() {
+        let namespaces = Rc::new(RefCell::new(NamespaceContext::default()));
+        let mut analyzer = Analyzer::new(namespaces);
+
+        let source = "(let* [x 12] (fn* [] (fn* [] x)))";
+        let form = read(source).expect("is valid source");
+        let result = analyzer.analyze(&form[0]).expect("can be analyzed");
+
+        let param = Identifier::from("x");
+        let fn_form =
+            RuntimeValue::SpecialForm(SpecialForm::Fn(FnImpl::WithCaptures(FnWithCapturesImpl {
+                form: FnForm {
+                    parameters: vec![],
+                    variadic: None,
+                    body: BodyForm {
+                        body: vec![RuntimeValue::LexicalSymbol(param.clone())],
+                    },
+                },
+                captures: HashMap::from_iter([(param.clone(), None)]),
+            })));
+        let expected_form = RuntimeValue::SpecialForm(SpecialForm::Let(LetForm {
+            bindings: vec![(Identifier::from("x"), Box::new(RuntimeValue::Number(3)))],
+            body: BodyForm {
+                body: vec![fn_form],
+            },
+            forward_declarations: HashSet::new(),
+        }));
+
+        assert_eq!(result, expected_form);
     }
 }

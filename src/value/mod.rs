@@ -5,34 +5,21 @@ use crate::collections::{PersistentList, PersistentMap, PersistentSet, Persisten
 use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter};
 use crate::reader::{Atom, Identifier, Symbol};
 use crate::writer::{
-    unescape_string, write_bool, write_fn, write_identifer, write_keyword, write_list, write_macro,
-    write_map, write_nil, write_number, write_primitive, write_set, write_special_form,
-    write_string, write_symbol, write_var, write_vector,
+    unescape_string, write_bool, write_exception, write_fn, write_identifer, write_keyword,
+    write_list, write_macro, write_map, write_nil, write_number, write_primitive, write_set,
+    write_special_form, write_string, write_symbol, write_var, write_vector,
 };
 pub use atom::AtomRef;
 use itertools::{sorted, Itertools};
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
 use std::mem::discriminant;
+use std::ops::Deref;
 pub use var::Var;
 
-pub fn exception(msg: &str, data: RuntimeValue) -> ExceptionImpl {
-    ExceptionImpl::User(UserException {
-        message: msg.to_string(),
-        data: Box::new(data),
-    })
-}
-
-pub fn exception_from_system_err(err: EvaluationError) -> RuntimeValue {
-    let inner = match err {
-        EvaluationError::Exception(exc) => exc,
-        err => ExceptionImpl::System(Box::new(err)),
-    };
-    RuntimeValue::Exception(inner)
-}
-
+pub type Scope = HashMap<Identifier, RuntimeValue>;
 pub type NativeFn = fn(&mut Interpreter, &[RuntimeValue]) -> EvaluationResult<RuntimeValue>;
 
 #[derive(Clone)]
@@ -91,67 +78,20 @@ impl Primitive {
     }
 }
 
-// #[derive(Debug, Clone, Eq)]
-// pub struct FnWithCapturesImpl {
-//     pub f: FnImpl,
-//     pub captures: HashMap<String, Option<RuntimeValue>>,
-// }
+pub fn exception(msg: &str, data: RuntimeValue) -> ExceptionImpl {
+    ExceptionImpl::User(UserException {
+        message: msg.to_string(),
+        data: Box::new(data),
+    })
+}
 
-// impl PartialOrd for FnWithCapturesImpl {
-//     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-//         Some(self.cmp(other))
-//     }
-// }
-
-// impl Ord for FnWithCapturesImpl {
-//     fn cmp(&self, other: &Self) -> Ordering {
-//         match self.f.cmp(&other.f) {
-//             Ordering::Equal => {
-//                 let sorted_pairs = self.captures.iter().sorted();
-//                 let other_sorted_pairs = other.captures.iter().sorted();
-//                 sorted_pairs.cmp(other_sorted_pairs)
-//             }
-//             other => other,
-//         }
-//     }
-// }
-
-// impl PartialEq for FnWithCapturesImpl {
-//     fn eq(&self, other: &Self) -> bool {
-//         if self.f != other.f {
-//             return false;
-//         }
-
-//         self.captures
-//             .iter()
-//             .sorted()
-//             .zip(other.captures.iter().sorted())
-//             .all(|((a, b), (c, d))| a == c && b == d)
-//     }
-// }
-
-// impl Hash for FnWithCapturesImpl {
-//     fn hash<H: Hasher>(&self, state: &mut H) {
-//         self.f.hash(state);
-//         self.captures.iter().sorted().for_each(|(k, v)| {
-//             k.hash(state);
-//             v.hash(state);
-//         });
-//     }
-// }
-
-// #[derive(Clone)]
-// pub struct VarImpl {
-//     data: Rc<RefCell<Option<RuntimeValue>>>,
-//     namespace: String,
-//     pub identifier: String,
-// }
-
-// impl VarImpl {
-//     pub fn update(&self, value: RuntimeValue) {
-//         *self.data.borrow_mut() = Some(value);
-//     }
-// }
+pub fn exception_from_system_err(err: EvaluationError) -> RuntimeValue {
+    let inner = match err {
+        EvaluationError::Exception(exc) => exc,
+        err => ExceptionImpl::System(Box::new(err)),
+    };
+    RuntimeValue::Exception(inner)
+}
 
 #[derive(Clone, Debug)]
 pub struct UserException {
@@ -293,7 +233,7 @@ pub enum SpecialForm {
     // (do form*)
     Do(BodyForm),
     //(fn* [parameters*] form*)
-    Fn(FnForm),
+    Fn(FnImpl),
     // (quote form)
     Quote(Box<RuntimeValue>),
     // (quasiquote form)
@@ -324,30 +264,54 @@ pub enum LexicalBindings {
     Unbound(Vec<Identifier>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+impl LexicalBindings {
+    pub(crate) fn index_for_name(&self, target: &Identifier) -> usize {
+        match self {
+            Self::Bound(bindings) => bindings
+                .iter()
+                .position(|(name, _)| name == target)
+                .unwrap(),
+            Self::Unbound(names) => names.iter().position(|name| name == target).unwrap(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LexicalForm {
     pub bindings: LexicalBindings,
     pub body: BodyForm,
+    pub forward_declarations: Option<HashSet<usize>>,
+    pub captures: HashSet<Identifier>,
 }
 
-fn is_forward_visible(form: &RuntimeValue) -> bool {
-    matches!(form, RuntimeValue::SpecialForm(SpecialForm::Fn(_)))
-}
-
-impl LexicalForm {
-    pub(super) fn resolve_forward_declarations(&self) -> HashSet<usize> {
-        let mut result = HashSet::new();
-        match &self.bindings {
-            LexicalBindings::Bound(bindings) => {
-                for (index, (_, value)) in bindings.iter().enumerate() {
-                    if is_forward_visible(value.as_ref()) {
-                        result.insert(index);
-                    }
-                }
-            }
-            LexicalBindings::Unbound(_) => unreachable!("only relevant for bound symbols"),
+impl Hash for LexicalForm {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.bindings.hash(state);
+        self.body.hash(state);
+        let ids = self.captures.iter().sorted();
+        for id in ids {
+            id.hash(state);
         }
-        result
+    }
+}
+
+impl PartialOrd for LexicalForm {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.bindings.cmp(&other.bindings) {
+            Ordering::Equal => match self.body.cmp(&other.body) {
+                Ordering::Equal => {
+                    Some(sorted(self.captures.iter()).cmp(sorted(other.captures.iter())))
+                }
+                other => Some(other),
+            },
+            other => Some(other),
+        }
+    }
+}
+
+impl Ord for LexicalForm {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap()
     }
 }
 
@@ -454,6 +418,70 @@ impl From<&Atom> for RuntimeValue {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum FnImpl {
+    Default(FnForm),
+    WithCaptures(FnWithCapturesImpl),
+}
+
+impl Deref for FnImpl {
+    type Target = FnForm;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Default(form) => form,
+            Self::WithCaptures(inner) => &inner.form,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FnWithCapturesImpl {
+    pub form: FnForm,
+    pub captures: HashMap<Identifier, Option<RuntimeValue>>,
+}
+
+impl Hash for FnWithCapturesImpl {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.form.hash(state);
+        let captures = self.captures.iter().sorted();
+        for (name, value) in captures {
+            name.hash(state);
+            value.hash(state);
+        }
+    }
+}
+
+impl PartialOrd for FnWithCapturesImpl {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.form.cmp(&other.form) {
+            Ordering::Equal => {
+                Some(sorted(self.captures.iter()).cmp(sorted(other.captures.iter())))
+            }
+            other => Some(other),
+        }
+    }
+}
+
+impl Ord for FnWithCapturesImpl {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
+impl FnWithCapturesImpl {
+    pub fn update_captures(&mut self, scopes: &Vec<Scope>) {
+        for (identifier, capture) in self.captures.iter_mut() {
+            for scope in scopes.iter().rev() {
+                if let Some(value) = scope.get(identifier) {
+                    *capture = Some(value.clone());
+                    continue;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RuntimeValue {
     Nil,
     Bool(bool),
@@ -468,12 +496,11 @@ pub enum RuntimeValue {
     Map(PersistentMap<RuntimeValue, RuntimeValue>),
     Set(PersistentSet<RuntimeValue>),
     SpecialForm(SpecialForm),
-    Fn(FnForm),
+    Fn(FnImpl),
     Primitive(Primitive),
     Exception(ExceptionImpl),
-    // FnWithCaptures(FnWithCapturesImpl),
     Atom(AtomRef),
-    Macro(FnForm),
+    Macro(FnImpl),
 }
 
 impl fmt::Display for RuntimeValue {
@@ -492,13 +519,9 @@ impl fmt::Display for RuntimeValue {
             RuntimeValue::Map(elems) => write_map(f, elems),
             RuntimeValue::Set(elems) => write_set(f, elems),
             RuntimeValue::SpecialForm(form) => write_special_form(f, form),
-            // FnWithCaptures(..) => write!(f, "<fn* +captures>",),
             RuntimeValue::Fn(..) => write_fn(f),
             RuntimeValue::Primitive(..) => write_primitive(f),
-            // Macro(_) => write!(f, "<macro>"),
-            RuntimeValue::Exception(exception) => {
-                write!(f, "{}", exception)
-            }
+            RuntimeValue::Exception(exception) => write_exception(f, exception),
             RuntimeValue::Atom(v) => write!(f, "(atom {})", v.value()),
             RuntimeValue::Macro(..) => write_macro(f),
         }

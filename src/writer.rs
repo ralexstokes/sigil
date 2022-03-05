@@ -1,5 +1,5 @@
 use crate::reader::{Identifier, Symbol};
-use crate::value::{BodyForm, DefForm, FnForm, LexicalBinding, SpecialForm, Var};
+use crate::value::{BodyForm, DefForm, ExceptionImpl, FnForm, LexicalBinding, SpecialForm, Var};
 use itertools::join;
 use std::fmt::{self, Display, Write};
 use std::string::String as StdString;
@@ -128,6 +128,13 @@ pub(crate) fn write_var(f: &mut fmt::Formatter<'_>, var: &Var) -> fmt::Result {
             write!(f, "<unbound var #'TODO>")
         }
     }
+}
+
+pub(crate) fn write_exception(
+    f: &mut fmt::Formatter<'_>,
+    exception: &ExceptionImpl,
+) -> fmt::Result {
+    write!(f, "{exception}")
 }
 
 pub(crate) fn write_macro(f: &mut fmt::Formatter<'_>) -> fmt::Result {

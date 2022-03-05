@@ -31,6 +31,12 @@ pub struct Symbol {
     pub namespace: Option<Identifier>,
 }
 
+impl Symbol {
+    pub fn simple(&self) -> bool {
+        self.namespace.is_none()
+    }
+}
+
 impl fmt::Display for Symbol {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write_symbol(f, self)

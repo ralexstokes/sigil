@@ -4,11 +4,10 @@ use crate::lang::core;
 use crate::namespace::{Context as NamespaceContext, NamespaceDesc, NamespaceError};
 use crate::reader::{read, Form, Identifier, ReadError, Symbol};
 use crate::value::{
-    exception_from_system_err, BodyForm, CatchForm, DefForm, ExceptionImpl, FnForm, IfForm,
-    LetForm, RuntimeValue, SpecialForm, TryForm, Var,
+    exception_from_system_err, BodyForm, CatchForm, DefForm, ExceptionImpl, FnForm, FnImpl,
+    FnWithCapturesImpl, IfForm, LetForm, RuntimeValue, Scope, SpecialForm, TryForm, Var,
 };
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::default::Default;
 use std::fmt::Write;
@@ -112,7 +111,6 @@ pub enum EvaluationError {
 
 pub type EvaluationResult<T> = Result<T, EvaluationError>;
 pub type SymbolIndex = HashSet<String>;
-pub type Scope = HashMap<Identifier, RuntimeValue>;
 
 fn eval_quasiquote_list_inner<'a>(
     elems: impl Iterator<Item = &'a RuntimeValue>,
@@ -210,13 +208,28 @@ fn eval_quasiquote_special_form(form: &SpecialForm) -> EvaluationResult<RuntimeV
         SpecialForm::Do(form) => RuntimeValue::SpecialForm(SpecialForm::Do(BodyForm {
             body: eval_quasiquote_body_form(form)?,
         })),
-        SpecialForm::Fn(form) => RuntimeValue::SpecialForm(SpecialForm::Fn(FnForm {
-            parameters: form.parameters.clone(),
-            variadic: form.variadic.clone(),
-            body: BodyForm {
-                body: eval_quasiquote_body_form(&form.body)?,
-            },
-        })),
+        SpecialForm::Fn(form) => {
+            let fn_impl = match form {
+                FnImpl::Default(form) => FnImpl::Default(FnForm {
+                    parameters: form.parameters.clone(),
+                    variadic: form.variadic.clone(),
+                    body: BodyForm {
+                        body: eval_quasiquote_body_form(&form.body)?,
+                    },
+                }),
+                FnImpl::WithCaptures(form) => FnImpl::WithCaptures(FnWithCapturesImpl {
+                    form: FnForm {
+                        parameters: form.form.parameters.clone(),
+                        variadic: form.form.variadic.clone(),
+                        body: BodyForm {
+                            body: eval_quasiquote_body_form(&form.form.body)?,
+                        },
+                    },
+                    captures: form.captures.clone(),
+                }),
+            };
+            RuntimeValue::SpecialForm(SpecialForm::Fn(fn_impl))
+        }
         SpecialForm::Quote(form) => {
             RuntimeValue::SpecialForm(SpecialForm::Quote(Box::new(eval_quasiquote(form)?)))
         }
@@ -279,22 +292,6 @@ fn eval_quasiquote(form: &RuntimeValue) -> EvaluationResult<RuntimeValue> {
         v => Ok(v.clone()),
     }
 }
-
-// fn update_captures(
-//     captures: &mut HashMap<String, Option<Value>>,
-//     scopes: &[Scope],
-// ) -> EvaluationResult<()> {
-//     for (capture, value) in captures {
-//         if value.is_none() {
-//             let captured_value = resolve_symbol_in_scopes(scopes.iter().rev(), capture)
-//                 .ok_or_else(|| {
-//                     EvaluationError::UnableToResolveSymbolToValue(capture.to_string())
-//                 })?;
-//             *value = Some(captured_value.clone());
-//         }
-//     }
-//     Ok(())
-// }
 
 #[derive(Debug)]
 enum ControlFlow {
@@ -450,27 +447,16 @@ impl Interpreter {
         let _ = self.scopes.pop().expect("no underflow in scope stack");
     }
 
-    // pub fn extend_from_captures(
-    //     &mut self,
-    //     captures: &HashMap<String, Option<Value>>,
-    // ) -> EvaluationResult<()> {
-    //     self.enter_scope();
-    //     for (capture, value) in captures {
-    //         if let Some(value) = value {
-    //             self.insert_value_in_current_scope(capture, value.clone());
-    //         } else {
-    //             self.exit_scope();
-    //             return Err(EvaluationError::MissingCapturedValue(capture.to_string()));
-    //         }
-    //     }
-    //     Ok(())
-    // }
-
     fn resolve_in_lexical_scopes(&self, identifier: &Identifier) -> RuntimeValue {
         for scope in self.scopes.iter().rev() {
             if let Some(value) = scope.get(identifier) {
                 // TODO: wrap in Rc for cheap clone?
-                return value.clone();
+                dbg!(value);
+                match value {
+                    // support forward declarations via Var
+                    RuntimeValue::Var(var) => return var.value(),
+                    _ => return value.clone(),
+                }
             }
         }
         unreachable!("analysis guarantees identifier is in scope")
@@ -513,6 +499,7 @@ impl Interpreter {
             let name = let_form.identifier_for_binding(index).unwrap();
             let value = RuntimeValue::Var(Var::Unbound);
             let lexical_scope = self.scopes.last_mut().unwrap();
+            dbg!(name);
             lexical_scope.insert(name.clone(), value);
         }
 
@@ -520,7 +507,18 @@ impl Interpreter {
             match self.evaluate_analyzed_form(value) {
                 Ok(value) => {
                     let lexical_scope = self.scopes.last_mut().unwrap();
-                    lexical_scope.insert(name.clone(), value);
+                    if let Some(name) = lexical_scope.get_mut(name) {
+                        dbg!(&name);
+                        match name {
+                            RuntimeValue::Var(var) => {
+                                dbg!(&var, &value);
+                                var.update(value);
+                            }
+                            _ => unreachable!("only vars should be inserted as lexical terms ahead of bindings evaluation"),
+                        }
+                    } else {
+                        lexical_scope.insert(name.clone(), value);
+                    }
                 }
                 err @ Err(..) => {
                     self.exit_scope();
@@ -616,10 +614,16 @@ impl Interpreter {
         }
     }
 
-    fn eval_fn(&mut self, fn_form: &FnForm) -> EvaluationResult<RuntimeValue> {
-        // walk the form again to grab any more refs
-        // TODO captures here as well?
-        Ok(RuntimeValue::Fn(fn_form.clone()))
+    fn eval_fn(&mut self, fn_impl: &FnImpl) -> EvaluationResult<RuntimeValue> {
+        let fn_impl = match fn_impl {
+            FnImpl::Default(fn_form) => FnImpl::Default(fn_form.clone()),
+            FnImpl::WithCaptures(fn_form) => {
+                let mut fn_form = fn_form.clone();
+                fn_form.update_captures(&self.scopes);
+                FnImpl::WithCaptures(fn_form)
+            }
+        };
+        Ok(RuntimeValue::Fn(fn_impl))
     }
 
     fn eval_quote(&mut self, form: &RuntimeValue) -> EvaluationResult<RuntimeValue> {
@@ -632,7 +636,7 @@ impl Interpreter {
     }
 
     fn eval_defmacro(&mut self, name: &Symbol, fn_form: &FnForm) -> EvaluationResult<RuntimeValue> {
-        let value = RuntimeValue::Macro(fn_form.clone());
+        let value = RuntimeValue::Macro(FnImpl::Default(fn_form.clone()));
         let var = self.intern(name, Some(value))?;
         Ok(RuntimeValue::Var(var))
     }
@@ -685,7 +689,7 @@ impl Interpreter {
 
     pub(crate) fn apply_fn(
         &mut self,
-        f: &FnForm,
+        f: &FnImpl,
         mut args: Vec<RuntimeValue>,
     ) -> EvaluationResult<RuntimeValue> {
         let correct_arity = if f.variadic() {
@@ -717,6 +721,15 @@ impl Interpreter {
             scope.insert(variadic_binding.clone(), variadic_arg);
         }
 
+        if let FnImpl::WithCaptures(f) = f {
+            let scope = self.scopes.last_mut().unwrap();
+            for (name, value) in &f.captures {
+                if let Some(value) = value {
+                    scope.insert(name.clone(), value.clone());
+                }
+            }
+        }
+
         let result = self.eval_body_form(&f.body);
 
         self.exit_scope();
@@ -725,7 +738,7 @@ impl Interpreter {
 
     fn apply_macro(
         &mut self,
-        f: &FnForm,
+        f: &FnImpl,
         operands: &PersistentList<RuntimeValue>,
     ) -> EvaluationResult<RuntimeValue> {
         self.apply_fn(f, Vec::from_iter(operands.iter().cloned()))
@@ -788,6 +801,7 @@ impl Interpreter {
     }
 
     fn evaluate_analyzed_form(&mut self, form: &RuntimeValue) -> EvaluationResult<RuntimeValue> {
+        dbg!(form);
         let value = match form {
             RuntimeValue::Nil => form.clone(),
             RuntimeValue::Bool(..) => form.clone(),
@@ -823,10 +837,14 @@ impl Interpreter {
                 RuntimeValue::Set(evaluated_coll)
             }
             RuntimeValue::SpecialForm(form) => self.evaluate_special_form(form)?,
-            RuntimeValue::Fn(..) => {
-                // TODO?
-                form.clone()
-            }
+            RuntimeValue::Fn(fn_impl) => match fn_impl {
+                FnImpl::Default(..) => form.clone(),
+                FnImpl::WithCaptures(fn_form) => {
+                    let mut fn_form = fn_form.clone();
+                    fn_form.update_captures(&self.scopes);
+                    RuntimeValue::Fn(FnImpl::WithCaptures(fn_form))
+                }
+            },
             RuntimeValue::Primitive(..) => {
                 // TODO?
                 form.clone()
@@ -865,6 +883,7 @@ impl Interpreter {
             .iter()
             .map(|form| self.analyze_and_evaluate(form))
             .collect::<Result<Vec<RuntimeValue>, _>>();
+        dbg!(&result);
         self.analyzer.reset();
         result
     }
