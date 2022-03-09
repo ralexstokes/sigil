@@ -363,9 +363,9 @@ fn read_string(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<R
             if forms.is_empty() {
                 Ok(RuntimeValue::Nil)
             } else {
-                let form = forms.pop().unwrap();
-                // TODO fix
-                Ok(RuntimeValue::Nil)
+                // let form = forms.pop().unwrap();
+                // Ok(form)
+                unimplemented!("need to be able to pass unanalyzed form");
             }
         }
         other => Err(EvaluationError::WrongType {
