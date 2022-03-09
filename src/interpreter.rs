@@ -158,7 +158,7 @@ fn eval_quasiquote_let_form(
 ) -> EvaluationResult<RuntimeValue> {
     let bindings = bindings
         .iter()
-        .map(|(name, value)| Ok((name.clone(), Box::new(eval_quasiquote(value)?))))
+        .map(|(name, value)| Ok((name.clone(), eval_quasiquote(value)?)))
         .collect::<Result<Vec<_>, EvaluationError>>()?;
     let body = eval_quasiquote_body_form(body)?;
     let form = LetForm {
@@ -723,9 +723,9 @@ impl Interpreter {
 
         if let FnImpl::WithCaptures(f) = f {
             let scope = self.scopes.last_mut().unwrap();
-            for (name, value) in &f.captures {
-                if let Some(value) = value {
-                    scope.insert(name.clone(), value.clone());
+            for (name, var) in &f.captures {
+                if let Some(value) = var.inner() {
+                    scope.insert(name.clone(), value);
                 }
             }
         }

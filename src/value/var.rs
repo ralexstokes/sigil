@@ -37,6 +37,13 @@ impl Var {
         }
     }
 
+    pub fn inner(&self) -> Option<RuntimeValue> {
+        match self {
+            Var::Bound(inner) => Some(inner.borrow().clone()),
+            Var::Unbound => None,
+        }
+    }
+
     pub fn update(&mut self, value: RuntimeValue) {
         match self {
             Var::Bound(inner) => {

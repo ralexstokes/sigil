@@ -3,8 +3,8 @@ use crate::{
     namespace::{Context as NamespaceContext, NamespaceError},
     reader::{Atom, Form, Identifier, Symbol},
     value::{
-        BodyForm, CatchForm, DefForm, FnForm, FnImpl, FnWithCapturesImpl, IfForm, LexicalBinding,
-        LexicalForm, RuntimeValue, SpecialForm, TryForm,
+        BodyForm, Captures, CatchForm, DefForm, FnForm, FnImpl, FnWithCapturesImpl, IfForm,
+        LexicalBinding, LexicalForm, RuntimeValue, SpecialForm, TryForm, Var,
     },
 };
 use itertools::Itertools;
@@ -335,7 +335,8 @@ pub struct Analyzer {
     // track mutations to namespaces, e.g. via simulated `def!`
     global_scope: GlobalScope,
     // track identifiers that outlive their lexical lifetime
-    captures: Scopes,
+    // set of (identifiers, origin_frame)
+    captures: Vec<HashSet<(Identifier, usize)>>,
     forward_declarations: Vec<HashMap<Identifier, bool>>,
     contexts: Vec<Context>,
 }
@@ -419,7 +420,7 @@ impl Analyzer {
         let mut bindings = vec![];
         for ((analyzed_name, forward_visible), value) in names.iter().zip(values.into_iter()) {
             let analyzed_value = self.analyze(value)?;
-            bindings.push((analyzed_name.clone(), Box::new(analyzed_value)));
+            bindings.push((analyzed_name.clone(), analyzed_value));
             if !forward_visible {
                 let current_scope = self.scopes.last_mut().unwrap();
                 current_scope.insert(analyzed_name.clone());
@@ -536,7 +537,7 @@ impl Analyzer {
                 extract_symbol_without_namespace(form).map(|s| {
                     let current_scope = self.scopes.last_mut().unwrap();
                     current_scope.insert(s.clone());
-                    s.clone()
+                    s
                 })
             })
             .collect::<Result<Vec<_>, _>>()
@@ -572,13 +573,45 @@ impl Analyzer {
         }
     }
 
-    fn analyze_fn_body(&mut self, body: &[Form]) -> AnalysisResult<BodyForm> {
-        // TODO hoisting...
-        let body = body
-            .iter()
-            .map(|form| self.analyze(form))
-            .collect::<Result<Vec<_>, _>>()?;
+    fn analyze_fn_body(&mut self, body_forms: &[Form]) -> AnalysisResult<BodyForm> {
+        let mut body = vec![];
+        for form in body_forms {
+            let analyzed_form = self.analyze(form)?;
+            // if matches!(
+            //     analyzed_form,
+            //     RuntimeValue::SpecialForm(SpecialForm::Fn(FnImpl::WithCaptures(
+            //         .., // FnWithCapturesImpl { form, captures },
+            //     )))
+            // ) {
+            //     // TODO hoisting:
+            //     // always copy captures from current frame to enclosing frame
+            //     // until we meet the frame where they are defined, in which case we ignore
+            //     // and they will fall out of scope in the caller where they are popped...
+            //     // RuntimeValue::SpecialForm(SpecialForm::Fn(FnImpl::WithCaptures(
+            //     //     FnWithCapturesImpl { form, captures },
+            //     // )))
+            // }
+            // // other => other,
+            // // };
+            body.push(analyzed_form);
+        }
+
         Ok(BodyForm { body })
+    }
+
+    fn analyze_fn_captures(&mut self) -> Captures {
+        let analyzed_captures = self.captures.pop().unwrap();
+        let mut captures = Captures::default();
+        let liveness_threshold = self.current_lexical_frame().saturating_sub(1);
+        for (identifier, origin_frame) in analyzed_captures {
+            let should_hoist = origin_frame < liveness_threshold;
+            if should_hoist {
+                let enclosing_captures = self.captures.last_mut().unwrap();
+                enclosing_captures.insert((identifier.clone(), origin_frame));
+            }
+            captures.insert(identifier, Var::Unbound);
+        }
+        captures
     }
 
     // (fn* [parameters*] body*)
@@ -586,41 +619,39 @@ impl Analyzer {
         verify_arity(args, 1..MAX_ARGS_BOUND)
             .map_err(|err| -> FnError { LexicalError::from(err).into() })?;
         let bindings_form = extract_lexical_bindings(&args[0]).map_err(FnError::from)?;
-        let body = Vec::from(&args[1..]);
 
         self.scopes.push(LexicalScope::default());
-        self.captures.push(LexicalScope::default());
 
         let (parameters, variadic) = self.analyze_fn_parameters(&bindings_form).map_err(|err| {
             self.scopes.pop();
-            self.captures.pop();
             err
         })?;
 
-        let body = self.analyze_fn_body(&body).map_err(|err| {
+        self.captures.push(Default::default());
+        let body = self.analyze_fn_body(&args[1..]).map_err(|err| {
             self.scopes.pop();
             self.captures.pop();
             err
         })?;
-
-        self.scopes.pop();
-        let captures = self.captures.pop().unwrap();
 
         let fn_form = FnForm {
             parameters,
             variadic,
             body,
         };
+
+        let captures = self.analyze_fn_captures();
+
         let fn_impl = if captures.is_empty() {
             FnImpl::Default(fn_form)
         } else {
             FnImpl::WithCaptures(FnWithCapturesImpl {
                 form: fn_form,
-                captures: HashMap::from_iter(
-                    captures.iter().map(|identifier| (identifier.clone(), None)),
-                ),
+                captures,
             })
         };
+
+        self.scopes.pop();
 
         Ok(RuntimeValue::SpecialForm(SpecialForm::Fn(fn_impl)))
     }
@@ -863,6 +894,7 @@ impl Analyzer {
         }
 
         if symbol.simple() {
+            // TODO allow for nesting, i.e. not the `last` scope only?
             if let Some(forward_decls) = self.forward_declarations.last_mut() {
                 if let Some(used) = forward_decls.get_mut(&symbol.identifier) {
                     *used = true;
@@ -877,7 +909,7 @@ impl Analyzer {
 
                 if origin_frame < self.current_lexical_frame() {
                     let captures = self.captures.last_mut().unwrap();
-                    captures.insert(identifier.clone());
+                    captures.insert((identifier.clone(), origin_frame));
                 }
                 return Ok(RuntimeValue::LexicalSymbol(identifier));
             }
@@ -968,7 +1000,7 @@ mod tests {
             },
         })));
         let expected_form = RuntimeValue::SpecialForm(SpecialForm::Let(LetForm {
-            bindings: vec![(Identifier::from("x"), Box::new(RuntimeValue::Number(3)))],
+            bindings: vec![(Identifier::from("x"), RuntimeValue::Number(3))],
             body: BodyForm {
                 body: vec![fn_form],
             },
@@ -997,10 +1029,10 @@ mod tests {
                         body: vec![RuntimeValue::LexicalSymbol(param.clone())],
                     },
                 },
-                captures: HashMap::from_iter([(param.clone(), None)]),
+                captures: HashMap::from_iter([(param.clone(), Var::Unbound)]),
             })));
         let expected_form = RuntimeValue::SpecialForm(SpecialForm::Let(LetForm {
-            bindings: vec![(Identifier::from("x"), Box::new(RuntimeValue::Number(3)))],
+            bindings: vec![(Identifier::from("x"), RuntimeValue::Number(3))],
             body: BodyForm {
                 body: vec![fn_form],
             },
@@ -1015,24 +1047,51 @@ mod tests {
         let namespaces = Rc::new(RefCell::new(NamespaceContext::default()));
         let mut analyzer = Analyzer::new(namespaces);
 
-        let source = "(let* [x 12] (fn* [] (fn* [] x)))";
+        let source = "(let* [x 12] (fn* [] (let* [y 12] (fn* [a] (a x y)))))";
         let form = read(source).expect("is valid source");
         let result = analyzer.analyze(&form[0]).expect("can be analyzed");
+        // let form  =SpecialForm(Let(LexicalForm { bindings: [("x", Number(12))], body: BodyForm { body: [SpecialForm(Fn(WithCaptures(FnWithCapturesImpl { form: FnForm { parameters: [], variadic: None, body: BodyForm { body: [SpecialForm(Let(LexicalForm { bindings: [("y", Number(12))], body: BodyForm { body: [SpecialForm(Fn(WithCaptures(FnWithCapturesImpl { form: FnForm { parameters: [], variadic: None, body: BodyForm { body: [List(List { head: Some(Node { value: LexicalSymbol("x"), next: Some(Node { value: LexicalSymbol("y"), next: None }) }), last: Some(LexicalSymbol("y")), length: 2 })] } }, captures: {"x": Unbound, "y": Unbound} })))] }, forward_declarations: {} }))] } }, captures: {"x": Unbound} })))] }, forward_declarations: {} }));
 
-        let param = Identifier::from("x");
+        let x = Identifier::from("x");
+        let y = Identifier::from("y");
+        let inner_fn_form =
+            RuntimeValue::SpecialForm(SpecialForm::Fn(FnImpl::WithCaptures(FnWithCapturesImpl {
+                form: FnForm {
+                    parameters: vec![Identifier::from("a")],
+                    variadic: None,
+                    body: BodyForm {
+                        body: vec![RuntimeValue::List(PersistentList::from_iter([
+                            RuntimeValue::LexicalSymbol("a".into()),
+                            RuntimeValue::LexicalSymbol("x".into()),
+                            RuntimeValue::LexicalSymbol("y".into()),
+                        ]))],
+                    },
+                },
+                captures: HashMap::from_iter([
+                    (x.clone(), Var::Unbound),
+                    (y.clone(), Var::Unbound),
+                ]),
+            })));
+        let inner_let_form = RuntimeValue::SpecialForm(SpecialForm::Let(LetForm {
+            bindings: vec![(y.clone(), RuntimeValue::Number(12))],
+            body: BodyForm {
+                body: vec![inner_fn_form],
+            },
+            forward_declarations: Default::default(),
+        }));
         let fn_form =
             RuntimeValue::SpecialForm(SpecialForm::Fn(FnImpl::WithCaptures(FnWithCapturesImpl {
                 form: FnForm {
                     parameters: vec![],
                     variadic: None,
                     body: BodyForm {
-                        body: vec![RuntimeValue::LexicalSymbol(param.clone())],
+                        body: vec![inner_let_form],
                     },
                 },
-                captures: HashMap::from_iter([(param.clone(), None)]),
+                captures: HashMap::from_iter([(x.clone(), Var::Unbound)]),
             })));
         let expected_form = RuntimeValue::SpecialForm(SpecialForm::Let(LetForm {
-            bindings: vec![(Identifier::from("x"), Box::new(RuntimeValue::Number(3)))],
+            bindings: vec![(x, RuntimeValue::Number(12))],
             body: BodyForm {
                 body: vec![fn_form],
             },

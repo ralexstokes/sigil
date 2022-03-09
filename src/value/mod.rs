@@ -256,7 +256,7 @@ pub enum DefForm {
     Unbound(Symbol),
 }
 
-pub type LexicalBinding = (Identifier, Box<RuntimeValue>);
+pub type LexicalBinding = (Identifier, RuntimeValue);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LexicalForm {
@@ -377,10 +377,12 @@ impl Deref for FnImpl {
     }
 }
 
+pub type Captures = HashMap<Identifier, Var>;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FnWithCapturesImpl {
     pub form: FnForm,
-    pub captures: HashMap<Identifier, Option<RuntimeValue>>,
+    pub captures: Captures,
 }
 
 impl Hash for FnWithCapturesImpl {
@@ -416,8 +418,8 @@ impl FnWithCapturesImpl {
         for (identifier, capture) in self.captures.iter_mut() {
             for scope in scopes.iter().rev() {
                 if let Some(value) = scope.get(identifier) {
-                    *capture = Some(value.clone());
-                    continue;
+                    capture.update(value.clone());
+                    break;
                 }
             }
         }
