@@ -258,37 +258,18 @@ pub enum DefForm {
 
 pub type LexicalBinding = (Identifier, Box<RuntimeValue>);
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum LexicalBindings {
-    Bound(Vec<LexicalBinding>),
-    Unbound(Vec<Identifier>),
-}
-
-impl LexicalBindings {
-    pub(crate) fn index_for_name(&self, target: &Identifier) -> usize {
-        match self {
-            Self::Bound(bindings) => bindings
-                .iter()
-                .position(|(name, _)| name == target)
-                .unwrap(),
-            Self::Unbound(names) => names.iter().position(|name| name == target).unwrap(),
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LexicalForm {
-    pub bindings: LexicalBindings,
+    pub bindings: Vec<LexicalBinding>,
     pub body: BodyForm,
-    pub forward_declarations: Option<HashSet<usize>>,
-    pub captures: HashSet<Identifier>,
+    pub forward_declarations: HashSet<usize>,
 }
 
 impl Hash for LexicalForm {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.bindings.hash(state);
         self.body.hash(state);
-        let ids = self.captures.iter().sorted();
+        let ids = self.forward_declarations.iter().sorted();
         for id in ids {
             id.hash(state);
         }
@@ -296,46 +277,6 @@ impl Hash for LexicalForm {
 }
 
 impl PartialOrd for LexicalForm {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match self.bindings.cmp(&other.bindings) {
-            Ordering::Equal => match self.body.cmp(&other.body) {
-                Ordering::Equal => {
-                    Some(sorted(self.captures.iter()).cmp(sorted(other.captures.iter())))
-                }
-                other => Some(other),
-            },
-            other => Some(other),
-        }
-    }
-}
-
-impl Ord for LexicalForm {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap()
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LetForm {
-    pub bindings: Vec<LexicalBinding>,
-    pub body: BodyForm,
-    // `let*` can produce "forward declarations" where some names
-    // in `scope` can be seen by all other names
-    pub forward_declarations: HashSet<usize>,
-}
-
-impl Hash for LetForm {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.bindings.hash(state);
-        self.body.hash(state);
-        let declarations = self.forward_declarations.iter().sorted();
-        for declaration in declarations {
-            declaration.hash(state);
-        }
-    }
-}
-
-impl PartialOrd for LetForm {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.bindings.cmp(&other.bindings) {
             Ordering::Equal => match self.body.cmp(&other.body) {
@@ -350,17 +291,19 @@ impl PartialOrd for LetForm {
     }
 }
 
-impl Ord for LetForm {
+impl Ord for LexicalForm {
     fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other).unwrap()
     }
 }
 
-impl LetForm {
+impl LexicalForm {
     pub fn identifier_for_binding(&self, index: usize) -> Option<&Identifier> {
         self.bindings.get(index).map(|binding| &binding.0)
     }
 }
+
+pub type LetForm = LexicalForm;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct BodyForm {

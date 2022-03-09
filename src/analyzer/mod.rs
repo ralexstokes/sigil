@@ -3,8 +3,8 @@ use crate::{
     namespace::{Context as NamespaceContext, NamespaceError},
     reader::{Atom, Form, Identifier, Symbol},
     value::{
-        BodyForm, CatchForm, DefForm, FnForm, FnImpl, FnWithCapturesImpl, IfForm, LetForm,
-        LexicalBindings, LexicalForm, RuntimeValue, SpecialForm, TryForm,
+        BodyForm, CatchForm, DefForm, FnForm, FnImpl, FnWithCapturesImpl, IfForm, LexicalBinding,
+        LexicalForm, RuntimeValue, SpecialForm, TryForm,
     },
 };
 use itertools::Itertools;
@@ -231,26 +231,27 @@ fn extract_vector(form: &Form) -> Result<Vec<Form>, TypeError> {
     }
 }
 
-#[derive(Copy, Clone)]
-enum LexicalMode {
-    Bound,
-    Unbound,
+fn extract_lexical_bindings(form: &Form) -> Result<Vec<Form>, LexicalError> {
+    extract_vector(form).map_err(LexicalError::Type)
 }
 
-fn extract_lexical_form(
-    forms: &[Form],
-    lexical_mode: LexicalMode,
-) -> Result<(Vec<Form>, Vec<Form>), LexicalError> {
+fn extract_lexical_form(forms: &[Form]) -> Result<(Vec<Form>, Vec<Form>), LexicalError> {
     verify_arity(forms, 1..MAX_ARGS_BOUND).map_err(|err| LexicalError::Arity(err))?;
+    let bindings = extract_lexical_bindings(&forms[0])?;
 
-    let bindings = extract_vector(&forms[0]).map_err(LexicalError::Type)?;
-
-    if matches!(lexical_mode, LexicalMode::Bound) && bindings.len() % 2 != 0 {
+    if bindings.len() % 2 != 0 {
         return Err(LexicalError::BindingsMustBeBound);
     }
 
     let body = Vec::from(&forms[1..]);
     Ok((bindings, body))
+}
+
+fn index_for_name(bindings: &[LexicalBinding], target: &Identifier) -> usize {
+    bindings
+        .iter()
+        .position(|(name, _)| name == target)
+        .unwrap()
 }
 
 fn verify_arity(forms: &[Form], range: Range<usize>) -> Result<(), ArityError> {
@@ -261,39 +262,6 @@ fn verify_arity(forms: &[Form], range: Range<usize>) -> Result<(), ArityError> {
             provided: forms.len(),
             acceptable: range,
         })
-    }
-}
-
-fn analyze_fn_parameters(
-    mut parameters: Vec<Identifier>,
-) -> AnalysisResult<(Vec<Identifier>, Option<Identifier>)> {
-    match parameters.len() {
-        0 => Ok((parameters, None)),
-        1 => {
-            if parameters[0] == VARIADIC_IDENTIFIER {
-                Err(AnalysisError::FnError(FnError::MissingVariadicArg))
-            } else {
-                Ok((parameters, None))
-            }
-        }
-        _ => {
-            let variadic_position = parameters.len() - VARIADIC_PARAM_COUNT;
-            let (fixed_parameters, possibly_variadic) = parameters.split_at(variadic_position);
-            let valid_fixed_parameters = fixed_parameters
-                .iter()
-                .all(|parameter| parameter != VARIADIC_IDENTIFIER);
-            if !valid_fixed_parameters {
-                return Err(AnalysisError::FnError(
-                    FnError::VariadicArgNotInTailPosition,
-                ));
-            }
-
-            let variadic_parameter = analyze_tail_fn_parameters(possibly_variadic)?;
-            if variadic_parameter.is_some() {
-                parameters.truncate(variadic_position);
-            }
-            Ok((parameters, variadic_parameter))
-        }
     }
 }
 
@@ -429,76 +397,54 @@ impl Analyzer {
     fn analyze_lexical_bindings<E>(
         &mut self,
         bindings_form: &[Form],
-        lexical_mode: LexicalMode,
-    ) -> AnalysisResult<LexicalBindings>
+    ) -> AnalysisResult<Vec<LexicalBinding>>
     where
         E: From<LexicalError>,
         AnalysisError: From<E>,
     {
-        match lexical_mode {
-            LexicalMode::Bound => {
-                let mut names = vec![];
-                let mut values = vec![];
-                for (name, value) in bindings_form.iter().tuples() {
-                    let analyzed_name =
-                        extract_symbol_without_namespace(name).map_err(|e| E::from(e.into()))?;
-                    let forward_visible = is_forward_visible(value);
-                    if forward_visible {
-                        let forward_decls = self.forward_declarations.last_mut().unwrap();
-                        forward_decls.insert(analyzed_name.clone(), false);
-                    }
-                    names.push((analyzed_name, forward_visible));
-                    values.push(value);
-                }
-
-                let mut bindings = vec![];
-                for ((analyzed_name, forward_visible), value) in
-                    names.iter().zip(values.into_iter())
-                {
-                    let analyzed_value = self.analyze(value)?;
-                    bindings.push((analyzed_name.clone(), Box::new(analyzed_value)));
-                    if !forward_visible {
-                        let current_scope = self.scopes.last_mut().unwrap();
-                        current_scope.insert(analyzed_name.clone());
-                    }
-                }
-                Ok(LexicalBindings::Bound(bindings))
+        let mut names = vec![];
+        let mut values = vec![];
+        for (name, value) in bindings_form.iter().tuples() {
+            let analyzed_name =
+                extract_symbol_without_namespace(name).map_err(|e| E::from(e.into()))?;
+            let forward_visible = is_forward_visible(value);
+            if forward_visible {
+                let forward_decls = self.forward_declarations.last_mut().unwrap();
+                forward_decls.insert(analyzed_name.clone(), false);
             }
-            LexicalMode::Unbound => {
-                let parameters = bindings_form
-                    .iter()
-                    .map(|form| {
-                        extract_symbol_without_namespace(form).map(|s| {
-                            let current_scope = self.scopes.last_mut().unwrap();
-                            current_scope.insert(s.clone());
-                            s.clone()
-                        })
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| E::from(e.into()))?;
-                Ok(LexicalBindings::Unbound(parameters))
+            names.push((analyzed_name, forward_visible));
+            values.push(value);
+        }
+
+        let mut bindings = vec![];
+        for ((analyzed_name, forward_visible), value) in names.iter().zip(values.into_iter()) {
+            let analyzed_value = self.analyze(value)?;
+            bindings.push((analyzed_name.clone(), Box::new(analyzed_value)));
+            if !forward_visible {
+                let current_scope = self.scopes.last_mut().unwrap();
+                current_scope.insert(analyzed_name.clone());
             }
         }
+        Ok(bindings)
     }
 
-    fn analyze_lexical_form<E>(
-        &mut self,
-        forms: &[Form],
-        lexical_mode: LexicalMode,
-    ) -> AnalysisResult<LexicalForm>
+    fn analyze_lexical_form<E>(&mut self, forms: &[Form]) -> AnalysisResult<LexicalForm>
     where
         E: From<LexicalError>,
         AnalysisError: From<E>,
     {
-        let (bindings_form, body) = extract_lexical_form(forms, lexical_mode).map_err(E::from)?;
+        let (bindings_form, body) = extract_lexical_form(forms).map_err(E::from)?;
 
         self.scopes.push(LexicalScope::default());
-        self.captures.push(LexicalScope::default());
-        if matches!(lexical_mode, LexicalMode::Bound) {
-            self.forward_declarations.push(Default::default());
-        }
+        self.forward_declarations.push(Default::default());
 
-        let bindings = self.analyze_lexical_bindings::<E>(&bindings_form, lexical_mode)?;
+        let bindings = self
+            .analyze_lexical_bindings::<E>(&bindings_form)
+            .map_err(|err| {
+                self.scopes.pop();
+                self.forward_declarations.pop();
+                err
+            })?;
 
         let body = body
             .iter()
@@ -506,62 +452,36 @@ impl Analyzer {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|err| {
                 self.scopes.pop();
+                self.forward_declarations.pop();
                 err
             })?;
 
         self.scopes.pop();
-        let captures = self.captures.pop().unwrap();
-        let forward_declarations = if matches!(lexical_mode, LexicalMode::Bound) {
-            let forward_decls = self.forward_declarations.pop().unwrap();
-            let mut result = HashSet::new();
-            for (name, &used) in &forward_decls {
-                if used {
-                    result.insert(bindings.index_for_name(name));
-                }
+        let possible_forward_declarations = self.forward_declarations.pop().unwrap();
+        let mut forward_declarations = HashSet::new();
+        for (name, &used) in &possible_forward_declarations {
+            if used {
+                forward_declarations.insert(index_for_name(&bindings, name));
             }
-            Some(result)
-        } else {
-            None
-        };
+        }
 
         Ok(LexicalForm {
             bindings,
             body: BodyForm { body },
             forward_declarations,
-            captures,
         })
     }
 
     // (let* [bindings*] body*)
     fn analyze_let(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
-        let lexical_form = self.analyze_lexical_form::<LetError>(args, LexicalMode::Bound)?;
-        let bindings = match lexical_form.bindings {
-            LexicalBindings::Bound(bindings) => bindings,
-            LexicalBindings::Unbound(..) => {
-                unreachable!("let form has been validated to only have bound bindings")
-            }
-        };
-        Ok(RuntimeValue::SpecialForm(SpecialForm::Let(LetForm {
-            bindings,
-            body: lexical_form.body,
-            forward_declarations: lexical_form.forward_declarations.unwrap(),
-        })))
+        let lexical_form = self.analyze_lexical_form::<LetError>(args)?;
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Let(lexical_form)))
     }
 
     // (loop* [bindings*] body*)
     fn analyze_loop(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
-        let lexical_form = self.analyze_lexical_form::<LoopError>(args, LexicalMode::Bound)?;
-        let bindings = match lexical_form.bindings {
-            LexicalBindings::Bound(bindings) => bindings,
-            LexicalBindings::Unbound(..) => {
-                unreachable!("loop form has been validated to only have bound bindings")
-            }
-        };
-        Ok(RuntimeValue::SpecialForm(SpecialForm::Loop(LetForm {
-            bindings,
-            body: lexical_form.body,
-            forward_declarations: lexical_form.forward_declarations.unwrap(),
-        })))
+        let lexical_form = self.analyze_lexical_form::<LoopError>(args)?;
+        Ok(RuntimeValue::SpecialForm(SpecialForm::Loop(lexical_form)))
     }
 
     // (recur body*)
@@ -606,27 +526,85 @@ impl Analyzer {
         })))
     }
 
-    fn analyze_fn_body(&mut self, BodyForm { body }: BodyForm) -> AnalysisResult<BodyForm> {
+    fn analyze_fn_parameters(
+        &mut self,
+        bindings_form: &[Form],
+    ) -> AnalysisResult<(Vec<Identifier>, Option<Identifier>)> {
+        let mut parameters = bindings_form
+            .iter()
+            .map(|form| {
+                extract_symbol_without_namespace(form).map(|s| {
+                    let current_scope = self.scopes.last_mut().unwrap();
+                    current_scope.insert(s.clone());
+                    s.clone()
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| -> FnError { LexicalError::from(err).into() })?;
+
+        match parameters.len() {
+            0 => Ok((parameters, None)),
+            1 => {
+                if parameters[0] == VARIADIC_IDENTIFIER {
+                    Err(AnalysisError::FnError(FnError::MissingVariadicArg))
+                } else {
+                    Ok((parameters, None))
+                }
+            }
+            _ => {
+                let variadic_position = parameters.len() - VARIADIC_PARAM_COUNT;
+                let (fixed_parameters, possibly_variadic) = parameters.split_at(variadic_position);
+                let valid_fixed_parameters = fixed_parameters
+                    .iter()
+                    .all(|parameter| parameter != VARIADIC_IDENTIFIER);
+                if !valid_fixed_parameters {
+                    return Err(AnalysisError::FnError(
+                        FnError::VariadicArgNotInTailPosition,
+                    ));
+                }
+
+                let variadic_parameter = analyze_tail_fn_parameters(possibly_variadic)?;
+                if variadic_parameter.is_some() {
+                    parameters.truncate(variadic_position);
+                }
+                Ok((parameters, variadic_parameter))
+            }
+        }
+    }
+
+    fn analyze_fn_body(&mut self, body: &[Form]) -> AnalysisResult<BodyForm> {
         // TODO hoisting...
+        let body = body
+            .iter()
+            .map(|form| self.analyze(form))
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(BodyForm { body })
     }
 
     // (fn* [parameters*] body*)
     fn analyze_fn(&mut self, args: &[Form]) -> AnalysisResult<RuntimeValue> {
-        let LexicalForm {
-            bindings,
-            body,
-            captures,
-            ..
-        } = self.analyze_lexical_form::<FnError>(args, LexicalMode::Unbound)?;
-        let parameters = match bindings {
-            LexicalBindings::Unbound(parameters) => parameters,
-            _ => unreachable!("lexical bindings have been validated to only have unbound symbols"),
-        };
+        verify_arity(args, 1..MAX_ARGS_BOUND)
+            .map_err(|err| -> FnError { LexicalError::from(err).into() })?;
+        let bindings_form = extract_lexical_bindings(&args[0]).map_err(FnError::from)?;
+        let body = Vec::from(&args[1..]);
 
-        let (parameters, variadic) = analyze_fn_parameters(parameters)?;
+        self.scopes.push(LexicalScope::default());
+        self.captures.push(LexicalScope::default());
 
-        let body = self.analyze_fn_body(body)?;
+        let (parameters, variadic) = self.analyze_fn_parameters(&bindings_form).map_err(|err| {
+            self.scopes.pop();
+            self.captures.pop();
+            err
+        })?;
+
+        let body = self.analyze_fn_body(&body).map_err(|err| {
+            self.scopes.pop();
+            self.captures.pop();
+            err
+        })?;
+
+        self.scopes.pop();
+        let captures = self.captures.pop().unwrap();
 
         let fn_form = FnForm {
             parameters,
