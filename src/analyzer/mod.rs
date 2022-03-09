@@ -574,29 +574,12 @@ impl Analyzer {
     }
 
     fn analyze_fn_body(&mut self, body_forms: &[Form]) -> AnalysisResult<BodyForm> {
-        let mut body = vec![];
-        for form in body_forms {
-            let analyzed_form = self.analyze(form)?;
-            // if matches!(
-            //     analyzed_form,
-            //     RuntimeValue::SpecialForm(SpecialForm::Fn(FnImpl::WithCaptures(
-            //         .., // FnWithCapturesImpl { form, captures },
-            //     )))
-            // ) {
-            //     // TODO hoisting:
-            //     // always copy captures from current frame to enclosing frame
-            //     // until we meet the frame where they are defined, in which case we ignore
-            //     // and they will fall out of scope in the caller where they are popped...
-            //     // RuntimeValue::SpecialForm(SpecialForm::Fn(FnImpl::WithCaptures(
-            //     //     FnWithCapturesImpl { form, captures },
-            //     // )))
-            // }
-            // // other => other,
-            // // };
-            body.push(analyzed_form);
-        }
-
-        Ok(BodyForm { body })
+        Ok(BodyForm {
+            body: body_forms
+                .iter()
+                .map(|f| self.analyze(f))
+                .collect::<Result<_, _>>()?,
+        })
     }
 
     fn analyze_fn_captures(&mut self) -> Captures {

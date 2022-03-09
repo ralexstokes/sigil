@@ -451,7 +451,6 @@ impl Interpreter {
         for scope in self.scopes.iter().rev() {
             if let Some(value) = scope.get(identifier) {
                 // TODO: wrap in Rc for cheap clone?
-                dbg!(value);
                 match value {
                     // support forward declarations via Var
                     RuntimeValue::Var(var) => return var.value(),
@@ -499,7 +498,6 @@ impl Interpreter {
             let name = let_form.identifier_for_binding(index).unwrap();
             let value = RuntimeValue::Var(Var::Unbound);
             let lexical_scope = self.scopes.last_mut().unwrap();
-            dbg!(name);
             lexical_scope.insert(name.clone(), value);
         }
 
@@ -508,10 +506,8 @@ impl Interpreter {
                 Ok(value) => {
                     let lexical_scope = self.scopes.last_mut().unwrap();
                     if let Some(name) = lexical_scope.get_mut(name) {
-                        dbg!(&name);
                         match name {
                             RuntimeValue::Var(var) => {
-                                dbg!(&var, &value);
                                 var.update(value);
                             }
                             _ => unreachable!("only vars should be inserted as lexical terms ahead of bindings evaluation"),
@@ -801,7 +797,6 @@ impl Interpreter {
     }
 
     fn evaluate_analyzed_form(&mut self, form: &RuntimeValue) -> EvaluationResult<RuntimeValue> {
-        dbg!(form);
         let value = match form {
             RuntimeValue::Nil => form.clone(),
             RuntimeValue::Bool(..) => form.clone(),
@@ -883,7 +878,6 @@ impl Interpreter {
             .iter()
             .map(|form| self.analyze_and_evaluate(form))
             .collect::<Result<Vec<RuntimeValue>, _>>();
-        dbg!(&result);
         self.analyzer.reset();
         result
     }
