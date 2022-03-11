@@ -4,7 +4,7 @@ use crate::writer::{
 };
 use std::fmt;
 
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Form {
     Atom(Atom),
     List(Vec<Form>),
@@ -13,7 +13,7 @@ pub enum Form {
     Set(Vec<Form>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub enum Atom {
     Nil,
     Bool(bool),
@@ -25,7 +25,7 @@ pub enum Atom {
 
 pub type Identifier = String;
 
-#[derive(Clone, PartialEq, Eq, Debug, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
 pub struct Symbol {
     pub identifier: Identifier,
     pub namespace: Option<Identifier>,
