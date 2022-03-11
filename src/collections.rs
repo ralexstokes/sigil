@@ -1,14 +1,13 @@
-use itertools::sorted;
-use std::cmp::Ordering;
-use std::hash::{Hash, Hasher};
-use std::iter::{FromIterator, IntoIterator};
-use std::ops::{Deref, DerefMut};
-
 use archery::RcK;
+use itertools::sorted;
 use rpds::map::hash_trie_map::Iter as MapIter;
 use rpds::set::hash_trie_set::Iter as SetIter;
 use rpds::{HashTrieMap, HashTrieSet};
 pub use rpds::{List as PersistentList, Vector as PersistentVector};
+use std::cmp::Ordering;
+use std::hash::{Hash, Hasher};
+use std::iter::{FromIterator, IntoIterator};
+use std::ops::{Deref, DerefMut};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PersistentMap<K: Eq + Hash + Ord, V: Eq + Ord + Hash>(HashTrieMap<K, V>);
