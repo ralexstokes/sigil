@@ -477,7 +477,13 @@ fn deref(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<Runtime
     }
     match &args[0] {
         RuntimeValue::Atom(atom) => Ok(atom.value().clone()),
-        RuntimeValue::Var(var) => Ok(var.value()),
+        RuntimeValue::Var(var) => match var.inner() {
+            Some(value) => Ok(value),
+            None => Err(EvaluationError::WrongType {
+                expected: "bound var",
+                realized: RuntimeValue::Var(var.clone()),
+            }),
+        },
         other => Err(EvaluationError::WrongType {
             expected: "Atom, Var",
             realized: other.clone(),

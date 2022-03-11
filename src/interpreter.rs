@@ -814,6 +814,7 @@ impl Interpreter {
             RuntimeValue::Symbol(symbol) => self.resolve_symbol_to_value(symbol)?,
             RuntimeValue::LexicalSymbol(identifier) => self.resolve_in_lexical_scopes(identifier),
             RuntimeValue::Var(var) => var.value(),
+            RuntimeValue::UnboundVar(..) => form.clone(),
             RuntimeValue::List(coll) => self.evaluate_analyzed_list(coll)?,
             RuntimeValue::Vector(coll) => {
                 let evaluated_coll = coll

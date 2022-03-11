@@ -125,6 +125,10 @@ pub(crate) fn write_located_var(f: &mut fmt::Formatter<'_>, var: &LocatedVar) ->
     write_symbol(f, &var.symbol)
 }
 
+pub(crate) fn write_unbound_var(f: &mut fmt::Formatter<'_>, symbol: &Symbol) -> fmt::Result {
+    write!(f, "<unbound var: #'")?;
+    write_symbol(f, symbol)?;
+    write!(f, ">")
 }
 
 pub(crate) fn write_exception(
