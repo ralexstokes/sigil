@@ -348,14 +348,14 @@ impl Interpreter {
     }
 
     pub fn register_symbol_index(&mut self, symbol_index: Rc<RefCell<SymbolIndex>>) {
-        let mut index = symbol_index.borrow_mut();
+        // let mut index = symbol_index.borrow_mut();
         // TODO: fixme
         // for namespace in self.namespaces.values() {
         //     for symbol in namespace.symbols() {
         //         index.insert(symbol.clone());
         //     }
         // }
-        drop(index);
+        // drop(index);
 
         self.symbol_index = Some(symbol_index);
     }
