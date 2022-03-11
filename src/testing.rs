@@ -33,7 +33,7 @@ pub fn run_eval_test(test_cases: &[(&str, RuntimeValue)]) {
             if final_result != *expected {
                 has_err = true;
                 println!(
-                    "failure: evaluating `{}` should give `{}` but got: {}",
+                    "failure: evaluating `{}` should give `{}` but got: `{}`",
                     input, expected, final_result
                 );
             }
