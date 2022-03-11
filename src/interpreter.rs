@@ -874,8 +874,7 @@ impl Interpreter {
     }
 
     fn analyze(&mut self, form: &Form) -> EvaluationResult<RuntimeValue> {
-        let analyzer = self.analyzer.in_context(AnalysisContext::Default);
-        analyzer
+        self.analyzer
             .analyze(form)
             .map_err(|err| EvaluationError::AnalysisError(err))
     }
@@ -885,10 +884,13 @@ impl Interpreter {
         form: &Form,
         context: AnalysisContext,
     ) -> EvaluationResult<RuntimeValue> {
-        let analyzer = self.analyzer.in_context(context);
-        analyzer
+        let contexts = self.analyzer.in_context(context);
+        let result = self
+            .analyzer
             .analyze(form)
-            .map_err(|err| EvaluationError::AnalysisError(err))
+            .map_err(|err| EvaluationError::AnalysisError(err));
+        self.analyzer.restore(contexts);
+        result
     }
 
     pub fn interpret(&mut self, source: &str) -> EvaluationResult<Vec<RuntimeValue>> {

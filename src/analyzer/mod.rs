@@ -361,10 +361,14 @@ impl Analyzer {
         self.global_scope.clear();
     }
 
-    pub(crate) fn in_context(&mut self, context: Context) -> &mut Self {
-        self.contexts.clear();
+    pub(crate) fn in_context(&mut self, context: Context) -> Vec<Context> {
+        let existing = self.contexts.drain(0..).collect();
         self.contexts.push(context);
-        self
+        existing
+    }
+
+    pub(crate) fn restore(&mut self, contexts: Vec<Context>) {
+        self.contexts = contexts;
     }
 
     fn current_lexical_frame(&self) -> usize {
