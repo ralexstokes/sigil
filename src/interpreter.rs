@@ -236,7 +236,7 @@ fn eval_quasiquote_special_form(form: &SpecialForm) -> EvaluationResult<RuntimeV
         SpecialForm::Quasiquote(form) => {
             RuntimeValue::SpecialForm(SpecialForm::Quasiquote(Box::new(eval_quasiquote(form)?)))
         }
-        SpecialForm::Unquote(form) => *form.clone(),
+        SpecialForm::Unquote(..) => unreachable!("analysis has already inlined this evaluation"),
         SpecialForm::SpliceUnquote(form) => {
             RuntimeValue::SpecialForm(SpecialForm::SpliceUnquote(Box::new(eval_quasiquote(form)?)))
         }

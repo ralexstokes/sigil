@@ -326,6 +326,7 @@ pub(crate) enum Context {
     Default,
     Quote,
     Quasiquote,
+    Unquote,
 }
 
 #[derive(Debug)]
@@ -685,11 +686,13 @@ impl Analyzer {
 
         verify_arity(args, 1..2).map_err(UnquoteError::from)?;
 
+        self.contexts.push(Context::Unquote);
+
         let form = self.analyze(&args[0])?;
 
-        Ok(RuntimeValue::SpecialForm(SpecialForm::Unquote(Box::new(
-            form,
-        ))))
+        self.contexts.pop();
+
+        Ok(form)
     }
 
     // (splice-unquote form)
@@ -878,7 +881,10 @@ impl Analyzer {
 
     fn should_not_resolve_symbols(&self) -> bool {
         let current_context = self.contexts.last().expect("at least one global context");
-        matches!(current_context, Context::Quote | Context::Quasiquote)
+        match current_context {
+            Context::Quote | Context::Quasiquote => true,
+            _ => false,
+        }
     }
 
     fn analyze_symbol(&mut self, symbol: &Symbol) -> AnalysisResult<RuntimeValue> {
