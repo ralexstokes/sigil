@@ -1,5 +1,7 @@
 use crate::reader::{Identifier, Symbol};
-use crate::value::{BodyForm, DefForm, ExceptionImpl, FnForm, LexicalBinding, SpecialForm, Var};
+use crate::value::{
+    BodyForm, DefForm, ExceptionImpl, FnForm, LexicalBinding, LocatedVar, SpecialForm,
+};
 use itertools::join;
 use std::fmt::{self, Display, Write};
 use std::string::String as StdString;
@@ -118,16 +120,11 @@ pub(crate) fn write_primitive(f: &mut fmt::Formatter<'_>) -> fmt::Result {
     write!(f, "<primitive fn>")
 }
 
-pub(crate) fn write_var(f: &mut fmt::Formatter<'_>, var: &Var) -> fmt::Result {
-    match var {
-        Var::Bound(data) => {
-            // TODO how to display name...
-            write!(f, "<bound var #'TODO>")
-        }
-        Var::Unbound => {
-            write!(f, "<unbound var #'TODO>")
-        }
-    }
+pub(crate) fn write_located_var(f: &mut fmt::Formatter<'_>, var: &LocatedVar) -> fmt::Result {
+    write!(f, "#'")?;
+    write_symbol(f, &var.symbol)
+}
+
 }
 
 pub(crate) fn write_exception(

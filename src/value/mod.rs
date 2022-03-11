@@ -6,8 +6,9 @@ use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter};
 use crate::reader::{Atom, Identifier, Symbol};
 use crate::writer::{
     unescape_string, write_bool, write_exception, write_fn, write_identifer, write_keyword,
-    write_list, write_macro, write_map, write_nil, write_number, write_primitive, write_set,
-    write_special_form, write_string, write_symbol, write_var, write_vector,
+    write_list, write_located_var, write_macro, write_map, write_nil, write_number,
+    write_primitive, write_set, write_special_form, write_string, write_symbol, write_unbound_var,
+    write_vector,
 };
 pub use atom::AtomRef;
 use itertools::{sorted, Itertools};
@@ -17,7 +18,7 @@ use std::fmt::{self, Write};
 use std::hash::{Hash, Hasher};
 use std::mem::discriminant;
 use std::ops::Deref;
-pub use var::Var;
+pub use var::{LocatedVar, Var};
 
 pub type Scope = HashMap<Identifier, RuntimeValue>;
 pub type NativeFn = fn(&mut Interpreter, &[RuntimeValue]) -> EvaluationResult<RuntimeValue>;
@@ -435,7 +436,7 @@ pub enum RuntimeValue {
     Keyword(Symbol),
     Symbol(Symbol),
     LexicalSymbol(Identifier),
-    Var(Var),
+    Var(LocatedVar),
     List(PersistentList<RuntimeValue>),
     Vector(PersistentVector<RuntimeValue>),
     Map(PersistentMap<RuntimeValue, RuntimeValue>),
@@ -501,7 +502,7 @@ impl fmt::Display for RuntimeValue {
             RuntimeValue::LexicalSymbol(s) => write_identifer(f, s),
             RuntimeValue::Keyword(symbol) => write_keyword(f, symbol),
             RuntimeValue::Symbol(symbol) => write_symbol(f, symbol),
-            RuntimeValue::Var(var) => write_var(f, var),
+            RuntimeValue::Var(var) => write_located_var(f, var),
             RuntimeValue::List(elems) => write_list(f, elems),
             RuntimeValue::Vector(elems) => write_vector(f, elems),
             RuntimeValue::Map(elems) => write_map(f, elems),

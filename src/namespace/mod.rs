@@ -1,5 +1,5 @@
 use crate::reader::{Identifier, Symbol};
-use crate::value::{RuntimeValue, Var};
+use crate::value::{LocatedVar, RuntimeValue, Var};
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -21,8 +21,8 @@ impl Default for Context {
         let current_namespace = 0;
         let default_identifier = Identifier::from(DEFAULT_NAME);
         let names = HashMap::from([(default_identifier.clone(), current_namespace)]);
+        let namespaces = vec![Namespace::new(&default_identifier)];
         let name_lookup = HashMap::from([(current_namespace, default_identifier)]);
-        let namespaces = vec![Namespace::default()];
 
         Self {
             names,
@@ -53,7 +53,7 @@ impl Context {
 
     fn create_if_missing(&mut self, identifier: &Identifier) -> usize {
         *self.names.entry(identifier.clone()).or_insert_with(|| {
-            self.namespaces.push(Namespace::default());
+            self.namespaces.push(Namespace::new(identifier));
             let index = self.namespaces.len() - 1;
             self.name_lookup.insert(index, identifier.clone());
             index
@@ -65,12 +65,12 @@ impl Context {
         &mut self.namespaces[index]
     }
 
-    pub fn intern_namespace(&mut self, name: &Identifier, namespace: Namespace) {
-        let ns = self.get_namespace_mut(name);
+    pub fn intern_namespace(&mut self, namespace: Namespace) {
+        let ns = self.get_namespace_mut(&namespace.name);
         ns.merge(namespace);
     }
 
-    pub fn resolve_symbol(&self, symbol: &Symbol) -> Result<Var, NamespaceError> {
+    pub fn resolve_symbol(&self, symbol: &Symbol) -> Result<LocatedVar, NamespaceError> {
         match symbol {
             Symbol {
                 identifier,
@@ -87,7 +87,7 @@ impl Context {
         &self,
         name: &Identifier,
         identifier: &Identifier,
-    ) -> Result<Var, NamespaceError> {
+    ) -> Result<LocatedVar, NamespaceError> {
         let namespace_index = self
             .names
             .get(name)
@@ -103,7 +103,7 @@ impl Context {
     fn resolve_reference_in_current_namespace(
         &self,
         identifier: &Identifier,
-    ) -> Result<Var, NamespaceError> {
+    ) -> Result<LocatedVar, NamespaceError> {
         self.current_namespace().get(identifier).ok_or_else(|| {
             let name = self.name_lookup.get(&self.current_namespace).unwrap();
             NamespaceError::MissingIdentifier(identifier.clone(), name.clone())
@@ -119,13 +119,21 @@ pub enum NamespaceError {
     MissingIdentifier(Identifier, Identifier),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Namespace {
-    bindings: HashMap<Identifier, Var>,
+    pub name: Identifier,
+    bindings: HashMap<Identifier, LocatedVar>,
 }
 
 impl Namespace {
-    pub fn get(&self, identifier: &Identifier) -> Option<Var> {
+    pub fn new(name: &Identifier) -> Self {
+        Self {
+            name: name.clone(),
+            bindings: Default::default(),
+        }
+    }
+
+    pub fn get(&self, identifier: &Identifier) -> Option<LocatedVar> {
         self.bindings.get(identifier).map(|var| var.clone())
     }
 
@@ -133,11 +141,14 @@ impl Namespace {
         &mut self,
         identifier: &Identifier,
         value: Option<RuntimeValue>,
-    ) -> Result<Var, NamespaceError> {
-        let var = self
-            .bindings
-            .entry(identifier.clone())
-            .or_insert_with(|| Var::Unbound);
+    ) -> Result<LocatedVar, NamespaceError> {
+        let var = self.bindings.entry(identifier.clone()).or_insert_with(|| {
+            let symbol = Symbol {
+                identifier: identifier.clone(),
+                namespace: Some(self.name.clone()),
+            };
+            LocatedVar::new(&symbol, Var::Unbound)
+        });
 
         if let Some(value) = value {
             var.update(value)
@@ -162,7 +173,6 @@ impl Namespace {
 }
 
 pub struct NamespaceDesc<'a> {
-    pub name: Identifier,
     pub namespace: Namespace,
     pub source: Option<&'a str>,
 }

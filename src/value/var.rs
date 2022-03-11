@@ -1,7 +1,9 @@
+use crate::reader::Symbol;
 use crate::value::RuntimeValue;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::mem::discriminant;
+use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -29,14 +31,6 @@ impl Var {
         Var::Bound(Rc::new(RefCell::new(value)))
     }
 
-    pub fn value(&self) -> RuntimeValue {
-        match self {
-            Var::Bound(inner) => inner.borrow().clone(),
-            // NOTE: this is a bit of a pun, in lieu of having anything more descriptive to provide for now
-            Var::Unbound => RuntimeValue::Var(self.clone()),
-        }
-    }
-
     pub fn inner(&self) -> Option<RuntimeValue> {
         match self {
             Var::Bound(inner) => Some(inner.borrow().clone()),
@@ -52,5 +46,41 @@ impl Var {
             }
             Var::Unbound => *self = Var::new(value),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LocatedVar {
+    pub symbol: Symbol,
+    data: Var,
+}
+
+impl LocatedVar {
+    pub fn new(symbol: &Symbol, data: Var) -> Self {
+        Self {
+            symbol: symbol.clone(),
+            data,
+        }
+    }
+
+    pub fn value(&self) -> RuntimeValue {
+        match &self.data {
+            Var::Bound(inner) => inner.borrow().clone(),
+            Var::Unbound => RuntimeValue::UnboundVar(self.symbol.clone()),
+        }
+    }
+}
+
+impl Deref for LocatedVar {
+    type Target = Var;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl DerefMut for LocatedVar {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
     }
 }

@@ -5,7 +5,8 @@ use crate::namespace::{Context as NamespaceContext, NamespaceDesc, NamespaceErro
 use crate::reader::{read, Form, Identifier, ReadError, Symbol};
 use crate::value::{
     exception_from_system_err, BodyForm, CatchForm, DefForm, ExceptionImpl, FnForm, FnImpl,
-    FnWithCapturesImpl, IfForm, LetForm, RuntimeValue, Scope, SpecialForm, TryForm, Var,
+    FnWithCapturesImpl, IfForm, LetForm, LocatedVar, RuntimeValue, Scope, SpecialForm, TryForm,
+    Var,
 };
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -362,15 +363,9 @@ impl Interpreter {
 
     pub fn load_namespace(
         &mut self,
-        NamespaceDesc {
-            name,
-            namespace,
-            source,
-        }: NamespaceDesc,
+        NamespaceDesc { namespace, source }: NamespaceDesc,
     ) -> EvaluationResult<()> {
-        self.namespaces
-            .borrow_mut()
-            .intern_namespace(&name, namespace);
+        self.namespaces.borrow_mut().intern_namespace(namespace);
 
         if let Some(source) = source {
             self.interpret(source)?;
@@ -416,7 +411,11 @@ impl Interpreter {
         }
     }
 
-    fn intern(&mut self, symbol: &Symbol, value: Option<RuntimeValue>) -> EvaluationResult<Var> {
+    fn intern(
+        &mut self,
+        symbol: &Symbol,
+        value: Option<RuntimeValue>,
+    ) -> EvaluationResult<LocatedVar> {
         let mut namespaces = self.namespaces.borrow_mut();
         let namespace = match &symbol.namespace {
             Some(ns) => namespaces.get_namespace_mut(ns),
@@ -496,7 +495,11 @@ impl Interpreter {
         self.enter_scope();
         for &index in forward_declarations {
             let name = let_form.identifier_for_binding(index).unwrap();
-            let value = RuntimeValue::Var(Var::Unbound);
+            let symbol = Symbol {
+                identifier: name.clone(),
+                namespace: None,
+            };
+            let value = RuntimeValue::Var(LocatedVar::new(&symbol, Var::Unbound));
             let lexical_scope = self.scopes.last_mut().unwrap();
             lexical_scope.insert(name.clone(), value);
         }
@@ -536,7 +539,11 @@ impl Interpreter {
         self.enter_scope();
         for &index in forward_declarations {
             let name = loop_form.identifier_for_binding(index).unwrap();
-            let value = RuntimeValue::Var(Var::Unbound);
+            let symbol = Symbol {
+                identifier: name.clone(),
+                namespace: None,
+            };
+            let value = RuntimeValue::Var(LocatedVar::new(&symbol, Var::Unbound));
             let lexical_scope = self.scopes.last_mut().unwrap();
             lexical_scope.insert(name.clone(), value);
         }
@@ -911,7 +918,7 @@ mod test {
     use crate::reader::{self, Form, Symbol};
     use crate::testing::run_eval_test;
     use crate::value::{
-        exception, AtomRef,
+        exception, AtomRef, LocatedVar,
         RuntimeValue::{self, *},
         Var,
     };
@@ -1045,11 +1052,38 @@ mod test {
     #[test]
     fn test_basic_def() {
         let test_cases = vec![
-            ("(def! a 3)", RuntimeValue::Var(Var::new(Number(3)))),
+            (
+                "(def! a 3)",
+                RuntimeValue::Var(LocatedVar::new(
+                    &Symbol {
+                        identifier: "a".to_string(),
+                        namespace: Some("core".to_string()),
+                    },
+                    Var::new(Number(3)),
+                )),
+            ),
             ("(def! a 3) (+ a 1)", Number(4)),
             ("(def! a (+ 1 7)) (+ a 1)", Number(9)),
-            ("(def! some-num 3)", RuntimeValue::Var(Var::new(Number(3)))),
-            ("(def! SOME-NUM 4)", RuntimeValue::Var(Var::new(Number(4)))),
+            (
+                "(def! some-num 3)",
+                RuntimeValue::Var(LocatedVar::new(
+                    &Symbol {
+                        identifier: "some-num".to_string(),
+                        namespace: Some("core".to_string()),
+                    },
+                    Var::new(Number(3)),
+                )),
+            ),
+            (
+                "(def! SOME-NUM 4)",
+                RuntimeValue::Var(LocatedVar::new(
+                    &Symbol {
+                        identifier: "SOME-NUM".to_string(),
+                        namespace: Some("core".to_string()),
+                    },
+                    Var::new(Number(4)),
+                )),
+            ),
         ];
         run_eval_test(&test_cases);
     }

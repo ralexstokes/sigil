@@ -87,7 +87,7 @@ const BINDINGS: &[(&str, NativeFn)] = &[
 ];
 
 pub fn namespace() -> NamespaceDesc<'static> {
-    let mut namespace = Namespace::default();
+    let mut namespace = Namespace::new(&Identifier::from(DEFAULT_NAME));
     for (k, f) in BINDINGS.iter() {
         let name = k.to_string();
         let value = RuntimeValue::Primitive(f.into());
@@ -95,7 +95,6 @@ pub fn namespace() -> NamespaceDesc<'static> {
     }
 
     NamespaceDesc {
-        name: Identifier::from(DEFAULT_NAME),
         namespace,
         source: Some(SOURCE),
     }
