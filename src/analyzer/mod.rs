@@ -322,7 +322,7 @@ fn is_forward_visible(form: &Form) -> bool {
 }
 
 #[derive(Debug)]
-enum Context {
+pub(crate) enum Context {
     Default,
     Quote,
     Quasiquote,
@@ -359,6 +359,12 @@ impl Analyzer {
         debug_assert!(self.captures.is_empty());
         debug_assert!(self.forward_declarations.is_empty());
         self.global_scope.clear();
+    }
+
+    pub(crate) fn in_context(&mut self, context: Context) -> &mut Self {
+        self.contexts.clear();
+        self.contexts.push(context);
+        self
     }
 
     fn current_lexical_frame(&self) -> usize {

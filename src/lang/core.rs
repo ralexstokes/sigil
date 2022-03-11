@@ -1,3 +1,4 @@
+use crate::analyzer::Context as AnalysisContext;
 use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::interpreter::{EvaluationError, EvaluationResult, Interpreter, InterpreterError};
 use crate::namespace::{Namespace, NamespaceDesc, DEFAULT_NAME};
@@ -348,7 +349,10 @@ fn equal(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<Runtime
     Ok(RuntimeValue::Bool(&args[0] == &args[1]))
 }
 
-fn read_string(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<RuntimeValue> {
+fn read_string(
+    interpreter: &mut Interpreter,
+    args: &[RuntimeValue],
+) -> EvaluationResult<RuntimeValue> {
     if args.len() != 1 {
         return Err(EvaluationError::WrongArity {
             expected: 1,
@@ -357,16 +361,14 @@ fn read_string(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<R
     }
     match &args[0] {
         RuntimeValue::String(s) => {
-            let mut forms = read(s).map_err(|err| {
+            let forms = read(s).map_err(|err| {
                 let context = err.context(s);
                 EvaluationError::ReaderError(err, context.to_string())
             })?;
             if forms.is_empty() {
                 Ok(RuntimeValue::Nil)
             } else {
-                // let form = forms.pop().unwrap();
-                // Ok(form)
-                unimplemented!("need to be able to pass unanalyzed form");
+                interpreter.analyze_in_context(&forms.first().unwrap(), AnalysisContext::Quote)
             }
         }
         other => Err(EvaluationError::WrongType {

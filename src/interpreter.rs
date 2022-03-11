@@ -1,4 +1,4 @@
-use crate::analyzer::{AnalysisError, Analyzer};
+use crate::analyzer::{AnalysisError, Analyzer, Context as AnalysisContext};
 use crate::collections::{PersistentList, PersistentMap, PersistentSet, PersistentVector};
 use crate::lang::core;
 use crate::namespace::{Context as NamespaceContext, NamespaceDesc, NamespaceError};
@@ -868,9 +868,27 @@ impl Interpreter {
         result
     }
 
-    pub(crate) fn analyze_and_evaluate(&mut self, form: &Form) -> EvaluationResult<RuntimeValue> {
-        let analyzed_form = self.analyzer.analyze(form)?;
+    fn analyze_and_evaluate(&mut self, form: &Form) -> EvaluationResult<RuntimeValue> {
+        let analyzed_form = self.analyze(form)?;
         self.evaluate_analyzed_form(&analyzed_form)
+    }
+
+    fn analyze(&mut self, form: &Form) -> EvaluationResult<RuntimeValue> {
+        let analyzer = self.analyzer.in_context(AnalysisContext::Default);
+        analyzer
+            .analyze(form)
+            .map_err(|err| EvaluationError::AnalysisError(err))
+    }
+
+    pub(crate) fn analyze_in_context(
+        &mut self,
+        form: &Form,
+        context: AnalysisContext,
+    ) -> EvaluationResult<RuntimeValue> {
+        let analyzer = self.analyzer.in_context(context);
+        analyzer
+            .analyze(form)
+            .map_err(|err| EvaluationError::AnalysisError(err))
     }
 
     pub fn interpret(&mut self, source: &str) -> EvaluationResult<Vec<RuntimeValue>> {
