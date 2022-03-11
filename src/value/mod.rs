@@ -426,7 +426,7 @@ impl FnWithCapturesImpl {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, Eq, PartialOrd, Ord, Hash)]
 pub enum RuntimeValue {
     Nil,
     Bool(bool),
@@ -446,6 +446,49 @@ pub enum RuntimeValue {
     Exception(ExceptionImpl),
     Atom(AtomRef),
     Macro(FnImpl),
+}
+
+impl PartialEq for RuntimeValue {
+    fn eq(&self, other: &Self) -> bool {
+        use RuntimeValue::*;
+
+        match (self, other) {
+            (Nil, Nil) => true,
+            (Bool(x), Bool(y)) => x == y,
+            (Number(x), Number(y)) => x == y,
+            (String(x), String(y)) => x == y,
+            (Keyword(x), Keyword(y)) => x == y,
+            (Symbol(x), Symbol(y)) => x == y,
+            (LexicalSymbol(x), LexicalSymbol(y)) => x == y,
+            (Var(x), Var(y)) => x == y,
+            (List(x), List(y)) => x == y,
+            (Vector(x), Vector(y)) => x == y,
+            (Map(x), Map(y)) => x == y,
+            (Set(x), Set(y)) => x == y,
+            (SpecialForm(x), SpecialForm(y)) => x == y,
+            (Fn(x), Fn(y)) => x == y,
+            (Primitive(x), Primitive(y)) => x == y,
+            (Exception(x), Exception(y)) => x == y,
+            (Atom(x), Atom(y)) => x == y,
+            (Macro(x), Macro(y)) => x == y,
+            // special case list and vector outer equivalence
+            (List(x), Vector(y)) => {
+                if x.len() != y.len() {
+                    false
+                } else {
+                    x.iter().zip(y.iter()).all(|(x, y)| x == y)
+                }
+            }
+            (Vector(x), List(y)) => {
+                if x.len() != y.len() {
+                    false
+                } else {
+                    x.iter().zip(y.iter()).all(|(x, y)| x == y)
+                }
+            }
+            (_, _) => false,
+        }
+    }
 }
 
 impl fmt::Display for RuntimeValue {

@@ -337,26 +337,6 @@ comparator!(less_eq, <=);
 comparator!(greater, >);
 comparator!(greater_eq, >=);
 
-fn is_equal(x: &RuntimeValue, y: &RuntimeValue) -> bool {
-    match (x, y) {
-        (RuntimeValue::List(xs), RuntimeValue::Vector(ys)) => {
-            if xs.len() != ys.len() {
-                false
-            } else {
-                xs.iter().zip(ys.iter()).all(|(x, y)| is_equal(x, y))
-            }
-        }
-        (RuntimeValue::Vector(xs), RuntimeValue::List(ys)) => {
-            if xs.len() != ys.len() {
-                false
-            } else {
-                xs.iter().zip(ys.iter()).all(|(x, y)| is_equal(x, y))
-            }
-        }
-        (a, b) => a == b,
-    }
-}
-
 fn equal(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<RuntimeValue> {
     if args.len() != 2 {
         return Err(EvaluationError::WrongArity {
@@ -365,7 +345,7 @@ fn equal(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<Runtime
         });
     }
 
-    Ok(RuntimeValue::Bool(is_equal(&args[0], &args[1])))
+    Ok(RuntimeValue::Bool(&args[0] == &args[1]))
 }
 
 fn read_string(_: &mut Interpreter, args: &[RuntimeValue]) -> EvaluationResult<RuntimeValue> {
