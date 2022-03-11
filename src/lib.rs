@@ -1,9 +1,11 @@
-mod analyzer;
+pub(crate) mod analyzer;
+pub(crate) mod collections;
 mod interpreter;
 mod lang;
 mod namespace;
-mod reader;
+pub(crate) mod reader;
 mod value;
+mod writer;
 
 #[cfg(test)]
 mod testing;

@@ -13,7 +13,7 @@ fn run_tests_as_self_hosted() {
     let args = env::args().into_iter().chain(iter::once(arg));
     interpreter.intern_args(args);
     interpreter
-        .evaluate_from_source(SELF_HOSTING_REPL_SOURCE)
+        .interpret(SELF_HOSTING_REPL_SOURCE)
         .expect("is valid source");
 }
 

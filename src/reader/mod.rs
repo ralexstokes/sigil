@@ -1,4 +1,7 @@
-use crate::value::{list_with_values, map_with_values, set_with_values, vector_with_values, Value};
+mod form;
+
+pub use form::{Atom, Form, Identifier, Symbol};
+
 use itertools::Itertools;
 use std::num::ParseIntError;
 use std::{iter::Peekable, str::CharIndices};
@@ -74,24 +77,30 @@ fn parse_identifier_and_optional_namespace(
     }
 }
 
-fn parse_symbolic_with_namespace(symbolic: &str) -> Result<Value, ReaderError> {
+fn parse_symbolic_with_namespace(symbolic: &str) -> Result<Form, ReaderError> {
     if let Some(symbolic) = symbolic.strip_prefix(':') {
         if symbolic == "/" {
             return Err(ReaderError::InvalidIdentifier);
         }
         let (identifier, ns_opt) = parse_identifier_and_optional_namespace(symbolic)?;
-        Ok(Value::Keyword(identifier, ns_opt))
+        Ok(Form::Atom(Atom::Keyword(Symbol {
+            identifier,
+            namespace: ns_opt,
+        })))
     } else {
         let (identifier, ns_opt) = parse_identifier_and_optional_namespace(symbolic)?;
-        Ok(Value::Symbol(identifier, ns_opt))
+        Ok(Form::Atom(Atom::Symbol(Symbol {
+            identifier,
+            namespace: ns_opt,
+        })))
     }
 }
 
-fn parse_symbolic(symbolic: &str) -> Result<Value, ReaderError> {
+fn parse_symbolic(symbolic: &str) -> Result<Form, ReaderError> {
     match symbolic {
-        "nil" => Ok(Value::Nil),
-        "true" => Ok(Value::Bool(true)),
-        "false" => Ok(Value::Bool(false)),
+        "nil" => Ok(Form::Atom(Atom::Nil)),
+        "true" => Ok(Form::Atom(Atom::Bool(true))),
+        "false" => Ok(Form::Atom(Atom::Bool(false))),
         symbolic => parse_symbolic_with_namespace(symbolic),
     }
 }
@@ -183,8 +192,8 @@ pub enum ReaderError {
     MapLiteralWithUnpairedElements,
     #[error("could not parse dispatch with following char: #{0}")]
     CouldNotParseDispatch(char),
-    #[error("reader macro `#'` requires a symbol suffix but found {0} instead")]
-    VarDispatchRequiresSymbol(Value),
+    #[error("reader macro `#'` requires a symbol suffix but found {0:?} instead")]
+    VarDispatchRequiresSymbol(Form),
     #[error("internal error: {0}")]
     Internal(&'static str),
 }
@@ -241,7 +250,7 @@ enum Span {
 struct Reader<'a> {
     input: &'a str,
     spans: Vec<Span>,
-    values: Vec<Value>,
+    values: Vec<Form>,
     line_count: usize,
     // beginning of the current focus in `input`
     cursor: usize,
@@ -329,7 +338,7 @@ impl<'a> Reader<'a> {
             let n = source.parse()?;
             let span = Range::Slice(start, end);
             self.spans.push(Span::Simple(span));
-            self.values.push(Value::Number(n));
+            self.values.push(Form::Atom(Atom::Number(n)));
             Ok(())
         } else {
             Err(ReaderError::ExpectedMoreInput)
@@ -374,7 +383,7 @@ impl<'a> Reader<'a> {
         let escaped_string = apply_string_escapes(source);
         let span = Range::Slice(start, end);
         self.spans.push(Span::Simple(span));
-        let value = Value::String(escaped_string);
+        let value = Form::Atom(Atom::String(escaped_string));
         self.values.push(value);
         Ok(())
     }
@@ -392,7 +401,7 @@ impl<'a> Reader<'a> {
         let number = self.values.last_mut().expect("did read number");
         let span = self.spans.last_mut().expect("did range number");
         match (number, span) {
-            (Value::Number(n), Span::Simple(range)) => {
+            (Form::Atom(Atom::Number(n)), Span::Simple(range)) => {
                 match range {
                     Range::Slice(number_start, _) => {
                         *number_start = start;
@@ -425,7 +434,13 @@ impl<'a> Reader<'a> {
         let symbol = self.values.last_mut().expect("did read symbol");
         let span = self.spans.last_mut().expect("did range symbol");
         match (symbol, span) {
-            (Value::Symbol(identifier, None), Span::Simple(range)) if identifier == "/" => {
+            (
+                Form::Atom(Atom::Symbol(Symbol {
+                    identifier,
+                    namespace: None,
+                })),
+                Span::Simple(range),
+            ) if identifier == "/" => {
                 match range {
                     Range::Slice(symbol_start, _) => {
                         *symbol_start = start;
@@ -437,7 +452,13 @@ impl<'a> Reader<'a> {
                 self.cursor = start;
                 return Err(ReaderError::MissingIdentifier);
             }
-            (Value::Symbol(identifier, ns_opt), Span::Simple(range)) => {
+            (
+                Form::Atom(Atom::Symbol(Symbol {
+                    identifier,
+                    namespace: ns_opt,
+                })),
+                Span::Simple(range),
+            ) => {
                 match range {
                     Range::Slice(symbol_start, _) => {
                         *symbol_start = start;
@@ -467,7 +488,10 @@ impl<'a> Reader<'a> {
                 ch if is_symbolic(ch) => self.read_symbolic_and_prepend_dash(start, stream)?,
                 _ => {
                     self.cursor = start;
-                    let value = Value::Symbol('-'.to_string(), None);
+                    let value = Form::Atom(Atom::Symbol(Symbol {
+                        identifier: '-'.to_string(),
+                        namespace: None,
+                    }));
                     self.values.push(value);
                     let span = Range::Slice(start, *end);
                     self.spans.push(Span::Simple(span));
@@ -475,7 +499,10 @@ impl<'a> Reader<'a> {
             }
         } else {
             self.cursor = start;
-            let value = Value::Symbol('-'.to_string(), None);
+            let value = Form::Atom(Atom::Symbol(Symbol {
+                identifier: '-'.to_string(),
+                namespace: None,
+            }));
             self.values.push(value);
             let span = Range::ToEnd(start);
             self.spans.push(Span::Simple(span));
@@ -507,7 +534,7 @@ impl<'a> Reader<'a> {
         collector: C,
     ) -> Result<(), ReaderError>
     where
-        C: Fn(Vec<Value>) -> Result<Value, ReaderError>,
+        C: Fn(Vec<Form>) -> Result<Form, ReaderError>,
     {
         let (start, _) = stream.next().expect("from peek");
         self.cursor = start;
@@ -540,7 +567,7 @@ impl<'a> Reader<'a> {
         let (_, next_ch) = stream.peek().ok_or(ReaderError::ExpectedMoreInput)?;
         match *next_ch {
             '{' => {
-                self.read_collection('}', stream, |elems| Ok(set_with_values(elems)))
+                self.read_collection('}', stream, |elems| Ok(Form::Set(elems)))
                     .map_err(|err| {
                         self.cursor = start;
                         err
@@ -566,12 +593,14 @@ impl<'a> Reader<'a> {
                 let symbol = self.values.pop().expect("just read symbol");
                 let span = self.spans.pop().expect("just ranged symbol");
                 match symbol {
-                    symbol @ Value::Symbol(..) => {
-                        let expansion = list_with_values(
-                            [Value::Symbol("var".to_string(), None), symbol]
-                                .iter()
-                                .cloned(),
-                        );
+                    symbol @ Form::Atom(Atom::Symbol(..)) => {
+                        let expansion = Form::List(vec![
+                            Form::Atom(Atom::Symbol(Symbol {
+                                identifier: "var".to_string(),
+                                namespace: None,
+                            })),
+                            symbol,
+                        ]);
                         self.values.push(expansion);
 
                         let dispatch_span = match span {
@@ -643,12 +672,14 @@ impl<'a> Reader<'a> {
             err
         })?;
         let form = self.values.pop().expect("just read form");
-        let expansion = list_with_values(
-            [Value::Symbol(identifier.to_string(), None), form]
-                .iter()
-                .cloned(),
-        );
-        self.values.push(expansion);
+        let expansion = vec![
+            Form::Atom(Atom::Symbol(Symbol {
+                identifier: identifier.to_string(),
+                namespace: None,
+            })),
+            form,
+        ];
+        self.values.push(Form::List(expansion));
 
         let span = self.spans.pop().expect("just ranged form");
         let span = match span {
@@ -680,13 +711,13 @@ impl<'a> Reader<'a> {
     ) -> Result<(), ReaderError> {
         match next_char {
             '(' => {
-                self.read_collection(')', stream, |elems| Ok(list_with_values(elems)))?;
+                self.read_collection(')', stream, |elems| Ok(Form::List(elems)))?;
             }
             ')' => {
                 self.parse_state = ParseState::Exiting;
             }
             '[' => {
-                self.read_collection(']', stream, |elems| Ok(vector_with_values(elems)))?;
+                self.read_collection(']', stream, |elems| Ok(Form::Vector(elems)))?;
             }
             ']' => {
                 self.parse_state = ParseState::Exiting;
@@ -696,7 +727,7 @@ impl<'a> Reader<'a> {
                     if elems.len() % 2 != 0 {
                         Err(ReaderError::MapLiteralWithUnpairedElements)
                     } else {
-                        Ok(map_with_values(elems.into_iter().tuples()))
+                        Ok(Form::Map(elems.into_iter().tuples().collect::<Vec<_>>()))
                     }
                 })?;
             }
@@ -767,7 +798,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-pub fn read(input: &str) -> Result<Vec<Value>, ReadError> {
+pub fn read(input: &str) -> Result<Vec<Form>, ReadError> {
     let mut reader = Reader::new();
     match reader.read(input) {
         Ok(_) => Ok(reader.values),
@@ -777,10 +808,7 @@ pub fn read(input: &str) -> Result<Vec<Value>, ReadError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        list_with_values, map_with_values, read, set_with_values, vector_with_values, ReadError,
-        ReaderError, Value::*,
-    };
+    use super::{read, Atom, Form, ReadError, ReaderError, Symbol};
     use itertools::Itertools;
 
     #[test]
@@ -1042,22 +1070,52 @@ mod tests {
         }
     }
 
+    fn nil() -> Form {
+        Form::Atom(Atom::Nil)
+    }
+
+    fn bool(b: bool) -> Form {
+        Form::Atom(Atom::Bool(b))
+    }
+
+    fn number(n: i64) -> Form {
+        Form::Atom(Atom::Number(n))
+    }
+
+    fn string(s: String) -> Form {
+        Form::Atom(Atom::String(s))
+    }
+
+    fn keyword(id: String, ns: Option<String>) -> Form {
+        Form::Atom(Atom::Keyword(Symbol {
+            identifier: id,
+            namespace: ns,
+        }))
+    }
+
+    fn symbol(id: String, ns: Option<String>) -> Form {
+        Form::Atom(Atom::Symbol(Symbol {
+            identifier: id,
+            namespace: ns,
+        }))
+    }
+
     #[test]
     fn test_basic_read() {
         let cases = vec![
-            ("nil", vec![Nil], "nil"),
-            ("true", vec![Bool(true)], "true"),
-            ("false", vec![Bool(false)], "false"),
-            (" false", vec![Bool(false)], "false"),
-            ("false ", vec![Bool(false)], "false"),
-            ("1337", vec![Number(1337)], "1337"),
-            ("-1337", vec![Number(-1337)], "-1337"),
-            ("-1337  ", vec![Number(-1337)], "-1337"),
-            ("  -1337", vec![Number(-1337)], "-1337"),
-            ("  -1337  ", vec![Number(-1337)], "-1337"),
-            ("1337  ", vec![Number(1337)], "1337"),
-            ("    1337  ", vec![Number(1337)], "1337"),
-            (" ,  1337, ", vec![Number(1337)], "1337"),
+            ("nil", vec![nil()], "nil"),
+            ("true", vec![bool(true)], "true"),
+            ("false", vec![bool(false)], "false"),
+            (" false", vec![bool(false)], "false"),
+            ("false ", vec![bool(false)], "false"),
+            ("1337", vec![number(1337)], "1337"),
+            ("-1337", vec![number(-1337)], "-1337"),
+            ("-1337  ", vec![number(-1337)], "-1337"),
+            ("  -1337", vec![number(-1337)], "-1337"),
+            ("  -1337  ", vec![number(-1337)], "-1337"),
+            ("1337  ", vec![number(1337)], "1337"),
+            ("    1337  ", vec![number(1337)], "1337"),
+            (" ,  1337, ", vec![number(1337)], "1337"),
             (" ", vec![], ""),
             (",", vec![], ""),
             ("  ", vec![], ""),
@@ -1066,360 +1124,354 @@ mod tests {
             (" , ", vec![], ""),
             (
                 "true, , , false",
-                vec![Bool(true), Bool(false)],
+                vec![bool(true), bool(false)],
                 "true false",
             ),
             ("", vec![], ""),
-            ("baz", vec![Symbol("baz".into(), None)], "baz"),
-            ("baz#", vec![Symbol("baz#".into(), None)], "baz#"),
-            ("baz$$", vec![Symbol("baz$$".into(), None)], "baz$$"),
-            ("$baz", vec![Symbol("$baz".into(), None)], "$baz"),
-            ("$baz$$", vec![Symbol("$baz$$".into(), None)], "$baz$$"),
+            ("baz", vec![symbol("baz".into(), None)], "baz"),
+            ("baz#", vec![symbol("baz#".into(), None)], "baz#"),
+            ("baz$$", vec![symbol("baz$$".into(), None)], "baz$$"),
+            ("$baz", vec![symbol("$baz".into(), None)], "$baz"),
+            ("$baz$$", vec![symbol("$baz$$".into(), None)], "$baz$$"),
             (
                 "foo/$baz$$",
-                vec![Symbol("$baz$$".into(), Some("foo".into()))],
+                vec![symbol("$baz$$".into(), Some("foo".into()))],
                 "foo/$baz$$",
             ),
             (
                 "$foo/$baz$$",
-                vec![Symbol("$baz$$".into(), Some("$foo".into()))],
+                vec![symbol("$baz$$".into(), Some("$foo".into()))],
                 "$foo/$baz$$",
             ),
             (
                 "$foo$/$baz$$",
-                vec![Symbol("$baz$$".into(), Some("$foo$".into()))],
+                vec![symbol("$baz$$".into(), Some("$foo$".into()))],
                 "$foo$/$baz$$",
             ),
-            ("-", vec![Symbol("-".into(), None)], "-"),
-            ("-=", vec![Symbol("-=".into(), None)], "-="),
-            ("--", vec![Symbol("--".into(), None)], "--"),
-            ("-baz", vec![Symbol("-baz".into(), None)], "-baz"),
-            ("--baz", vec![Symbol("--baz".into(), None)], "--baz"),
-            ("-$baz", vec![Symbol("-$baz".into(), None)], "-$baz"),
+            ("-", vec![symbol("-".into(), None)], "-"),
+            ("-=", vec![symbol("-=".into(), None)], "-="),
+            ("--", vec![symbol("--".into(), None)], "--"),
+            ("-baz", vec![symbol("-baz".into(), None)], "-baz"),
+            ("--baz", vec![symbol("--baz".into(), None)], "--baz"),
+            ("-$baz", vec![symbol("-$baz".into(), None)], "-$baz"),
             (
                 "--/baz",
-                vec![Symbol("baz".into(), Some("--".to_string()))],
+                vec![symbol("baz".into(), Some("--".to_string()))],
                 "--/baz",
             ),
             (
                 "-=/baz",
-                vec![Symbol("baz".into(), Some("-=".to_string()))],
+                vec![symbol("baz".into(), Some("-=".to_string()))],
                 "-=/baz",
             ),
             (
                 "- baz",
-                vec![Symbol("-".into(), None), Symbol("baz".into(), None)],
+                vec![symbol("-".into(), None), symbol("baz".into(), None)],
                 "- baz",
             ),
-            ("->>", vec![Symbol("->>".into(), None)], "->>"),
-            ("/", vec![Symbol("/".into(), None)], "/"),
+            ("->>", vec![symbol("->>".into(), None)], "->>"),
+            ("/", vec![symbol("/".into(), None)], "/"),
             (
                 "foo//",
-                vec![Symbol("/".into(), Some("foo".into()))],
+                vec![symbol("/".into(), Some("foo".into()))],
                 "foo//",
             ),
             (
                 "bar/-",
-                vec![Symbol("-".into(), Some("bar".into()))],
+                vec![symbol("-".into(), Some("bar".into()))],
                 "bar/-",
             ),
             (
                 "bar/- 1",
-                vec![Symbol("-".into(), Some("bar".into())), Number(1)],
+                vec![symbol("-".into(), Some("bar".into())), number(1)],
                 "bar/- 1",
             ),
             (
                 "bar/- -1",
-                vec![Symbol("-".into(), Some("bar".into())), Number(-1)],
+                vec![symbol("-".into(), Some("bar".into())), number(-1)],
                 "bar/- -1",
             ),
             (
                 "foo/baz",
-                vec![Symbol("baz".into(), Some("foo".into()))],
+                vec![symbol("baz".into(), Some("foo".into()))],
                 "foo/baz",
             ),
             (
                 "foo/baz bar true",
                 vec![
-                    Symbol("baz".into(), Some("foo".into())),
-                    Symbol("bar".into(), None),
-                    Bool(true),
+                    symbol("baz".into(), Some("foo".into())),
+                    symbol("bar".into(), None),
+                    bool(true),
                 ],
                 "foo/baz bar true",
             ),
-            ("\"\"", vec![String("".into())], "\"\""),
-            (r#""\"""#, vec![String("\"".into())], "\"\\\"\""),
-            ("\"hi\"", vec![String("hi".into())], "\"hi\""),
-            ("\" \\\\ \"", vec![String(" \\ ".into())], "\" \\\\ \""),
-            ("\"&\"", vec![String("&".into())], "\"&\""),
-            ("\"'\"", vec![String("'".into())], "\"'\""),
-            ("\"(\"", vec![String("(".into())], "\"(\""),
-            ("\")\"", vec![String(")".into())], "\")\""),
-            ("\"*\"", vec![String("*".into())], "\"*\""),
-            ("\"+\"", vec![String("+".into())], "\"+\""),
-            ("\",\"", vec![String(",".into())], "\",\""),
-            ("\"-\"", vec![String("-".into())], "\"-\""),
-            ("\"/\"", vec![String("/".into())], "\"/\""),
-            ("\":\"", vec![String(":".into())], "\":\""),
-            ("\";\"", vec![String(";".into())], "\";\""),
-            ("\"<\"", vec![String("<".into())], "\"<\""),
-            ("\"=\"", vec![String("=".into())], "\"=\""),
-            ("\">\"", vec![String(">".into())], "\">\""),
-            ("\"?\"", vec![String("?".into())], "\"?\""),
-            ("\"@\"", vec![String("@".into())], "\"@\""),
-            ("\"[\"", vec![String("[".into())], "\"[\""),
-            ("\"]\"", vec![String("]".into())], "\"]\""),
-            ("\"^\"", vec![String("^".into())], "\"^\""),
-            ("\"_\"", vec![String("_".into())], "\"_\""),
-            ("\"`\"", vec![String("`".into())], "\"`\""),
-            ("\"{\"", vec![String("{".into())], "\"{\""),
-            ("\"}\"", vec![String("}".into())], "\"}\""),
-            ("\"~\"", vec![String("~".into())], "\"~\""),
-            ("\"!\"", vec![String("!".into())], "\"!\""),
-            ("\"\\n\"", vec![String("\n".into())], "\"\\n\""),
-            ("\"#\"", vec![String("#".into())], "\"#\""),
-            ("\"$\"", vec![String("$".into())], "\"$\""),
-            ("\"%\"", vec![String("%".into())], "\"%\""),
-            ("\".\"", vec![String(".".into())], "\".\""),
-            ("\"|\"", vec![String("|".into())], "\"|\""),
+            ("\"\"", vec![string("".into())], "\"\""),
+            (r#""\"""#, vec![string("\"".into())], "\"\\\"\""),
+            ("\"hi\"", vec![string("hi".into())], "\"hi\""),
+            ("\" \\\\ \"", vec![string(" \\ ".into())], "\" \\\\ \""),
+            ("\"&\"", vec![string("&".into())], "\"&\""),
+            ("\"'\"", vec![string("'".into())], "\"'\""),
+            ("\"(\"", vec![string("(".into())], "\"(\""),
+            ("\")\"", vec![string(")".into())], "\")\""),
+            ("\"*\"", vec![string("*".into())], "\"*\""),
+            ("\"+\"", vec![string("+".into())], "\"+\""),
+            ("\",\"", vec![string(",".into())], "\",\""),
+            ("\"-\"", vec![string("-".into())], "\"-\""),
+            ("\"/\"", vec![string("/".into())], "\"/\""),
+            ("\":\"", vec![string(":".into())], "\":\""),
+            ("\";\"", vec![string(";".into())], "\";\""),
+            ("\"<\"", vec![string("<".into())], "\"<\""),
+            ("\"=\"", vec![string("=".into())], "\"=\""),
+            ("\">\"", vec![string(">".into())], "\">\""),
+            ("\"?\"", vec![string("?".into())], "\"?\""),
+            ("\"@\"", vec![string("@".into())], "\"@\""),
+            ("\"[\"", vec![string("[".into())], "\"[\""),
+            ("\"]\"", vec![string("]".into())], "\"]\""),
+            ("\"^\"", vec![string("^".into())], "\"^\""),
+            ("\"_\"", vec![string("_".into())], "\"_\""),
+            ("\"`\"", vec![string("`".into())], "\"`\""),
+            ("\"{\"", vec![string("{".into())], "\"{\""),
+            ("\"}\"", vec![string("}".into())], "\"}\""),
+            ("\"~\"", vec![string("~".into())], "\"~\""),
+            ("\"!\"", vec![string("!".into())], "\"!\""),
+            ("\"\\n\"", vec![string("\n".into())], "\"\\n\""),
+            ("\"#\"", vec![string("#".into())], "\"#\""),
+            ("\"$\"", vec![string("$".into())], "\"$\""),
+            ("\"%\"", vec![string("%".into())], "\"%\""),
+            ("\".\"", vec![string(".".into())], "\".\""),
+            ("\"|\"", vec![string("|".into())], "\"|\""),
             (
                 "\"123foo\" true",
-                vec![String("123foo".into()), Bool(true)],
+                vec![string("123foo".into()), bool(true)],
                 "\"123foo\" true",
             ),
             (
                 "\"hi (test with parens)\"",
-                vec![String("hi (test with parens)".into())],
+                vec![string("hi (test with parens)".into())],
                 "\"hi (test with parens)\"",
             ),
-            (r#""abc""#, vec![String("abc".into())], "\"abc\""),
-            (":foobar", vec![Keyword("foobar".into(), None)], ":foobar"),
+            (r#""abc""#, vec![string("abc".into())], "\"abc\""),
+            (":foobar", vec![keyword("foobar".into(), None)], ":foobar"),
             (
                 ":net/hi",
-                vec![Keyword("hi".into(), Some("net".into()))],
+                vec![keyword("hi".into(), Some("net".into()))],
                 ":net/hi",
             ),
             (
                 "::bar",
-                vec![Keyword("bar".into(), Some(":".into()))],
-                // NOTE: this is to match `Value` specific behavior
+                vec![keyword("bar".into(), Some(":".into()))],
+                // NOTE: this is to match `Form` specific behavior
                 // the `::` form is interpreted as an auto-resolving
                 // namespace inside the interpreter
                 "::/bar",
             ),
             (
                 ":a0987234",
-                vec![Keyword("a0987234".into(), None)],
+                vec![keyword("a0987234".into(), None)],
                 ":a0987234",
             ),
             ("; sdlkfjsldfjsldjflsdjf", vec![], ""),
             (
                 "foo/bar true ;; some comment",
-                vec![Symbol("bar".into(), Some("foo".into())), Bool(true)],
+                vec![symbol("bar".into(), Some("foo".into())), bool(true)],
                 "foo/bar true",
             ),
-            ("baz ;; comment \n", vec![Symbol("baz".into(), None)], "baz"),
+            ("baz ;; comment \n", vec![symbol("baz".into(), None)], "baz"),
             (
                 "baz ;; comment \n12",
-                vec![Symbol("baz".into(), None), Number(12)],
+                vec![symbol("baz".into(), None), number(12)],
                 "baz 12",
             ),
             (
                 "baz ;; comment \n   12",
-                vec![Symbol("baz".into(), None), Number(12)],
+                vec![symbol("baz".into(), None), number(12)],
                 "baz 12",
             ),
             (
                 "baz ;; comment \n   12 ;;; another comment!",
-                vec![Symbol("baz".into(), None), Number(12)],
+                vec![symbol("baz".into(), None), number(12)],
                 "baz 12",
             ),
-            ("1;!", vec![Number(1)], "1"),
-            ("1;\"", vec![Number(1)], "1"),
-            ("1;#", vec![Number(1)], "1"),
-            ("1;$", vec![Number(1)], "1"),
-            ("1;%", vec![Number(1)], "1"),
-            ("1;'", vec![Number(1)], "1"),
-            ("1;\\", vec![Number(1)], "1"),
-            ("1;\\\\", vec![Number(1)], "1"),
-            ("1;\\\\\\", vec![Number(1)], "1"),
-            ("1; &()*+,-./:;<=>?@[]^_{|}~", vec![Number(1)], "1"),
-            ("()", vec![list_with_values(vec![])], "()"),
+            ("1;!", vec![number(1)], "1"),
+            ("1;\"", vec![number(1)], "1"),
+            ("1;#", vec![number(1)], "1"),
+            ("1;$", vec![number(1)], "1"),
+            ("1;%", vec![number(1)], "1"),
+            ("1;'", vec![number(1)], "1"),
+            ("1;\\", vec![number(1)], "1"),
+            ("1;\\\\", vec![number(1)], "1"),
+            ("1;\\\\\\", vec![number(1)], "1"),
+            ("1; &()*+,-./:;<=>?@[]^_{|}~", vec![number(1)], "1"),
+            ("()", vec![Form::List(vec![])], "()"),
             (
                 "(a b c)",
-                vec![list_with_values(vec![
-                    Symbol("a".into(), None),
-                    Symbol("b".into(), None),
-                    Symbol("c".into(), None),
+                vec![Form::List(vec![
+                    symbol("a".into(), None),
+                    symbol("b".into(), None),
+                    symbol("c".into(), None),
                 ])],
                 "(a b c)",
             ),
             (
                 "(a b, c,,,,),,",
-                vec![list_with_values(vec![
-                    Symbol("a".into(), None),
-                    Symbol("b".into(), None),
-                    Symbol("c".into(), None),
+                vec![Form::List(vec![
+                    symbol("a".into(), None),
+                    symbol("b".into(), None),
+                    symbol("c".into(), None),
                 ])],
                 "(a b c)",
             ),
             (
                 "(12 :foo/bar \"extra\")",
-                vec![list_with_values(vec![
-                    Number(12),
-                    Keyword("bar".into(), Some("foo".into())),
-                    String("extra".into()),
+                vec![Form::List(vec![
+                    number(12),
+                    keyword("bar".into(), Some("foo".into())),
+                    string("extra".into()),
                 ])],
                 "(12 :foo/bar \"extra\")",
             ),
-            ("[]", vec![vector_with_values(vec![])], "[]"),
+            ("[]", vec![Form::Vector(vec![])], "[]"),
             (
                 "[a b c]",
-                vec![vector_with_values(vec![
-                    Symbol("a".into(), None),
-                    Symbol("b".into(), None),
-                    Symbol("c".into(), None),
+                vec![Form::Vector(vec![
+                    symbol("a".into(), None),
+                    symbol("b".into(), None),
+                    symbol("c".into(), None),
                 ])],
                 "[a b c]",
             ),
             (
                 "[12 :foo/bar \"extra\"]",
-                vec![vector_with_values(vec![
-                    Number(12),
-                    Keyword("bar".into(), Some("foo".into())),
-                    String("extra".into()),
+                vec![Form::Vector(vec![
+                    number(12),
+                    keyword("bar".into(), Some("foo".into())),
+                    string("extra".into()),
                 ])],
                 "[12 :foo/bar \"extra\"]",
             ),
-            ("{}", vec![map_with_values(vec![])], "{}"),
+            ("{}", vec![Form::Map(vec![])], "{}"),
             (
                 "{a b c d}",
-                vec![map_with_values(vec![
-                    (Symbol("a".into(), None), Symbol("b".into(), None)),
-                    (Symbol("c".into(), None), Symbol("d".into(), None)),
+                vec![Form::Map(vec![
+                    (symbol("a".into(), None), symbol("b".into(), None)),
+                    (symbol("c".into(), None), symbol("d".into(), None)),
                 ])],
                 "",
             ),
             (
                 "{12 13 :foo/bar \"extra\"}",
-                vec![map_with_values(vec![
-                    (Number(12), Number(13)),
+                vec![Form::Map(vec![
+                    (number(12), number(13)),
                     (
-                        Keyword("bar".into(), Some("foo".into())),
-                        String("extra".into()),
+                        keyword("bar".into(), Some("foo".into())),
+                        string("extra".into()),
                     ),
                 ])],
                 "",
             ),
             (
                 "() []",
-                vec![list_with_values(vec![]), vector_with_values(vec![])],
+                vec![Form::List(vec![]), Form::Vector(vec![])],
                 "() []",
             ),
             (
                 "()\n[]",
-                vec![list_with_values(vec![]), vector_with_values(vec![])],
+                vec![Form::List(vec![]), Form::Vector(vec![])],
                 "() []",
             ),
-            (
-                "(())",
-                vec![list_with_values(vec![list_with_values(vec![])])],
-                "(())",
-            ),
+            ("(())", vec![Form::List(vec![Form::List(vec![])])], "(())"),
             (
                 "(([]))",
-                vec![list_with_values(vec![list_with_values(vec![
-                    vector_with_values(vec![]),
-                ])])],
+                vec![Form::List(vec![Form::List(vec![Form::Vector(vec![])])])],
                 "(([]))",
             ),
             (
                 "(([]))()",
                 vec![
-                    list_with_values(vec![list_with_values(vec![vector_with_values(vec![])])]),
-                    list_with_values(vec![]),
+                    Form::List(vec![Form::List(vec![Form::Vector(vec![])])]),
+                    Form::List(vec![]),
                 ],
                 "(([])) ()",
             ),
             (
                 "(12 (true [34 false]))(), (7)",
                 vec![
-                    list_with_values(vec![
-                        Number(12),
-                        list_with_values(vec![
-                            Bool(true),
-                            vector_with_values(vec![Number(34), Bool(false)]),
+                    Form::List(vec![
+                        number(12),
+                        Form::List(vec![
+                            bool(true),
+                            Form::Vector(vec![number(34), bool(false)]),
                         ]),
                     ]),
-                    list_with_values(vec![]),
-                    list_with_values(vec![Number(7)]),
+                    Form::List(vec![]),
+                    Form::List(vec![number(7)]),
                 ],
                 "(12 (true [34 false])) () (7)",
             ),
             (
                 "  [ +   1   [+   2 3   ]   ]  ",
-                vec![vector_with_values(vec![
-                    Symbol("+".to_string(), None),
-                    Number(1),
-                    vector_with_values(vec![Symbol("+".to_string(), None), Number(2), Number(3)]),
+                vec![Form::Vector(vec![
+                    symbol("+".to_string(), None),
+                    number(1),
+                    Form::Vector(vec![symbol("+".to_string(), None), number(2), number(3)]),
                 ])],
                 "[+ 1 [+ 2 3]]",
             ),
-            ("#{}", vec![set_with_values(vec![])], "#{}"),
-            ("#{1}", vec![set_with_values(vec![Number(1)])], "#{1}"),
-            ("#{   1}", vec![set_with_values(vec![Number(1)])], "#{1}"),
-            ("#{   1  }", vec![set_with_values(vec![Number(1)])], "#{1}"),
+            ("#{}", vec![Form::Set(vec![])], "#{}"),
+            ("#{1}", vec![Form::Set(vec![number(1)])], "#{1}"),
+            ("#{   1}", vec![Form::Set(vec![number(1)])], "#{1}"),
+            ("#{   1  }", vec![Form::Set(vec![number(1)])], "#{1}"),
             (
                 "#{   \"hi\"  }",
-                vec![set_with_values(vec![String("hi".to_string())])],
+                vec![Form::Set(vec![string("hi".to_string())])],
                 "#{\"hi\"}",
             ),
             (
                 "#{1 2 3}",
-                vec![set_with_values(vec![Number(1), Number(2), Number(3)])],
+                vec![Form::Set(vec![number(1), number(2), number(3)])],
                 "",
             ),
             (
                 "#{(1 3) :foo}",
-                vec![set_with_values(vec![
-                    list_with_values(vec![Number(1), Number(3)]),
-                    Keyword("foo".into(), None),
+                vec![Form::Set(vec![
+                    Form::List(vec![number(1), number(3)]),
+                    keyword("foo".into(), None),
                 ])],
                 "",
             ),
             (
                 "+ ! =",
                 vec![
-                    Symbol("+".into(), None),
-                    Symbol("!".into(), None),
-                    Symbol("=".into(), None),
+                    symbol("+".into(), None),
+                    symbol("!".into(), None),
+                    symbol("=".into(), None),
                 ],
                 "+ ! =",
             ),
             (
                 "(defn foo [a] (+ a 1))",
-                vec![list_with_values(vec![
-                    Symbol("defn".into(), None),
-                    Symbol("foo".into(), None),
-                    vector_with_values(vec![Symbol("a".into(), None)]),
-                    list_with_values(vec![
-                        Symbol("+".into(), None),
-                        Symbol("a".into(), None),
-                        Number(1),
+                vec![Form::List(vec![
+                    symbol("defn".into(), None),
+                    symbol("foo".into(), None),
+                    Form::Vector(vec![symbol("a".into(), None)]),
+                    Form::List(vec![
+                        symbol("+".into(), None),
+                        symbol("a".into(), None),
+                        number(1),
                     ]),
                 ])],
                 "(defn foo [a] (+ a 1))",
             ),
             (
                 "(defn foo\n [a]\n (+ a 1))",
-                vec![list_with_values(vec![
-                    Symbol("defn".into(), None),
-                    Symbol("foo".into(), None),
-                    vector_with_values(vec![Symbol("a".into(), None)]),
-                    list_with_values(vec![
-                        Symbol("+".into(), None),
-                        Symbol("a".into(), None),
-                        Number(1),
+                vec![Form::List(vec![
+                    symbol("defn".into(), None),
+                    symbol("foo".into(), None),
+                    Form::Vector(vec![symbol("a".into(), None)]),
+                    Form::List(vec![
+                        symbol("+".into(), None),
+                        symbol("a".into(), None),
+                        number(1),
                     ]),
                 ])],
                 "(defn foo [a] (+ a 1))",
@@ -1430,170 +1482,153 @@ mod tests {
                   [a]      ; another comment
                   (+ a 1)) ; one final comment
                 "#,
-                vec![list_with_values(vec![
-                    Symbol("defn".into(), None),
-                    Symbol("foo".into(), None),
-                    vector_with_values(vec![Symbol("a".into(), None)]),
-                    list_with_values(vec![
-                        Symbol("+".into(), None),
-                        Symbol("a".into(), None),
-                        Number(1),
+                vec![Form::List(vec![
+                    symbol("defn".into(), None),
+                    symbol("foo".into(), None),
+                    Form::Vector(vec![symbol("a".into(), None)]),
+                    Form::List(vec![
+                        symbol("+".into(), None),
+                        symbol("a".into(), None),
+                        number(1),
                     ]),
                 ])],
                 "(defn foo [a] (+ a 1))",
             ),
             (
                 "@a",
-                vec![list_with_values(vec![
-                    Symbol("deref".into(), None),
-                    Symbol("a".into(), None),
+                vec![Form::List(vec![
+                    symbol("deref".into(), None),
+                    symbol("a".into(), None),
                 ])],
                 "(deref a)",
             ),
             (
                 "@          a",
-                vec![list_with_values(vec![
-                    Symbol("deref".into(), None),
-                    Symbol("a".into(), None),
+                vec![Form::List(vec![
+                    symbol("deref".into(), None),
+                    symbol("a".into(), None),
                 ])],
                 "(deref a)",
             ),
             (
                 "@,,,,,a",
-                vec![list_with_values(vec![
-                    Symbol("deref".into(), None),
-                    Symbol("a".into(), None),
+                vec![Form::List(vec![
+                    symbol("deref".into(), None),
+                    symbol("a".into(), None),
                 ])],
                 "(deref a)",
             ),
             (
                 "@ ,, ,   a",
-                vec![list_with_values(vec![
-                    Symbol("deref".into(), None),
-                    Symbol("a".into(), None),
+                vec![Form::List(vec![
+                    symbol("deref".into(), None),
+                    symbol("a".into(), None),
                 ])],
                 "(deref a)",
             ),
             (
                 "'1",
-                vec![list_with_values(vec![
-                    Symbol("quote".into(), None),
-                    Number(1),
-                ])],
+                vec![Form::List(vec![symbol("quote".into(), None), number(1)])],
                 "(quote 1)",
             ),
             (
                 "'(1 2 3)",
-                vec![list_with_values(vec![
-                    Symbol("quote".into(), None),
-                    list_with_values(vec![Number(1), Number(2), Number(3)]),
+                vec![Form::List(vec![
+                    symbol("quote".into(), None),
+                    Form::List(vec![number(1), number(2), number(3)]),
                 ])],
                 "(quote (1 2 3))",
             ),
             (
                 "`1",
-                vec![list_with_values(vec![
-                    Symbol("quasiquote".into(), None),
-                    Number(1),
+                vec![Form::List(vec![
+                    symbol("quasiquote".into(), None),
+                    number(1),
                 ])],
                 "(quasiquote 1)",
             ),
             (
                 "`(1 2 3)",
-                vec![list_with_values(vec![
-                    Symbol("quasiquote".into(), None),
-                    list_with_values(vec![Number(1), Number(2), Number(3)]),
+                vec![Form::List(vec![
+                    symbol("quasiquote".into(), None),
+                    Form::List(vec![number(1), number(2), number(3)]),
                 ])],
                 "(quasiquote (1 2 3))",
             ),
             (
                 "~1",
-                vec![list_with_values(vec![
-                    Symbol("unquote".into(), None),
-                    Number(1),
-                ])],
+                vec![Form::List(vec![symbol("unquote".into(), None), number(1)])],
                 "(unquote 1)",
             ),
             (
                 "~(1 2 3)",
-                vec![list_with_values(vec![
-                    Symbol("unquote".into(), None),
-                    list_with_values(vec![Number(1), Number(2), Number(3)]),
+                vec![Form::List(vec![
+                    symbol("unquote".into(), None),
+                    Form::List(vec![number(1), number(2), number(3)]),
                 ])],
                 "(unquote (1 2 3))",
             ),
             (
                 "`(1 ~a 3)",
-                vec![list_with_values(vec![
-                    Symbol("quasiquote".into(), None),
-                    list_with_values(vec![
-                        Number(1),
-                        list_with_values(vec![
-                            Symbol("unquote".into(), None),
-                            Symbol("a".into(), None),
+                vec![Form::List(vec![
+                    symbol("quasiquote".into(), None),
+                    Form::List(vec![
+                        number(1),
+                        Form::List(vec![
+                            symbol("unquote".into(), None),
+                            symbol("a".into(), None),
                         ]),
-                        Number(3),
+                        number(3),
                     ]),
                 ])],
                 "(quasiquote (1 (unquote a) 3))",
             ),
             (
                 "~@(1 2 3)",
-                vec![list_with_values(vec![
-                    Symbol("splice-unquote".into(), None),
-                    list_with_values(vec![Number(1), Number(2), Number(3)]),
+                vec![Form::List(vec![
+                    symbol("splice-unquote".into(), None),
+                    Form::List(vec![number(1), number(2), number(3)]),
                 ])],
                 "(splice-unquote (1 2 3))",
             ),
             (
                 "~@,,,,,(1 2 3)",
-                vec![list_with_values(vec![
-                    Symbol("splice-unquote".into(), None),
-                    list_with_values(vec![Number(1), Number(2), Number(3)]),
+                vec![Form::List(vec![
+                    symbol("splice-unquote".into(), None),
+                    Form::List(vec![number(1), number(2), number(3)]),
                 ])],
                 "(splice-unquote (1 2 3))",
             ),
             (
                 "~@,  ,,(1 2 3)",
-                vec![list_with_values(vec![
-                    Symbol("splice-unquote".into(), None),
-                    list_with_values(vec![Number(1), Number(2), Number(3)]),
+                vec![Form::List(vec![
+                    symbol("splice-unquote".into(), None),
+                    Form::List(vec![number(1), number(2), number(3)]),
                 ])],
                 "(splice-unquote (1 2 3))",
             ),
             (
                 "~@    (1 2 3)",
-                vec![list_with_values(vec![
-                    Symbol("splice-unquote".into(), None),
-                    list_with_values(vec![Number(1), Number(2), Number(3)]),
+                vec![Form::List(vec![
+                    symbol("splice-unquote".into(), None),
+                    Form::List(vec![number(1), number(2), number(3)]),
                 ])],
                 "(splice-unquote (1 2 3))",
             ),
-            ("1 #_(1 2 3) 3", vec![Number(1), Number(3)], "1 3"),
+            ("1 #_(1 2 3) 3", vec![number(1), number(3)], "1 3"),
             (
                 "1 (1 2 #_[1 2 3 :keyw]) 3",
-                vec![
-                    Number(1),
-                    list_with_values([Number(1), Number(2)].iter().cloned()),
-                    Number(3),
-                ],
+                vec![number(1), Form::List(vec![number(1), number(2)]), number(3)],
                 "1 (1 2) 3",
             ),
             (
                 "1 (1 2 #_[1 2 3 :keyw]) ,,,,,,, #_3",
-                vec![
-                    Number(1),
-                    list_with_values([Number(1), Number(2)].iter().cloned()),
-                ],
+                vec![number(1), Form::List(vec![number(1), number(2)])],
                 "1 (1 2)",
             ),
             (
                 "1 (1 2 #_[1 2 3 :keyw]) ,,,,,,, #_3        \n\n4",
-                vec![
-                    Number(1),
-                    list_with_values([Number(1), Number(2)].iter().cloned()),
-                    Number(4),
-                ],
+                vec![number(1), Form::List(vec![number(1), number(2)]), number(4)],
                 "1 (1 2) 4",
             ),
         ];
@@ -1602,10 +1637,7 @@ mod tests {
                 Ok(result) => {
                     assert_eq!(result, expected_read);
                     if expected_print != "" {
-                        let print = result
-                            .iter()
-                            .map(|elem| elem.to_readable_string())
-                            .join(" ");
+                        let print = result.iter().join(" ");
                         assert_eq!(print, expected_print);
                     }
                 }

@@ -1,35 +1,39 @@
-;; (ns core)
+;; (ns 'core)
 
-(defmacro! defmacro
-  (fn* [macro-name macro-args & body]
-       `(defmacro! ~macro-name (fn* ~macro-args ~@body))))
-(defmacro let [bindings & body]
-  `(let* ~bindings ~@body))
-(defmacro def [var-name & value]
-  (if (empty? value)
-    `(def! ~var-name)
-    `(def! ~var-name ~(first value))))
-(defmacro cond [& xs]
-  (if (> (count xs) 0) (list 'if (first xs) (if (> (count xs) 1) (nth xs 1) (throw "odd number of forms to cond")) (cons 'cond (rest (rest xs))))))
-(defmacro defn [fn-name fn-args & body]
-  `(def! ~fn-name (fn* ~fn-args ~@body)))
-(defmacro declare [& names]
-  `(do ~@(map (fn* [name] (list 'def name)) names)))
+;; (defmacro! defmacro
+;;   (fn* [macro-name macro-args & body]
+;;        `(defmacro! ~macro-name (fn* ~macro-args ~@body))))
+;; (defmacro let [bindings & body]
+;;   `(let* ~bindings ~@body))
+;; (defmacro def [var-name & value]
+;;   (if (empty? value)
+;;     `(def! ~var-name)
+;;     `(def! ~var-name ~(first value))))
+;; (defmacro cond [& xs]
+;;   (if (> (count xs) 0) (list 'if (first xs) (if (> (count xs) 1) (nth xs 1) (throw "odd number of forms to cond")) (cons 'cond (rest (rest xs))))))
+;; (defmacro defn [fn-name fn-args & body]
+;;   `(def! ~fn-name (fn* ~fn-args ~@body)))
+;; (defmacro declare [& names]
+;;   `(do ~@(map (fn* [name] (list 'def name)) names)))
 
 ;; numeric
-(defn inc [x]
-  (+ x 1))
-(defn dec [x]
-  (- x 1))
+(def! inc (fn* [x] (+ x 1)))
+;; (defn inc [x]
+;;   (+ x 1))
+(def! dec (fn* [x] (- x 1)))
+;; (defn dec [x]
+;;   (- x 1))
 
 ;; functions
-(defn not [x]
-  (if x false true))
-(defn identity [x] x)
+(def! not (fn* [x] (if x false true)))
+;; (defn not [x]
+;;   (if x false true))
+(def! identity (fn* [x] x))
+;; (defn identity [x] x)
 
 ;; lang
-(defmacro comment [& forms]
-  nil)
+;; (defmacro comment [& forms]
+;;   nil)
 
 ;; io
 (def! load-file (fn* [f]
