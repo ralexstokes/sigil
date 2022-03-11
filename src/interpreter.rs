@@ -735,9 +735,9 @@ impl Interpreter {
     fn apply_macro(
         &mut self,
         f: &FnImpl,
-        operands: &PersistentList<RuntimeValue>,
+        operands: Vec<RuntimeValue>,
     ) -> EvaluationResult<RuntimeValue> {
-        self.apply_fn(f, Vec::from_iter(operands.iter().cloned()))
+        self.apply_fn(f, operands)
     }
 
     fn evaluate_analyzed_list(
@@ -762,7 +762,8 @@ impl Interpreter {
                     f.apply(self, &operands)
                 }
                 RuntimeValue::Macro(f) => {
-                    let expansion = self.apply_macro(&f, &operands)?;
+                    let operands = operands.iter().cloned().collect();
+                    let expansion = self.apply_macro(&f, operands)?;
                     self.evaluate_analyzed_form(&expansion)
                 }
                 v => Err(EvaluationError::CannotInvoke(v)),
